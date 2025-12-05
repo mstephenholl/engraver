@@ -1,0 +1,31 @@
+#!/bin/bash
+set -e
+
+echo "Running pre-commit checks..."
+
+# Format check
+echo "Checking formatting..."
+cargo fmt --check || {
+    echo ""
+    echo "Formatting issues found. Run 'cargo fmt' to fix."
+    exit 1
+}
+
+# Clippy lints
+echo "Running clippy..."
+cargo clippy --all-targets --all-features -- -D warnings || {
+    echo ""
+    echo "Clippy warnings found. Fix the issues above."
+    exit 1
+}
+
+# Unit tests (library tests only for speed)
+echo "Running tests..."
+cargo test --lib || {
+    echo ""
+    echo "Tests failed. Fix the failing tests before committing."
+    exit 1
+}
+
+echo ""
+echo "All pre-commit checks passed!"

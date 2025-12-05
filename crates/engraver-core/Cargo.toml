@@ -1,0 +1,47 @@
+[package]
+name = "engraver-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Engraver Contributors"]
+license = "MIT"
+description = "Core library for Engraver disk imaging tool"
+repository = "https://github.com/yourusername/engraver"
+keywords = ["disk", "imaging", "iso", "usb", "flash"]
+categories = ["command-line-utilities", "filesystem"]
+
+[features]
+default = ["compression", "remote", "checksum"]
+compression = ["flate2", "xz2", "zstd", "bzip2"]
+remote = ["reqwest", "url"]
+checksum = ["sha2", "md-5", "crc32fast"]
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs-next = "2"
+
+# Compression (optional)
+flate2 = { version = "1", optional = true }
+xz2 = { version = "0.1", optional = true }
+zstd = { version = "0.13", optional = true }
+bzip2 = { version = "0.5", optional = true }
+
+# HTTP client (optional)
+reqwest = { version = "0.12", features = ["blocking", "stream"], optional = true }
+url = { version = "2", optional = true }
+
+# Checksums (optional)
+sha2 = { version = "0.10", optional = true }
+md-5 = { version = "0.10", optional = true }
+crc32fast = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"

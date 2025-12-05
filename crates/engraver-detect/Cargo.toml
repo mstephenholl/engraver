@@ -1,0 +1,28 @@
+[package]
+name = "engraver-detect"
+version = "0.1.0"
+edition = "2021"
+authors = ["Engraver Contributors"]
+license = "MIT"
+description = "Safe drive detection and enumeration for Engraver"
+repository = "https://github.com/yourusername/engraver"
+keywords = ["usb", "drive", "detection", "disk"]
+categories = ["hardware-support", "os"]
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+cfg-if = "1"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+mockall = "0.13"
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

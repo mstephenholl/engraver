@@ -1,0 +1,37 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH write 1  "write " 
+.SH NAME
+write \- Write an image to a drive
+.SH SYNOPSIS
+\fBwrite\fR [\fB\-\-verify\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-b\fR|\fB\-\-block\-size\fR] [\fB\-\-checksum\fR] [\fB\-\-checksum\-algo\fR] [\fB\-\-no\-unmount\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> <\fITARGET\fR> 
+.SH DESCRIPTION
+Write an image to a drive
+.SH OPTIONS
+.TP
+\fB\-\-verify\fR
+Verify write by reading back and comparing
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip confirmation prompt (use with caution!)
+.TP
+\fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR [default: 4M]
+Block size for writing (e.g., 4M, 1M, 512K)
+.TP
+\fB\-\-checksum\fR \fI<CHECKSUM>\fR
+Verify checksum against expected value
+.TP
+\fB\-\-checksum\-algo\fR \fI<CHECKSUM_ALGO>\fR [default: sha256]
+Checksum algorithm (sha256, sha512, md5)
+.TP
+\fB\-\-no\-unmount\fR
+Do not unmount partitions before writing
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISOURCE\fR>
+Source image (local file or URL)
+.TP
+<\fITARGET\fR>
+Target device (e.g., /dev/sdb, /dev/disk2, \\\\.\\PhysicalDrive1)

@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH verify 1  "verify " 
+.SH NAME
+verify \- Verify a drive against a source image
+.SH SYNOPSIS
+\fBverify\fR [\fB\-b\fR|\fB\-\-block\-size\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> <\fITARGET\fR> 
+.SH DESCRIPTION
+Verify a drive against a source image
+.SH OPTIONS
+.TP
+\fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR [default: 4M]
+Block size for reading
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISOURCE\fR>
+Source image (local file or URL)
+.TP
+<\fITARGET\fR>
+Target device to verify

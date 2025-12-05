@@ -1,0 +1,59 @@
+# Maintainer: Your Name <your.email@example.com>
+pkgname=engraver-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Safe, fast tool for creating bootable USB drives (git version)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/mstephenholl/engraver"
+license=('MIT')
+provides=('engraver')
+conflicts=('engraver' 'engraver-bin')
+makedepends=('rust' 'cargo' 'git')
+depends=('gcc-libs')
+optdepends=(
+    'bash-completion: for bash completion'
+    'zsh-completions: for zsh completion'
+    'fish: for fish completion'
+)
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${srcdir}/engraver"
+    git describe --tags --long 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./g' || echo "0.1.0"
+}
+
+build() {
+    cd "${srcdir}/engraver"
+    cargo build --release -p engraver
+    
+    # Generate completions
+    mkdir -p completions
+    ./target/release/engraver completions bash > completions/engraver.bash
+    ./target/release/engraver completions zsh > completions/_engraver
+    ./target/release/engraver completions fish > completions/engraver.fish
+    
+    # Generate man pages
+    mkdir -p man
+    ./target/release/engraver mangen --out-dir man
+}
+
+package() {
+    cd "${srcdir}/engraver"
+    
+    # Install binary
+    install -Dm755 target/release/engraver "${pkgdir}/usr/bin/engraver"
+    
+    # Install shell completions
+    install -Dm644 completions/engraver.bash "${pkgdir}/usr/share/bash-completion/completions/engraver"
+    install -Dm644 completions/_engraver "${pkgdir}/usr/share/zsh/site-functions/_engraver"
+    install -Dm644 completions/engraver.fish "${pkgdir}/usr/share/fish/vendor_completions.d/engraver.fish"
+    
+    # Install man pages
+    for manpage in man/*.1; do
+        install -Dm644 "$manpage" "${pkgdir}/usr/share/man/man1/$(basename $manpage)"
+    done
+    
+    # Install license
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" 2>/dev/null || true
+}

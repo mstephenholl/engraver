@@ -1,0 +1,58 @@
+[package]
+name = "engraver"
+version = "0.1.0"
+edition = "2021"
+authors = ["Engraver Contributors"]
+license = "MIT"
+description = "A safe, fast tool for creating bootable USB drives"
+repository = "https://github.com/mstephenholl/engraver"
+keywords = ["disk", "imaging", "iso", "usb", "flash", "bootable"]
+categories = ["command-line-utilities", "filesystem"]
+default-run = "engraver"
+
+[[bin]]
+name = "engraver"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace crates
+engraver-core = { path = "../engraver-core" }
+engraver-detect = { path = "../engraver-detect" }
+engraver-platform = { path = "../engraver-platform" }
+
+# CLI framework
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+clap_mangen = "0.2"
+
+# Progress bars and terminal UI
+indicatif = "0.17"
+console = "0.15"
+dialoguer = "0.11"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Misc
+ctrlc = "3"
+humansize = "2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+cargo-husky = { workspace = true }
+
+[features]
+default = []
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
