@@ -1,0 +1,33 @@
+[package]
+name = "engraver-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core library for Engraver - source handling, writing engine, and verification"
+
+[dependencies]
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+serde.workspace = true
+reqwest.workspace = true
+flate2.workspace = true
+xz2.workspace = true
+zstd.workspace = true
+bzip2.workspace = true
+sha2.workspace = true
+md-5.workspace = true
+crc32fast.workspace = true
+
+engraver-platform = { path = "../engraver-platform" }
+engraver-detect = { path = "../engraver-detect" }
+
+[dev-dependencies]
+mockall.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

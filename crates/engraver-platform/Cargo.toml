@@ -1,0 +1,25 @@
+[package]
+name = "engraver-platform"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Platform-specific adapters for Engraver"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+cfg-if.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux-specific deps
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS-specific deps
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows-specific deps
+winapi = { version = "0.3", features = ["fileapi", "handleapi", "ioapiset"] }
+
+[lints]
+workspace = true

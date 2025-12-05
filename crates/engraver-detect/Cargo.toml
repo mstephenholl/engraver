@@ -1,0 +1,29 @@
+[package]
+name = "engraver-detect"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Safe drive detection and enumeration for Engraver"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+cfg-if.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux-specific deps will go here
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS-specific deps will go here
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows-specific deps will go here
+
+[dev-dependencies]
+mockall.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
