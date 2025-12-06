@@ -1,20 +1,4 @@
-# Cross-compilation targets
-[target.x86_64-unknown-linux-gnu]
-# linker = "x86_64-linux-gnu-gcc"
-
-[target.x86_64-apple-darwin]
-# linker = "x86_64-apple-darwin-clang"
-
-[target.aarch64-apple-darwin]
-# linker = "aarch64-apple-darwin-clang"
-
-[target.x86_64-pc-windows-gnu]
-# linker = "x86_64-w64-mingw32-gcc"
-
-# Faster linking
-[target.x86_64-unknown-linux-gnu.linker]
-# linker = "clang"
-# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# Cargo configuration for Engraver
 
 # Aliases for common commands
 [alias]
@@ -23,7 +7,11 @@ t = "test"
 b = "build"
 r = "run -p engraver-cli --"
 
-# Build settings
-[build]
-# Uncomment to set default target
-# target = "x86_64-unknown-linux-gnu"
+# Cross-compilation (uncomment as needed)
+# [target.x86_64-unknown-linux-gnu]
+# linker = "x86_64-linux-gnu-gcc"
+
+# Faster linking on Linux with mold
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]

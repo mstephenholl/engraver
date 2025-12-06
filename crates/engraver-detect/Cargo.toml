@@ -1,29 +1,28 @@
 [package]
 name = "engraver-detect"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+authors = ["Engraver Contributors"]
+license = "MIT"
 description = "Safe drive detection and enumeration for Engraver"
+repository = "https://github.com/yourusername/engraver"
+keywords = ["usb", "drive", "detection", "disk"]
+categories = ["hardware-support", "os"]
 
 [dependencies]
-thiserror.workspace = true
-tracing.workspace = true
-serde.workspace = true
-cfg-if.workspace = true
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# Linux-specific deps will go here
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# macOS-specific deps will go here
-
-[target.'cfg(target_os = "windows")'.dependencies]
-# Windows-specific deps will go here
+thiserror = "2"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+cfg-if = "1"
 
 [dev-dependencies]
-mockall.workspace = true
-tempfile.workspace = true
+serde_json = "1"
+tempfile = "3"
+mockall = "0.13"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

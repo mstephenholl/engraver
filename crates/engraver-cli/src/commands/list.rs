@@ -1,6 +1,7 @@
 //! List command implementation
 
 use anyhow::Result;
+use console::style;
 
 pub fn execute(show_all: bool) -> Result<()> {
     let drives = engraver_detect::list_removable_drives()?;
@@ -10,14 +11,20 @@ pub fn execute(show_all: bool) -> Result<()> {
         return Ok(());
     }
 
-    for drive in drives {
+    println!(
+        "{} {} drive(s):\n",
+        style("Found").green().bold(),
+        drives.len()
+    );
+
+    for drive in &drives {
         if !show_all && !drive.is_safe_target() {
             continue;
         }
 
         println!(
             "{} - {} ({})",
-            drive.path,
+            style(&drive.path).white().bold(),
             drive.name,
             drive.size_display()
         );
