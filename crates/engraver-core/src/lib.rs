@@ -9,9 +9,31 @@
 //! - `verifier`: Post-write verification and checksum validation
 //! - `error`: Error types and result aliases
 //! - `config`: Configuration and settings
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use engraver_core::{Writer, WriteConfig};
+//! use std::fs::File;
+//!
+//! let source = File::open("image.iso")?;
+//! let target = File::create("/dev/sdb")?;
+//! let source_size = source.metadata()?.len();
+//!
+//! let config = WriteConfig::new()
+//!     .block_size(4 * 1024 * 1024)
+//!     .verify(true);
+//!
+//! let mut writer = Writer::with_config(config)
+//!     .on_progress(|p| println!("{:.1}% - {}", p.percentage(), p.speed_display()));
+//!
+//! let result = writer.write(source, target, source_size)?;
+//! println!("Wrote {} bytes in {:?}", result.bytes_written, result.elapsed);
+//! ```
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+#![allow(dead_code)] // Allow during development
 
 pub mod config;
 pub mod error;
@@ -19,29 +41,63 @@ pub mod source;
 pub mod verifier;
 pub mod writer;
 
+pub use config::Config;
 pub use error::{Error, Result};
+pub use writer::{
+    format_duration, format_speed, WriteConfig, WriteProgress, WriteResult, Writer,
+    DEFAULT_BLOCK_SIZE, MAX_BLOCK_SIZE, MIN_BLOCK_SIZE,
+};
 
 /// Orchestrates the complete write operation
 pub struct Engraver {
-    config: config::Config,
+    config: Config,
 }
 
 impl Engraver {
     /// Create a new Engraver instance with default configuration
     pub fn new() -> Self {
         Self {
-            config: config::Config::default(),
+            config: Config::default(),
         }
     }
 
     /// Create a new Engraver instance with custom configuration
-    pub fn with_config(config: config::Config) -> Self {
+    pub fn with_config(config: Config) -> Self {
         Self { config }
+    }
+
+    /// Get the current configuration
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 }
 
 impl Default for Engraver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_engraver_new() {
+        let engraver = Engraver::new();
+        assert!(engraver.config().verify);
+    }
+
+    #[test]
+    fn test_engraver_with_config() {
+        let config = Config {
+            block_size: 1024 * 1024,
+            verify: false,
+            sync_each_block: true,
+            retry_attempts: 5,
+        };
+        let engraver = Engraver::with_config(config);
+        assert!(!engraver.config().verify);
+        assert_eq!(engraver.config().block_size, 1024 * 1024);
     }
 }

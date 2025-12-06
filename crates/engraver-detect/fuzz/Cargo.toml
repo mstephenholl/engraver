@@ -1,0 +1,50 @@
+[package]
+name = "engraver-detect-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.engraver-detect]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "fuzz_plist_parser"
+path = "fuzz_targets/fuzz_plist_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_wmic_parser"
+path = "fuzz_targets/fuzz_wmic_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mount_parser"
+path = "fuzz_targets/fuzz_mount_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_format_bytes"
+path = "fuzz_targets/fuzz_format_bytes.rs"
+test = false
+doc = false
+bench = false

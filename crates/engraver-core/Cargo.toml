@@ -1,33 +1,23 @@
 [package]
 name = "engraver-core"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-description = "Core library for Engraver - source handling, writing engine, and verification"
+version = "0.1.0"
+edition = "2021"
+authors = ["Engraver Contributors"]
+license = "MIT"
+description = "Core library for Engraver disk imaging tool"
+repository = "https://github.com/yourusername/engraver"
+keywords = ["disk", "imaging", "iso", "usb", "flash"]
+categories = ["command-line-utilities", "filesystem"]
 
 [dependencies]
-thiserror.workspace = true
-anyhow.workspace = true
-tracing.workspace = true
-tokio.workspace = true
-serde.workspace = true
-reqwest.workspace = true
-flate2.workspace = true
-xz2.workspace = true
-zstd.workspace = true
-bzip2.workspace = true
-sha2.workspace = true
-md-5.workspace = true
-crc32fast.workspace = true
-
-engraver-platform = { path = "../engraver-platform" }
-engraver-detect = { path = "../engraver-detect" }
+thiserror = "2"
+tracing = "0.1"
 
 [dev-dependencies]
-mockall.workspace = true
-tempfile.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
