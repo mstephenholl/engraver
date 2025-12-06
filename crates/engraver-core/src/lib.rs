@@ -43,6 +43,9 @@ pub mod writer;
 
 pub use config::Config;
 pub use error::{Error, Result};
+pub use source::{
+    detect_source_type, get_source_size, validate_source, Source, SourceInfo, SourceType,
+};
 pub use writer::{
     format_duration, format_speed, WriteConfig, WriteProgress, WriteResult, Writer,
     DEFAULT_BLOCK_SIZE, MAX_BLOCK_SIZE, MIN_BLOCK_SIZE,

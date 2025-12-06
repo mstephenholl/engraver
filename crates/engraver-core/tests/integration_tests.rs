@@ -3,10 +3,11 @@
 //! These tests verify the complete write pipeline using temporary files.
 
 use engraver_core::{
-    format_duration, format_speed, Error, WriteConfig, WriteProgress, Writer,
-    DEFAULT_BLOCK_SIZE, MAX_BLOCK_SIZE, MIN_BLOCK_SIZE,
+    detect_source_type, format_duration, format_speed, get_source_size, validate_source, Error,
+    Source, SourceInfo, SourceType, WriteConfig, WriteProgress, Writer, DEFAULT_BLOCK_SIZE,
+    MAX_BLOCK_SIZE, MIN_BLOCK_SIZE,
 };
-use std::io::{Cursor, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -348,4 +349,238 @@ fn test_block_size_constants() {
     // Ensure proper ordering
     assert!(MIN_BLOCK_SIZE < DEFAULT_BLOCK_SIZE);
     assert!(DEFAULT_BLOCK_SIZE < MAX_BLOCK_SIZE);
+}
+
+// ============================================================================
+// Source integration tests
+// ============================================================================
+
+#[test]
+fn test_source_type_detection_comprehensive() {
+    // Local files
+    assert_eq!(detect_source_type("image.iso"), SourceType::LocalFile);
+    assert_eq!(detect_source_type("disk.img"), SourceType::LocalFile);
+    assert_eq!(detect_source_type("/path/to/file"), SourceType::LocalFile);
+    assert_eq!(detect_source_type("../relative/path.raw"), SourceType::LocalFile);
+
+    // Compressed
+    assert_eq!(detect_source_type("image.iso.gz"), SourceType::Gzip);
+    assert_eq!(detect_source_type("image.iso.xz"), SourceType::Xz);
+    assert_eq!(detect_source_type("image.iso.zst"), SourceType::Zstd);
+    assert_eq!(detect_source_type("image.iso.bz2"), SourceType::Bzip2);
+
+    // Remote
+    assert_eq!(detect_source_type("http://example.com/file"), SourceType::Remote);
+    assert_eq!(detect_source_type("https://example.com/file"), SourceType::Remote);
+}
+
+#[test]
+fn test_source_open_and_read() {
+    // Create a test file
+    let mut temp = NamedTempFile::new().unwrap();
+    let test_data = b"Test data for source reading integration test";
+    temp.write_all(test_data).unwrap();
+    temp.flush().unwrap();
+
+    // Open via Source
+    let mut source = Source::open(temp.path().to_str().unwrap()).unwrap();
+
+    // Check info
+    let info = source.info();
+    assert_eq!(info.source_type, SourceType::LocalFile);
+    assert_eq!(info.size, Some(test_data.len() as u64));
+    assert!(info.seekable);
+
+    // Read data
+    let mut buffer = Vec::new();
+    source.read_to_end(&mut buffer).unwrap();
+    assert_eq!(buffer, test_data);
+}
+
+#[test]
+fn test_source_size_detection() {
+    let mut temp = NamedTempFile::new().unwrap();
+    let data = vec![0u8; 4096];
+    temp.write_all(&data).unwrap();
+
+    let size = get_source_size(temp.path().to_str().unwrap()).unwrap();
+    assert_eq!(size, Some(4096));
+}
+
+#[test]
+fn test_source_validation() {
+    let mut temp = NamedTempFile::new().unwrap();
+    temp.write_all(&[0u8; 8192]).unwrap();
+
+    let info = validate_source(temp.path().to_str().unwrap()).unwrap();
+    assert_eq!(info.size, Some(8192));
+    assert_eq!(info.source_type, SourceType::LocalFile);
+}
+
+#[test]
+fn test_source_not_found() {
+    let result = Source::open("/nonexistent/path/to/file.iso");
+    assert!(matches!(result, Err(Error::SourceNotFound(_))));
+}
+
+#[test]
+fn test_validate_source_not_found() {
+    let result = validate_source("/nonexistent/path/to/file.iso");
+    assert!(matches!(result, Err(Error::SourceNotFound(_))));
+}
+
+#[test]
+fn test_source_type_properties() {
+    assert!(!SourceType::LocalFile.is_compressed());
+    assert!(!SourceType::Remote.is_compressed());
+    assert!(SourceType::Gzip.is_compressed());
+    assert!(SourceType::Xz.is_compressed());
+    assert!(SourceType::Zstd.is_compressed());
+    assert!(SourceType::Bzip2.is_compressed());
+
+    assert!(!SourceType::LocalFile.is_remote());
+    assert!(SourceType::Remote.is_remote());
+}
+
+#[test]
+fn test_source_info_creation() {
+    let local_info = SourceInfo::local("/path/to/file.iso", 1024 * 1024);
+    assert_eq!(local_info.path, "/path/to/file.iso");
+    assert_eq!(local_info.size, Some(1024 * 1024));
+    assert!(local_info.seekable);
+}
+
+// ============================================================================
+// Source + Writer pipeline test
+// ============================================================================
+
+#[test]
+fn test_source_to_writer_pipeline() {
+    // Create source file
+    let mut source_file = NamedTempFile::new().unwrap();
+    let source_data: Vec<u8> = (0..8192).map(|i| (i % 256) as u8).collect();
+    source_file.write_all(&source_data).unwrap();
+    source_file.flush().unwrap();
+
+    // Open source
+    let mut source = Source::open(source_file.path().to_str().unwrap()).unwrap();
+    let source_size = source.size().unwrap();
+
+    // Create target
+    let mut target = Cursor::new(vec![0u8; 8192]);
+
+    // Write using writer
+    let config = WriteConfig::new().block_size(MIN_BLOCK_SIZE);
+    let mut writer = Writer::with_config(config);
+
+    let result = writer.write(&mut source, &mut target, source_size).unwrap();
+
+    assert_eq!(result.bytes_written, 8192);
+
+    // Verify data
+    let written = target.into_inner();
+    assert_eq!(written, source_data);
+}
+
+// ============================================================================
+// Compression tests (require compression feature)
+// ============================================================================
+
+#[cfg(feature = "compression")]
+mod compression_tests {
+    use super::*;
+    use std::fs::File;
+
+    #[test]
+    fn test_gzip_source_pipeline() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        // Create compressed source
+        let temp = NamedTempFile::new().unwrap();
+        let path = temp.path().to_str().unwrap().to_string() + ".gz";
+
+        let original_data = b"Hello from gzip compression test!";
+        let file = File::create(&path).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        encoder.write_all(original_data).unwrap();
+        encoder.finish().unwrap();
+
+        // Open and read
+        let mut source = Source::open(&path).unwrap();
+        assert!(source.is_compressed());
+        assert!(!source.is_seekable());
+
+        let mut buffer = Vec::new();
+        source.read_to_end(&mut buffer).unwrap();
+        assert_eq!(buffer, original_data);
+
+        // Cleanup
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_xz_source_pipeline() {
+        use xz2::write::XzEncoder;
+
+        // Create compressed source
+        let temp = NamedTempFile::new().unwrap();
+        let path = temp.path().to_str().unwrap().to_string() + ".xz";
+
+        let original_data = b"Hello from xz compression test!";
+        let file = File::create(&path).unwrap();
+        let mut encoder = XzEncoder::new(file, 6);
+        encoder.write_all(original_data).unwrap();
+        encoder.finish().unwrap();
+
+        // Open and read
+        let mut source = Source::open(&path).unwrap();
+        assert!(source.is_compressed());
+
+        let mut buffer = Vec::new();
+        source.read_to_end(&mut buffer).unwrap();
+        assert_eq!(buffer, original_data);
+
+        // Cleanup
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn test_compressed_source_to_writer() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        // Create compressed source with enough data for multiple blocks
+        let temp = NamedTempFile::new().unwrap();
+        let path = temp.path().to_str().unwrap().to_string() + ".gz";
+
+        let original_data: Vec<u8> = (0..MIN_BLOCK_SIZE * 2).map(|i| (i % 256) as u8).collect();
+        let file = File::create(&path).unwrap();
+        let mut encoder = GzEncoder::new(file, Compression::fast());
+        encoder.write_all(&original_data).unwrap();
+        encoder.finish().unwrap();
+
+        // Open source
+        let mut source = Source::open(&path).unwrap();
+
+        // Create target (size unknown for compressed, use original size)
+        let mut target = Cursor::new(vec![0u8; original_data.len()]);
+
+        // Write
+        let config = WriteConfig::new().block_size(MIN_BLOCK_SIZE);
+        let mut writer = Writer::with_config(config);
+
+        let result = writer
+            .write(&mut source, &mut target, original_data.len() as u64)
+            .unwrap();
+
+        assert_eq!(result.bytes_written, original_data.len() as u64);
+
+        // Verify
+        let written = target.into_inner();
+        assert_eq!(written, original_data);
+
+        // Cleanup
+        std::fs::remove_file(&path).unwrap();
+    }
 }

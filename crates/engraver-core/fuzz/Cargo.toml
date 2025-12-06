@@ -40,3 +40,17 @@ path = "fuzz_targets/fuzz_write_progress.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_source_type"
+path = "fuzz_targets/fuzz_source_type.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_magic_bytes"
+path = "fuzz_targets/fuzz_magic_bytes.rs"
+test = false
+doc = false
+bench = false
