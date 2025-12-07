@@ -791,7 +791,7 @@ mod tests {
         let target = Cursor::new(vec![0u8; data_size]);
 
         let config = WriteConfig::new().block_size(MIN_BLOCK_SIZE);
-        let mut writer = Writer::with_config(config);
+        let writer = Writer::with_config(config);
 
         let cancel_handle = writer.cancel_handle();
         let cancel_clone = Arc::clone(&cancel_handle);

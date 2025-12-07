@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH checksum 1  "checksum " 
+.SH NAME
+checksum \- Calculate checksum of an image
+.SH SYNOPSIS
+\fBchecksum\fR [\fB\-a\fR|\fB\-\-algorithm\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+.SH DESCRIPTION
+Calculate checksum of an image
+.SH OPTIONS
+.TP
+\fB\-a\fR, \fB\-\-algorithm\fR \fI<ALGORITHM>\fR [default: sha256]
+Checksum algorithm (sha256, sha512, md5, crc32)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fISOURCE\fR>
+Source image (local file or URL)

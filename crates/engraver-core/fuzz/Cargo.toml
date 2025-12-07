@@ -54,3 +54,10 @@ path = "fuzz_targets/fuzz_magic_bytes.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_checksum_parse"
+path = "fuzz_targets/fuzz_checksum_parse.rs"
+test = false
+doc = false
+bench = false

@@ -584,3 +584,281 @@ mod compression_tests {
         std::fs::remove_file(&path).unwrap();
     }
 }
+
+// ============================================================================
+// Verifier integration tests
+// ============================================================================
+
+use engraver_core::{
+    find_checksum_for_file, parse_checksum_file, verify_write, Checksum, ChecksumAlgorithm,
+    VerificationResult, Verifier, VerifyConfig,
+};
+
+#[test]
+fn test_verifier_compare_matching_files() {
+    // Create matching source and target
+    let mut source_file = NamedTempFile::new().unwrap();
+    let mut target_file = NamedTempFile::new().unwrap();
+
+    let data: Vec<u8> = (0..8192).map(|i| (i % 256) as u8).collect();
+    source_file.write_all(&data).unwrap();
+    target_file.write_all(&data).unwrap();
+
+    source_file.seek(SeekFrom::Start(0)).unwrap();
+    target_file.seek(SeekFrom::Start(0)).unwrap();
+
+    let mut verifier = Verifier::new();
+    let result = verifier
+        .compare(&mut source_file, &mut target_file, data.len() as u64)
+        .unwrap();
+
+    assert!(result.success);
+    assert_eq!(result.bytes_verified, data.len() as u64);
+    assert_eq!(result.mismatches, 0);
+}
+
+#[test]
+fn test_verifier_compare_mismatched_files() {
+    let mut source_file = NamedTempFile::new().unwrap();
+    let mut target_file = NamedTempFile::new().unwrap();
+
+    let source_data: Vec<u8> = (0..8192).map(|i| (i % 256) as u8).collect();
+    let mut target_data = source_data.clone();
+    target_data[4096] = 0xFF; // Introduce mismatch
+
+    source_file.write_all(&source_data).unwrap();
+    target_file.write_all(&target_data).unwrap();
+
+    source_file.seek(SeekFrom::Start(0)).unwrap();
+    target_file.seek(SeekFrom::Start(0)).unwrap();
+
+    let config = VerifyConfig::new().stop_on_mismatch(true);
+    let mut verifier = Verifier::with_config(config);
+    let result = verifier
+        .compare(
+            &mut source_file,
+            &mut target_file,
+            source_data.len() as u64,
+        )
+        .unwrap();
+
+    assert!(!result.success);
+    assert!(result.mismatches > 0);
+    assert_eq!(result.first_mismatch_offset, Some(4096));
+}
+
+#[test]
+fn test_verify_write_legacy_api() {
+    let data = vec![0xABu8; 1024];
+    let mut source = Cursor::new(data.clone());
+    let mut target = Cursor::new(data);
+
+    let result = verify_write(&mut source, &mut target, 1024, 256).unwrap();
+
+    assert!(result.success);
+    assert_eq!(result.bytes_verified, 1024);
+}
+
+#[test]
+fn test_parse_checksum_file_gnu_format() {
+    let content = "\
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ubuntu.iso
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  fedora.iso
+";
+
+    let entries = parse_checksum_file(content);
+    assert_eq!(entries.len(), 2);
+
+    let ubuntu = find_checksum_for_file(&entries, "ubuntu.iso");
+    assert!(ubuntu.is_some());
+    assert_eq!(
+        ubuntu.unwrap().checksum,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+}
+
+#[test]
+fn test_parse_checksum_file_bsd_format() {
+    let content = "\
+SHA256 (image.iso) = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+MD5 (backup.img) = d41d8cd98f00b204e9800998ecf8427e
+";
+
+    let entries = parse_checksum_file(content);
+    assert_eq!(entries.len(), 2);
+
+    let image = find_checksum_for_file(&entries, "image.iso");
+    assert!(image.is_some());
+    assert_eq!(image.unwrap().algorithm, Some(ChecksumAlgorithm::Sha256));
+}
+
+#[test]
+fn test_checksum_from_hex() {
+    let checksum = Checksum::from_hex(
+        ChecksumAlgorithm::Sha256,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    )
+    .unwrap();
+
+    assert_eq!(checksum.algorithm, ChecksumAlgorithm::Sha256);
+    assert_eq!(checksum.bytes.len(), 32);
+}
+
+#[test]
+fn test_checksum_algorithm_detection() {
+    // From hex length
+    assert_eq!(
+        ChecksumAlgorithm::from_hex_length(64),
+        Some(ChecksumAlgorithm::Sha256)
+    );
+    assert_eq!(
+        ChecksumAlgorithm::from_hex_length(32),
+        Some(ChecksumAlgorithm::Md5)
+    );
+
+    // From extension
+    assert_eq!(
+        ChecksumAlgorithm::from_extension(".sha256"),
+        Some(ChecksumAlgorithm::Sha256)
+    );
+    assert_eq!(
+        ChecksumAlgorithm::from_extension(".md5"),
+        Some(ChecksumAlgorithm::Md5)
+    );
+
+    // From string
+    assert_eq!(
+        "sha256".parse::<ChecksumAlgorithm>().unwrap(),
+        ChecksumAlgorithm::Sha256
+    );
+}
+
+// ============================================================================
+// Checksum calculation tests (require checksum feature)
+// ============================================================================
+
+#[cfg(feature = "checksum")]
+mod checksum_integration_tests {
+    use super::*;
+    use std::fs::File;
+
+    #[test]
+    fn test_calculate_sha256_file() {
+        // Create a temp file
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b"hello world").unwrap();
+        temp.seek(SeekFrom::Start(0)).unwrap();
+
+        let mut verifier = Verifier::new();
+        let checksum = verifier
+            .calculate_checksum(&mut temp, ChecksumAlgorithm::Sha256, Some(11))
+            .unwrap();
+
+        // SHA-256 of "hello world"
+        assert_eq!(
+            checksum.to_hex(),
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
+
+    #[test]
+    fn test_calculate_md5_file() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b"hello world").unwrap();
+        temp.seek(SeekFrom::Start(0)).unwrap();
+
+        let mut verifier = Verifier::new();
+        let checksum = verifier
+            .calculate_checksum(&mut temp, ChecksumAlgorithm::Md5, Some(11))
+            .unwrap();
+
+        // MD5 of "hello world"
+        assert_eq!(checksum.to_hex(), "5eb63bbbe01eeed093cb22bb8f5acdc3");
+    }
+
+    #[test]
+    fn test_verify_checksum_success() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b"hello world").unwrap();
+        temp.seek(SeekFrom::Start(0)).unwrap();
+
+        let mut verifier = Verifier::new();
+        let result = verifier
+            .verify_checksum(
+                &mut temp,
+                ChecksumAlgorithm::Sha256,
+                "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+                Some(11),
+            )
+            .unwrap();
+
+        assert!(result.success);
+    }
+
+    #[test]
+    fn test_verify_checksum_failure() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b"hello world").unwrap();
+        temp.seek(SeekFrom::Start(0)).unwrap();
+
+        let mut verifier = Verifier::new();
+        let result = verifier.verify_checksum(
+            &mut temp,
+            ChecksumAlgorithm::Sha256,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            Some(11),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_checksum_with_progress() {
+        let data = vec![0u8; 1024 * 1024]; // 1 MB
+        let mut reader = Cursor::new(data.clone());
+
+        let progress_count = Arc::new(AtomicU64::new(0));
+        let progress_clone = Arc::clone(&progress_count);
+
+        let config = VerifyConfig::new().block_size(MIN_BLOCK_SIZE);
+        let mut verifier = Verifier::with_config(config).on_progress(move |_p| {
+            progress_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let _checksum = verifier
+            .calculate_checksum(&mut reader, ChecksumAlgorithm::Sha256, Some(data.len() as u64))
+            .unwrap();
+
+        // Should have multiple progress callbacks
+        assert!(progress_count.load(Ordering::SeqCst) > 0);
+    }
+
+    #[test]
+    fn test_write_then_verify_pipeline() {
+        // Create source
+        let source_data: Vec<u8> = (0..16384).map(|i| (i % 256) as u8).collect();
+        let source = Cursor::new(source_data.clone());
+
+        // Create target
+        let mut target = Cursor::new(vec![0u8; 16384]);
+
+        // Write
+        let config = WriteConfig::new().block_size(MIN_BLOCK_SIZE);
+        let mut writer = Writer::with_config(config);
+        let write_result = writer.write(source, &mut target, 16384).unwrap();
+        assert_eq!(write_result.bytes_written, 16384);
+
+        // Reset for verification
+        let mut source_for_verify = Cursor::new(source_data.clone());
+        target.seek(SeekFrom::Start(0)).unwrap();
+
+        // Verify by comparison
+        let mut verifier = Verifier::new();
+        let verify_result = verifier
+            .compare(&mut source_for_verify, &mut target, 16384)
+            .unwrap();
+
+        assert!(verify_result.success);
+        assert_eq!(verify_result.bytes_verified, 16384);
+    }
+}
