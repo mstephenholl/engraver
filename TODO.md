@@ -71,4 +71,4 @@ Planned features and improvements for Engraver.
 - [ ] Man page improvements
 - [ ] More examples in README
 - [x] Contributing guide (CONTRIBUTING.md)
-- [ ] Architecture documentation
+- [x] Architecture documentation (docs/architecture/overview.md)

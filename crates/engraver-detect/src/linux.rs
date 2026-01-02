@@ -162,7 +162,7 @@ pub(crate) fn get_mount_info() -> Result<HashMap<String, MountInfo>> {
 }
 
 /// Parse a single line from /proc/mounts
-/// Format: device mount_point filesystem options dump pass
+/// Format: device `mount_point` filesystem options dump pass
 pub(crate) fn parse_mount_line(line: &str) -> Option<(String, MountInfo)> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.len() >= 3 {

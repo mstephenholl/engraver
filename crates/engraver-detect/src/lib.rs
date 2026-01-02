@@ -87,11 +87,11 @@ pub enum UsbSpeed {
     Full,
     /// USB 2.0 High Speed (480 Mbps)
     High,
-    /// USB 3.0 SuperSpeed (5 Gbps)
+    /// USB 3.0 `SuperSpeed` (5 Gbps)
     SuperSpeed,
-    /// USB 3.1 SuperSpeed+ (10 Gbps)
+    /// USB 3.1 `SuperSpeed+` (10 Gbps)
     SuperSpeedPlus,
-    /// USB 3.2/4 SuperSpeed+ (20 Gbps)
+    /// USB 3.2/4 `SuperSpeed+` (20 Gbps)
     SuperSpeedPlus20,
     /// Unknown speed
     #[default]
@@ -116,13 +116,12 @@ impl UsbSpeed {
     #[must_use]
     pub fn max_speed_mb_s(&self) -> u32 {
         match self {
-            UsbSpeed::Low => 0,                // ~0.2 MB/s
+            UsbSpeed::Low | UsbSpeed::Unknown => 0, // ~0.2 MB/s or unknown
             UsbSpeed::Full => 1,               // ~1.5 MB/s
             UsbSpeed::High => 60,              // ~60 MB/s
             UsbSpeed::SuperSpeed => 625,       // ~625 MB/s
             UsbSpeed::SuperSpeedPlus => 1250,  // ~1250 MB/s
             UsbSpeed::SuperSpeedPlus20 => 2500, // ~2500 MB/s
-            UsbSpeed::Unknown => 0,
         }
     }
 

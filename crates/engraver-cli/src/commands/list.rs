@@ -189,7 +189,7 @@ fn serde_json_drives(drives: &[engraver_detect::Drive]) -> String {
         ));
         output.push_str(&format!(
             "    \"usb_speed_slow\": {},\n",
-            drive.usb_speed.as_ref().map_or(false, |s| s.is_slow())
+            drive.usb_speed.as_ref().is_some_and(|s| s.is_slow())
         ));
         output.push_str(&format!(
             "    \"mount_points\": [{}],\n",

@@ -6,6 +6,7 @@
 //! The GUI will share the same core library as the CLI.
 
 #![allow(unused)]
+#![allow(clippy::multiple_crate_versions)]
 
 /// Placeholder for future GUI implementation.
 pub const fn placeholder() {

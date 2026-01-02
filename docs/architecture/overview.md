@@ -15,7 +15,7 @@
 engraver/
 ├── engraver-core      # Shared library (source, writer, verifier)
 ├── engraver-cli       # Command-line interface
-├── engraver-gui       # Graphical interface (future)
+├── engraver-gui       # Graphical interface (placeholder)
 ├── engraver-platform  # OS-specific adapters
 └── engraver-detect    # Drive detection (safety-critical)
 ```

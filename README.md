@@ -1,8 +1,10 @@
-1# Engraver 🔥
+# Engraver 🔥
 
 A fast, safe CLI tool for creating bootable USB drives, SD cards, and NVMe drives from ISO images.
 
 Inspired by Balena Etcher, built for developers and automation.
+
+> **New to Engraver?** See the [Quickstart Guide](docs/quickstart.md) to get started in 5 minutes.
 
 ## Features
 
@@ -183,7 +185,7 @@ Engraver includes multiple safety mechanisms:
 cargo test
 
 # Run clippy
-cargo clippy
+cargo clippy -- -D warnings
 
 # Build release
 cargo build --release
