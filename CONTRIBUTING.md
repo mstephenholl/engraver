@@ -9,7 +9,7 @@ Thank you for your interest in contributing!
 3. Create a feature branch
 4. Make your changes
 5. Run tests: `cargo test`
-6. Run lints: `cargo lint`
+6. Run lints: `cargo clippy -- -D warnings`
 7. Submit a pull request
 
 ## Code Style

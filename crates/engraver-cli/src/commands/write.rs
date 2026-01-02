@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use engraver_core::{
-    validate_source, ChecksumAlgorithm, Source, SourceType, Verifier, VerifyConfig,
-    WriteConfig, Writer,
+    validate_checkpoint, validate_source, CheckpointManager, ChecksumAlgorithm, Source,
+    SourceType, Verifier, VerifyConfig, WriteCheckpoint, WriteConfig, Writer,
 };
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
@@ -36,12 +36,39 @@ pub struct WriteArgs {
     pub force: bool,
     pub no_unmount: bool,
     pub cancel_flag: Arc<AtomicBool>,
+    pub silent: bool,
+    pub resume: bool,
+    pub checkpoint: bool,
+}
+
+/// Conditionally print based on silent mode
+macro_rules! print_if {
+    ($silent:expr, $($arg:tt)*) => {
+        if !$silent {
+            print!($($arg)*);
+        }
+    };
+}
+
+/// Conditionally println based on silent mode
+macro_rules! println_if {
+    ($silent:expr) => {
+        if !$silent {
+            println!();
+        }
+    };
+    ($silent:expr, $($arg:tt)*) => {
+        if !$silent {
+            println!($($arg)*);
+        }
+    };
 }
 
 /// Execute the write command
 pub fn execute(args: WriteArgs) -> Result<()> {
     // Parse block size
     let block_size = parse_block_size(&args.block_size)?;
+    let silent = args.silent;
 
     // Step 0: Check for elevated privileges
     if !has_elevated_privileges() {
@@ -62,7 +89,8 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     }
 
     // Step 1: Validate source
-    println!(
+    println_if!(
+        silent,
         "{} {}",
         style("Source:").bold(),
         style(&args.source).cyan()
@@ -82,18 +110,20 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     };
 
     if let Some(size) = source_size {
-        println!(
+        println_if!(
+            silent,
             "  {} ({}, {})",
             style("✓").green(),
             format_size(size),
             source_type_str
         );
     } else {
-        println!("  {} (size unknown, {})", style("✓").green(), source_type_str);
+        println_if!(silent, "  {} (size unknown, {})", style("✓").green(), source_type_str);
     }
 
     // Step 2: Validate target device
-    println!(
+    println_if!(
+        silent,
         "\n{} {}",
         style("Target:").bold(),
         style(&args.target).cyan()
@@ -145,23 +175,49 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         }
     }
 
-    println!(
+    println_if!(
+        silent,
         "  {} {} ({})",
         style("✓").green(),
         target_drive.display_name(),
         format_size(target_drive.size)
     );
 
+    // Warn about slow USB connection speed
+    if let Some(ref speed) = target_drive.usb_speed {
+        if speed.is_slow() {
+            println_if!(
+                silent,
+                "  {} USB speed: {} - connected at slower speed than capable",
+                style("⚠").yellow().bold(),
+                style(speed.to_string()).yellow()
+            );
+            println_if!(
+                silent,
+                "    {}",
+                style("Tip: Try a USB 3.0 port for faster writes (look for blue USB ports)").dim()
+            );
+        } else {
+            println_if!(
+                silent,
+                "  {} USB speed: {}",
+                style("ℹ").blue(),
+                style(speed.to_string()).green()
+            );
+        }
+    }
+
     // Show mount points that will be unmounted
     if !target_drive.mount_points.is_empty() && !args.no_unmount {
-        println!(
+        println_if!(
+            silent,
             "  {} Will unmount: {}",
             style("⚠").yellow(),
             target_drive.mount_points.join(", ")
         );
     }
 
-    // Step 3: Confirmation
+    // Step 3: Confirmation (skip_confirm is already true when silent)
     if !args.skip_confirm {
         println!();
         println!(
@@ -195,7 +251,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             source_info
                 .path
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or(&source_info.path),
             target_drive.path
         );
@@ -213,22 +269,22 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     // Step 4: Unmount device using platform layer
     if !args.no_unmount {
-        println!("\n{}", style("Unmounting device...").bold());
+        println_if!(silent, "\n{}", style("Unmounting device...").bold());
 
         // Use the device path for unmounting (unmount all partitions)
         match unmount_device(&target_drive.path) {
-            Ok(()) => println!("  {} Device unmounted", style("✓").green()),
+            Ok(()) => println_if!(silent, "  {} Device unmounted", style("✓").green()),
             Err(e) => {
                 // Some platforms may return error if nothing to unmount
                 tracing::debug!("Unmount result: {}", e);
-                println!("  {} Unmount: {}", style("ℹ").blue(), e);
+                println_if!(silent, "  {} Unmount: {}", style("ℹ").blue(), e);
             }
         }
     }
 
     // Step 5: Verify source checksum (if provided)
     if let Some(expected_checksum) = &args.checksum {
-        println!("\n{}", style("Verifying source checksum...").bold());
+        println_if!(silent, "\n{}", style("Verifying source checksum...").bold());
 
         let algo: ChecksumAlgorithm = args
             .checksum_algo
@@ -238,7 +294,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         let mut source_for_checksum =
             Source::open(&args.source).context("Failed to open source for checksum")?;
 
-        let pb = create_progress_bar(source_size, "Checksumming");
+        let pb = create_progress_bar(source_size, "Checksumming", silent);
 
         let config = VerifyConfig::new().block_size(block_size);
         let pb_clone = pb.clone();
@@ -252,7 +308,8 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         pb.finish_and_clear();
 
         match result {
-            Ok(_) => println!(
+            Ok(_) => println_if!(
+                silent,
                 "  {} Checksum verified ({})",
                 style("✓").green(),
                 algo.name()
@@ -261,10 +318,86 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         }
     }
 
-    // Step 6: Open source and target device
-    println!("\n{}", style("Writing image...").bold());
+    // Step 6: Check for existing checkpoint (resume support)
+    let checkpoint_manager = if args.checkpoint || args.resume {
+        match CheckpointManager::default_location() {
+            Ok(mgr) => Some(mgr),
+            Err(e) => {
+                tracing::warn!("Failed to create checkpoint manager: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
-    let mut source = Source::open(&args.source).context("Failed to open source")?;
+    let mut resume_offset: u64 = 0;
+    let mut existing_checkpoint: Option<WriteCheckpoint> = None;
+
+    if args.resume {
+        if let Some(ref mgr) = checkpoint_manager {
+            if let Ok(Some(checkpoint)) = mgr.find_checkpoint(&args.source, &target_drive.path) {
+                // Validate the checkpoint
+                let validation = validate_checkpoint(&checkpoint, &source_info, target_drive.size);
+
+                if validation.valid {
+                    // Show resume info
+                    println_if!(silent, "\n{}", style("Found checkpoint for resume:").bold().cyan());
+                    println_if!(
+                        silent,
+                        "  Progress: {} / {} ({:.1}%)",
+                        format_size(checkpoint.bytes_written),
+                        checkpoint.source_size.map(format_size).unwrap_or_else(|| "unknown".to_string()),
+                        checkpoint.percentage()
+                    );
+                    println_if!(
+                        silent,
+                        "  Resume count: {}",
+                        checkpoint.resume_count
+                    );
+
+                    // Show any warnings
+                    for warning in &validation.warnings {
+                        println_if!(silent, "  {} {}", style("Warning:").yellow(), warning);
+                    }
+
+                    // Ask for confirmation unless skip_confirm is set
+                    let should_resume = if args.skip_confirm {
+                        true
+                    } else {
+                        Confirm::new()
+                            .with_prompt("Resume from checkpoint?")
+                            .default(true)
+                            .interact()?
+                    };
+
+                    if should_resume {
+                        resume_offset = checkpoint.bytes_written;
+                        existing_checkpoint = Some(checkpoint);
+                        println_if!(silent, "  {} Resuming from byte {}", style("✓").green(), resume_offset);
+                    } else {
+                        // User chose not to resume, remove old checkpoint
+                        let _ = mgr.remove(&checkpoint);
+                        println_if!(silent, "  {} Starting fresh write", style("ℹ").blue());
+                    }
+                } else {
+                    // Checkpoint is invalid, show why and remove it
+                    println_if!(silent, "\n{}", style("Existing checkpoint is invalid:").yellow());
+                    for msg in &validation.messages {
+                        println_if!(silent, "  {}", msg);
+                    }
+                    let _ = mgr.remove(&checkpoint);
+                    println_if!(silent, "  {} Starting fresh write", style("ℹ").blue());
+                }
+            }
+        }
+    }
+
+    // Step 7: Open source and target device
+    println_if!(silent, "\n{}", style("Writing image...").bold());
+
+    let mut source = Source::open_with_offset(&args.source, resume_offset)
+        .context("Failed to open source")?;
 
     // Open target device using platform layer with direct I/O
     let device_path = get_raw_device_path(&target_drive.path);
@@ -286,9 +419,24 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         device_info.direct_io
     );
 
-    // Step 7: Write with progress
+    // Step 8: Create or update checkpoint
+    let mut checkpoint = if let Some(mut cp) = existing_checkpoint.take() {
+        cp.mark_resumed();
+        cp
+    } else {
+        let write_config = WriteConfig::new()
+            .block_size(block_size)
+            .sync_each_block(false)
+            .sync_on_complete(true);
+        WriteCheckpoint::new(&source_info, &target_drive.path, target_drive.size, &write_config)
+    };
+
+    // Step 9: Write with progress and checkpointing
     let total_size = source_size.unwrap_or(0);
-    let pb = create_write_progress_bar(total_size);
+    let pb = create_write_progress_bar(total_size, silent);
+    if resume_offset > 0 {
+        pb.set_position(resume_offset);
+    }
 
     let cancel_flag = args.cancel_flag.clone();
 
@@ -299,8 +447,11 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     let writer = Writer::with_config(config);
 
-    // Set up progress callback
+    // Set up progress callback with checkpoint saving
     let pb_clone = pb.clone();
+    let last_checkpoint_bytes = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(resume_offset));
+    let last_checkpoint_clone = last_checkpoint_bytes.clone();
+
     let writer = writer.on_progress(move |progress| {
         pb_clone.set_position(progress.bytes_written);
         pb_clone.set_message(format!(
@@ -308,12 +459,16 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             format_size(progress.speed_bps),
             progress.eta_display()
         ));
+
+        // Track progress for checkpointing (checkpoint saved in main thread)
+        last_checkpoint_clone.store(progress.bytes_written, Ordering::Relaxed);
     });
 
     // Connect cancel flag
     let writer_cancel = writer.cancel_handle();
+    let cancel_flag_for_thread = cancel_flag.clone();
     std::thread::spawn(move || {
-        while cancel_flag.load(Ordering::SeqCst) {
+        while cancel_flag_for_thread.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         writer_cancel.store(true, Ordering::SeqCst);
@@ -322,47 +477,101 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     let mut writer = writer;
     let start_time = Instant::now();
 
-    let write_result = writer.write(&mut source, &mut *target, total_size);
+    // Use write_from_offset for resume support
+    let write_result = writer.write_from_offset(&mut source, &mut *target, total_size, resume_offset);
 
     pb.finish_and_clear();
 
-    match write_result {
+    // Handle write result
+    let write_success = match &write_result {
         Ok(result) => {
             let elapsed = start_time.elapsed();
+            let total_written = result.bytes_written;
+            let resumed_bytes = if resume_offset > 0 { resume_offset } else { 0 };
+            let session_bytes = total_written.saturating_sub(resumed_bytes);
             let speed = if elapsed.as_secs_f64() > 0.0 {
-                result.bytes_written as f64 / elapsed.as_secs_f64()
+                session_bytes as f64 / elapsed.as_secs_f64()
             } else {
                 0.0
             };
 
-            println!(
-                "  {} Wrote {} in {:.1}s ({}/s)",
-                style("✓").green(),
-                format_size(result.bytes_written),
-                elapsed.as_secs_f64(),
-                format_size(speed as u64)
-            );
+            if resume_offset > 0 {
+                println_if!(
+                    silent,
+                    "  {} Wrote {} (resumed from {}) in {:.1}s ({}/s)",
+                    style("✓").green(),
+                    format_size(total_written),
+                    format_size(resumed_bytes),
+                    elapsed.as_secs_f64(),
+                    format_size(speed as u64)
+                );
+            } else {
+                println_if!(
+                    silent,
+                    "  {} Wrote {} in {:.1}s ({}/s)",
+                    style("✓").green(),
+                    format_size(total_written),
+                    elapsed.as_secs_f64(),
+                    format_size(speed as u64)
+                );
+            }
+            true
         }
         Err(engraver_core::Error::Cancelled) => {
-            println!("\n{}", style("Write cancelled by user.").yellow());
+            // Save checkpoint on cancel
+            if let Some(ref mgr) = checkpoint_manager {
+                let bytes_written = last_checkpoint_bytes.load(Ordering::Relaxed);
+                let blocks_written = bytes_written / block_size as u64;
+                checkpoint.update_progress(bytes_written, blocks_written, start_time.elapsed());
+                if let Err(e) = mgr.save(&checkpoint) {
+                    tracing::warn!("Failed to save checkpoint: {}", e);
+                } else {
+                    println_if!(silent, "\n{} Checkpoint saved at {} bytes", style("ℹ").blue(), bytes_written);
+                    println_if!(silent, "  Run with --resume to continue");
+                }
+            }
+            println_if!(silent, "\n{}", style("Write cancelled by user.").yellow());
             return Ok(());
         }
         Err(e) => {
+            // Save checkpoint on error
+            if let Some(ref mgr) = checkpoint_manager {
+                let bytes_written = last_checkpoint_bytes.load(Ordering::Relaxed);
+                let blocks_written = bytes_written / block_size as u64;
+                checkpoint.update_progress(bytes_written, blocks_written, start_time.elapsed());
+                if let Err(save_err) = mgr.save(&checkpoint) {
+                    tracing::warn!("Failed to save checkpoint: {}", save_err);
+                } else {
+                    eprintln!("{} Checkpoint saved at {} bytes", style("ℹ").blue(), bytes_written);
+                    eprintln!("  Run with --resume to continue");
+                }
+            }
             bail!("Write failed: {}", e);
+        }
+    };
+
+    // Remove checkpoint on success
+    if write_success {
+        if let Some(ref mgr) = checkpoint_manager {
+            if let Err(e) = mgr.remove(&checkpoint) {
+                tracing::warn!("Failed to remove checkpoint: {}", e);
+            }
         }
     }
 
-    // Step 8: Sync using platform layer
-    print!("  Syncing... ");
-    std::io::stdout().flush()?;
+    // Step 10: Sync using platform layer
+    print_if!(silent, "  Syncing... ");
+    if !silent {
+        std::io::stdout().flush()?;
+    }
     target
         .sync()
         .context("Failed to sync device")?;
-    println!("{}", style("done").green());
+    println_if!(silent, "{}", style("done").green());
 
-    // Step 9: Verify (if requested)
+    // Step 11: Verify (if requested)
     if args.verify {
-        println!("\n{}", style("Verifying write...").bold());
+        println_if!(silent, "\n{}", style("Verifying write...").bold());
 
         // For verification, we need a seekable source
         // For local uncompressed files, open directly
@@ -377,7 +586,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             // Seek target back to start
             target.seek(SeekFrom::Start(0))?;
 
-            let pb = create_progress_bar(source_size, "Verifying");
+            let pb = create_progress_bar(source_size, "Verifying", silent);
 
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
@@ -391,7 +600,8 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
             match verify_result {
                 Ok(result) if result.success => {
-                    println!(
+                    println_if!(
+                        silent,
                         "  {} Verification passed ({} verified)",
                         style("✓").green(),
                         format_size(result.bytes_verified)
@@ -410,7 +620,8 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             }
         } else {
             // For remote/compressed sources, verify via checksum
-            println!(
+            println_if!(
+                silent,
                 "  {} Source is remote/compressed, using checksum verification",
                 style("ℹ").blue()
             );
@@ -418,7 +629,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             // Calculate checksum of what we wrote
             target.seek(SeekFrom::Start(0))?;
 
-            let pb = create_progress_bar(Some(total_size), "Checksumming");
+            let pb = create_progress_bar(Some(total_size), "Checksumming", silent);
 
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
@@ -433,11 +644,11 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             pb.finish_and_clear();
 
             // Re-open source and calculate its checksum
-            println!("  Calculating source checksum...");
+            println_if!(silent, "  Calculating source checksum...");
             let mut source_for_checksum =
                 Source::open(&args.source).context("Failed to reopen source")?;
 
-            let pb = create_progress_bar(source_size, "Checksumming source");
+            let pb = create_progress_bar(source_size, "Checksumming source", silent);
 
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
@@ -452,11 +663,12 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             pb.finish_and_clear();
 
             if written_checksum.matches(&source_checksum) {
-                println!(
+                println_if!(
+                    silent,
                     "  {} Checksum verification passed",
                     style("✓").green()
                 );
-                println!("    SHA-256: {}", written_checksum.to_hex());
+                println_if!(silent, "    SHA-256: {}", written_checksum.to_hex());
             } else {
                 bail!(
                     "Checksum mismatch!\n  Source:  {}\n  Written: {}",
@@ -468,8 +680,9 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     }
 
     // Done!
-    println!();
-    println!(
+    println_if!(silent);
+    println_if!(
+        silent,
         "{}",
         style("✓ Write complete! You can safely remove the drive.")
             .green()
@@ -573,7 +786,11 @@ fn format_size(bytes: u64) -> String {
 }
 
 /// Create a progress bar for operations
-fn create_progress_bar(total: Option<u64>, operation: &str) -> ProgressBar {
+fn create_progress_bar(total: Option<u64>, operation: &str, silent: bool) -> ProgressBar {
+    if silent {
+        return ProgressBar::hidden();
+    }
+
     let pb = match total {
         Some(t) => ProgressBar::new(t),
         None => ProgressBar::new_spinner(),
@@ -593,7 +810,11 @@ fn create_progress_bar(total: Option<u64>, operation: &str) -> ProgressBar {
 }
 
 /// Create a progress bar for write operations
-fn create_write_progress_bar(total: u64) -> ProgressBar {
+fn create_write_progress_bar(total: u64, silent: bool) -> ProgressBar {
+    if silent {
+        return ProgressBar::hidden();
+    }
+
     let pb = if total > 0 {
         ProgressBar::new(total)
     } else {

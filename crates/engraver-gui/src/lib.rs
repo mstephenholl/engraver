@@ -7,7 +7,7 @@
 
 #![allow(unused)]
 
-pub fn placeholder() {
+/// Placeholder for future GUI implementation.
+pub const fn placeholder() {
     // GUI implementation will go here
-    // See docs/architecture/gui-design.md for planning
 }

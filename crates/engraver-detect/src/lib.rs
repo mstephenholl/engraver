@@ -51,24 +51,19 @@ pub enum DetectError {
 pub type Result<T> = std::result::Result<T, DetectError>;
 
 /// Type of drive connection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DriveType {
     /// USB connected drive
     Usb,
     /// SD card (via built-in or USB reader)
     SdCard,
-    /// NVMe drive (external/portable)
+    /// `NVMe` drive (external/portable)
     Nvme,
     /// SATA drive
     Sata,
     /// Other/unknown connection type
+    #[default]
     Other,
-}
-
-impl Default for DriveType {
-    fn default() -> Self {
-        DriveType::Other
-    }
 }
 
 impl fmt::Display for DriveType {
@@ -83,10 +78,79 @@ impl fmt::Display for DriveType {
     }
 }
 
+/// USB connection speed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum UsbSpeed {
+    /// USB 1.x Low Speed (1.5 Mbps)
+    Low,
+    /// USB 1.x Full Speed (12 Mbps)
+    Full,
+    /// USB 2.0 High Speed (480 Mbps)
+    High,
+    /// USB 3.0 SuperSpeed (5 Gbps)
+    SuperSpeed,
+    /// USB 3.1 SuperSpeed+ (10 Gbps)
+    SuperSpeedPlus,
+    /// USB 3.2/4 SuperSpeed+ (20 Gbps)
+    SuperSpeedPlus20,
+    /// Unknown speed
+    #[default]
+    Unknown,
+}
+
+impl UsbSpeed {
+    /// Parse USB speed from Mbps value (as reported in sysfs)
+    #[must_use]
+    pub fn from_mbps(mbps: u32) -> Self {
+        match mbps {
+            0..=2 => UsbSpeed::Low,               // 1.5 Mbps
+            3..=15 => UsbSpeed::Full,             // 12 Mbps
+            16..=500 => UsbSpeed::High,           // 480 Mbps
+            501..=5500 => UsbSpeed::SuperSpeed,   // 5000 Mbps
+            5501..=11000 => UsbSpeed::SuperSpeedPlus, // 10000 Mbps
+            _ => UsbSpeed::SuperSpeedPlus20,      // 20000+ Mbps
+        }
+    }
+
+    /// Get theoretical maximum speed in MB/s
+    #[must_use]
+    pub fn max_speed_mb_s(&self) -> u32 {
+        match self {
+            UsbSpeed::Low => 0,                // ~0.2 MB/s
+            UsbSpeed::Full => 1,               // ~1.5 MB/s
+            UsbSpeed::High => 60,              // ~60 MB/s
+            UsbSpeed::SuperSpeed => 625,       // ~625 MB/s
+            UsbSpeed::SuperSpeedPlus => 1250,  // ~1250 MB/s
+            UsbSpeed::SuperSpeedPlus20 => 2500, // ~2500 MB/s
+            UsbSpeed::Unknown => 0,
+        }
+    }
+
+    /// Check if this is a slow connection (USB 2.0 or below)
+    #[must_use]
+    pub fn is_slow(&self) -> bool {
+        matches!(self, UsbSpeed::Low | UsbSpeed::Full | UsbSpeed::High)
+    }
+}
+
+impl fmt::Display for UsbSpeed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UsbSpeed::Low => write!(f, "USB 1.x (1.5 Mbps)"),
+            UsbSpeed::Full => write!(f, "USB 1.x (12 Mbps)"),
+            UsbSpeed::High => write!(f, "USB 2.0 (480 Mbps)"),
+            UsbSpeed::SuperSpeed => write!(f, "USB 3.0 (5 Gbps)"),
+            UsbSpeed::SuperSpeedPlus => write!(f, "USB 3.1 (10 Gbps)"),
+            UsbSpeed::SuperSpeedPlus20 => write!(f, "USB 3.2 (20 Gbps)"),
+            UsbSpeed::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
 /// Represents a detected drive/device
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Drive {
-    /// Device path (e.g., /dev/sdb, /dev/disk2, \\.\PhysicalDrive1)
+    /// Device path (e.g., `/dev/sdb`, `/dev/disk2`, `\\.\PhysicalDrive1`)
     pub path: String,
 
     /// Raw device path for direct I/O (may differ from path on some platforms)
@@ -124,6 +188,9 @@ pub struct Drive {
 
     /// Why this drive was marked as system (if applicable)
     pub system_reason: Option<String>,
+
+    /// USB connection speed (only for USB drives)
+    pub usb_speed: Option<UsbSpeed>,
 }
 
 impl Default for Drive {
@@ -142,6 +209,7 @@ impl Default for Drive {
             mount_points: Vec::new(),
             partitions: Vec::new(),
             system_reason: None,
+            usb_speed: None,
         }
     }
 }
@@ -177,24 +245,28 @@ impl Drive {
     }
 
     /// Builder: set the name
+    #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into();
         self
     }
 
     /// Builder: set the size
+    #[must_use]
     pub fn with_size(mut self, size: u64) -> Self {
         self.size = size;
         self
     }
 
     /// Builder: set removable flag
+    #[must_use]
     pub fn with_removable(mut self, removable: bool) -> Self {
         self.removable = removable;
         self
     }
 
     /// Builder: set system flag
+    #[must_use]
     pub fn with_system(mut self, is_system: bool, reason: Option<String>) -> Self {
         self.is_system = is_system;
         self.system_reason = reason;
@@ -202,12 +274,14 @@ impl Drive {
     }
 
     /// Builder: set drive type
+    #[must_use]
     pub fn with_drive_type(mut self, drive_type: DriveType) -> Self {
         self.drive_type = drive_type;
         self
     }
 
     /// Builder: add mount point
+    #[must_use]
     pub fn with_mount_point(mut self, mount_point: impl Into<String>) -> Self {
         self.mount_points.push(mount_point.into());
         self
@@ -219,16 +293,19 @@ impl Drive {
     /// - System drives
     /// - Non-removable drives (unless explicitly allowed)
     /// - Drives with active system mount points
+    #[must_use]
     pub fn is_safe_target(&self) -> bool {
         self.removable && !self.is_system
     }
 
     /// Format size for human-readable display
+    #[must_use]
     pub fn size_display(&self) -> String {
         format_bytes(self.size)
     }
 
     /// Get a display string for the drive
+    #[must_use]
     pub fn display_name(&self) -> String {
         let vendor = self.vendor.as_deref().unwrap_or("");
         let model = self.model.as_deref().unwrap_or(&self.name);
@@ -236,12 +313,14 @@ impl Drive {
         if vendor.is_empty() {
             model.to_string()
         } else {
-            format!("{} {}", vendor, model).trim().to_string()
+            format!("{vendor} {model}").trim().to_string()
         }
     }
 }
 
 /// Format bytes into human-readable string
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -257,7 +336,7 @@ pub fn format_bytes(bytes: u64) -> String {
     } else if bytes >= KB {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
@@ -278,6 +357,7 @@ pub const SYSTEM_MOUNT_POINTS: &[&str] = &[
 ];
 
 /// Check if any mount point indicates a system drive
+#[must_use]
 pub fn is_system_mount_point(mount_point: &str) -> bool {
     // Normalize the path
     let normalized = mount_point.trim();
@@ -287,8 +367,8 @@ pub fn is_system_mount_point(mount_point: &str) -> bool {
         .any(|&sys| {
             normalized == sys 
             || normalized.eq_ignore_ascii_case(sys)
-            || normalized.starts_with(&format!("{}\\", sys))
-            || normalized.starts_with(&format!("{}/", sys))
+            || normalized.starts_with(&format!("{sys}\\"))
+            || normalized.starts_with(&format!("{sys}/"))
         })
 }
 
@@ -315,14 +395,22 @@ cfg_if::cfg_if! {
 ///
 /// This is the main entry point for drive detection. It returns
 /// only drives that are safe to write to by default.
+///
+/// # Errors
+///
+/// Returns an error if drive enumeration fails (see [`list_drives`]).
 pub fn list_removable_drives() -> Result<Vec<Drive>> {
     let drives = list_drives()?;
-    Ok(drives.into_iter().filter(|d| d.is_safe_target()).collect())
+    Ok(drives.into_iter().filter(Drive::is_safe_target).collect())
 }
 
 /// List all drives including system drives
 ///
 /// Use with caution - includes drives that should NOT be written to.
+///
+/// # Errors
+///
+/// Returns an error if drive enumeration fails (see [`list_drives`]).
 pub fn list_all_drives() -> Result<Vec<Drive>> {
     list_drives()
 }
@@ -330,6 +418,14 @@ pub fn list_all_drives() -> Result<Vec<Drive>> {
 /// Validate that a device path is safe to write to
 ///
 /// Returns the Drive if valid and safe, or an error explaining why not.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Drive enumeration fails
+/// - The specified device is not found
+/// - The device is a system drive
+/// - The device is not removable
 pub fn validate_target(device_path: &str) -> Result<Drive> {
     let drives = list_drives()?;
 
@@ -338,7 +434,7 @@ pub fn validate_target(device_path: &str) -> Result<Drive> {
         .into_iter()
         .find(|d| d.path == device_path || d.raw_path == device_path)
         .ok_or_else(|| {
-            DetectError::EnumerationFailed(format!("Device not found: {}", device_path))
+            DetectError::EnumerationFailed(format!("Device not found: {device_path}"))
         })?;
 
     // Check if safe
@@ -352,8 +448,7 @@ pub fn validate_target(device_path: &str) -> Result<Drive> {
 
     if !drive.removable {
         return Err(DetectError::EnumerationFailed(format!(
-            "Drive is not removable: {}. Use --force to override (dangerous!)",
-            device_path
+            "Drive is not removable: {device_path}. Use --force to override (dangerous!)"
         )));
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Uses `wmic` and WMI queries for device enumeration.
 
-use super::{is_system_mount_point, DetectError, Drive, DriveType, Partition, Result};
+use super::{is_system_mount_point, DetectError, Drive, DriveType, Partition, Result, UsbSpeed};
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -25,8 +25,17 @@ pub fn list_drives() -> Result<Vec<Drive>> {
 
         let raw_path = format!("\\\\.\\PhysicalDrive{}", disk.index);
 
-        let removable = disk.media_type.contains("Removable") 
+        let removable = disk.media_type.contains("Removable")
             || disk.media_type.contains("External");
+
+        let drive_type = detect_drive_type(&disk.interface_type, &disk.media_type);
+
+        // Get USB speed for USB devices
+        let usb_speed = if drive_type == DriveType::Usb {
+            get_usb_speed_for_disk(&disk)
+        } else {
+            None
+        };
 
         drives.push(Drive {
             path: raw_path.clone(),
@@ -35,13 +44,14 @@ pub fn list_drives() -> Result<Vec<Drive>> {
             size: disk.size,
             removable,
             is_system,
-            drive_type: detect_drive_type(&disk.interface_type, &disk.media_type),
+            drive_type,
             vendor: None,
             model: Some(disk.model),
             serial: disk.serial,
             mount_points,
             partitions,
             system_reason,
+            usb_speed,
         });
     }
 
@@ -271,6 +281,112 @@ pub(crate) fn detect_drive_type(interface_type: &str, media_type: &str) -> Drive
                 DriveType::Other
             }
         }
+    }
+}
+
+/// Get USB speed for a device
+///
+/// Uses PowerShell to query USB controller information via CIM/WMI.
+/// Matches the device by PNP Device ID or serial number.
+fn get_usb_speed_for_disk(disk: &PhysicalDisk) -> Option<UsbSpeed> {
+    // Only check USB devices
+    if disk.interface_type.to_uppercase() != "USB" {
+        return None;
+    }
+
+    // Try to get USB speed via PowerShell CIM query
+    // This queries Win32_USBHub and related classes
+    let ps_command = r#"
+        Get-CimInstance -ClassName Win32_USBHub |
+        Select-Object DeviceID, Status, USBVersion |
+        ConvertTo-Csv -NoTypeInformation
+    "#;
+
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-Command", ps_command])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        // Fall back to checking if the device ID contains USB version hints
+        return detect_usb_speed_from_device_id(&disk.device_id);
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    parse_usb_speed_from_powershell(&output_str, disk)
+}
+
+/// Parse USB speed from PowerShell output
+pub(crate) fn parse_usb_speed_from_powershell(csv: &str, disk: &PhysicalDisk) -> Option<UsbSpeed> {
+    // The output includes USB version info
+    // Try to match by looking at USBVersion field
+
+    for line in csv.lines().skip(1) {
+        // Skip header
+        let fields: Vec<&str> = line.split(',').map(|s| s.trim_matches('"')).collect();
+
+        if fields.len() >= 3 {
+            let usb_version = fields.get(2).unwrap_or(&"");
+
+            // Check if this hub is related to our device
+            // This is a heuristic - we check if the device ID matches
+            if let Some(device_id) = fields.first() {
+                // USB version strings are like "2.0", "3.0", "3.1", etc.
+                if let Some(speed) = parse_usb_version_string(usb_version) {
+                    // If we can't match specific device, return the best speed we find
+                    // for USB devices (this is a simplification)
+                    if disk.interface_type.to_uppercase() == "USB" {
+                        // Try to find a matching controller
+                        if device_id.contains(&disk.index.to_string()) {
+                            return Some(speed);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to device ID detection
+    detect_usb_speed_from_device_id(&disk.device_id)
+}
+
+/// Try to detect USB speed from the device ID string
+///
+/// Device IDs sometimes contain hints like "USB3" or "USBSTOR"
+fn detect_usb_speed_from_device_id(device_id: &str) -> Option<UsbSpeed> {
+    let upper = device_id.to_uppercase();
+
+    if upper.contains("USB3") || upper.contains("XHCI") {
+        // USB 3.x device - assume SuperSpeed unless we know better
+        Some(UsbSpeed::SuperSpeed)
+    } else if upper.contains("USB2") || upper.contains("EHCI") {
+        Some(UsbSpeed::High)
+    } else if upper.contains("USB") || upper.contains("USBSTOR") {
+        // Generic USB - assume USB 2.0 as conservative estimate
+        Some(UsbSpeed::High)
+    } else {
+        None
+    }
+}
+
+/// Parse a USB version string like "2.0", "3.0", "3.1", "3.2"
+fn parse_usb_version_string(version: &str) -> Option<UsbSpeed> {
+    let version = version.trim();
+
+    if version.starts_with("3.2") || version.starts_with("4") {
+        Some(UsbSpeed::SuperSpeedPlus20)
+    } else if version.starts_with("3.1") {
+        Some(UsbSpeed::SuperSpeedPlus)
+    } else if version.starts_with("3.0") || version.starts_with("3") {
+        Some(UsbSpeed::SuperSpeed)
+    } else if version.starts_with("2.0") || version.starts_with("2") {
+        Some(UsbSpeed::High)
+    } else if version.starts_with("1.1") {
+        Some(UsbSpeed::Full)
+    } else if version.starts_with("1.0") || version.starts_with("1") {
+        Some(UsbSpeed::Low)
+    } else {
+        None
     }
 }
 
@@ -506,12 +622,48 @@ DESKTOP,32010928128,E:,FAT32,USB
     fn test_list_drives_real() {
         let drives = list_drives();
         assert!(drives.is_ok(), "Should be able to list drives");
-        
+
         let drives = drives.unwrap();
         assert!(!drives.is_empty(), "Should find at least one drive");
-        
+
         // C: drive should be present and marked as system
         let has_system = drives.iter().any(|d| d.is_system);
         assert!(has_system, "Should identify a system drive");
+    }
+
+    // -------------------------------------------------------------------------
+    // USB speed detection tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_usb_version_string() {
+        assert_eq!(parse_usb_version_string("3.2"), Some(UsbSpeed::SuperSpeedPlus20));
+        assert_eq!(parse_usb_version_string("3.1"), Some(UsbSpeed::SuperSpeedPlus));
+        assert_eq!(parse_usb_version_string("3.0"), Some(UsbSpeed::SuperSpeed));
+        assert_eq!(parse_usb_version_string("2.0"), Some(UsbSpeed::High));
+        assert_eq!(parse_usb_version_string("1.1"), Some(UsbSpeed::Full));
+        assert_eq!(parse_usb_version_string("1.0"), Some(UsbSpeed::Low));
+        assert_eq!(parse_usb_version_string(""), None);
+        assert_eq!(parse_usb_version_string("unknown"), None);
+    }
+
+    #[test]
+    fn test_detect_usb_speed_from_device_id() {
+        assert_eq!(
+            detect_usb_speed_from_device_id("USB\\VID_0781&PID_5591\\ABC123"),
+            Some(UsbSpeed::High)
+        );
+        assert_eq!(
+            detect_usb_speed_from_device_id("USB3\\VID_0781&PID_5591\\ABC123"),
+            Some(UsbSpeed::SuperSpeed)
+        );
+        assert_eq!(
+            detect_usb_speed_from_device_id("USBSTOR\\DISK&VEN_SANDISK"),
+            Some(UsbSpeed::High)
+        );
+        assert_eq!(
+            detect_usb_speed_from_device_id("SCSI\\DISK&VEN_SAMSUNG"),
+            None
+        );
     }
 }

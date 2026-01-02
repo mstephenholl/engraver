@@ -1,9 +1,16 @@
 #!/bin/bash
 # Engraver installation script
+# Version: 1.0.0
 # Usage: curl -fsSL https://raw.githubusercontent.com/mstephenholl/engraver/main/install.sh | bash
+#
+# Options:
+#   --version     Show installer version
+#   --help        Show this help message
+#   --no-sudo     Don't use sudo (install to user directory)
 
 set -e
 
+INSTALLER_VERSION="1.0.0"
 REPO="mstephenholl/engraver"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 COMPLETIONS_DIR="${COMPLETIONS_DIR:-}"
@@ -18,6 +25,58 @@ NC='\033[0m' # No Color
 info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+
+# Show help
+show_help() {
+    cat << EOF
+Engraver Installer v${INSTALLER_VERSION}
+
+Usage: curl -fsSL https://raw.githubusercontent.com/mstephenholl/engraver/main/install.sh | bash
+
+Or download and run locally:
+  curl -fsSL https://raw.githubusercontent.com/mstephenholl/engraver/main/install.sh -o install.sh
+  bash install.sh [OPTIONS]
+
+Options:
+  --version     Show installer version
+  --help        Show this help message
+  --no-sudo     Don't use sudo (requires writable INSTALL_DIR)
+
+Environment Variables:
+  INSTALL_DIR   Installation directory (default: /usr/local/bin)
+  MAN_DIR       Man page directory (default: /usr/local/share/man/man1)
+
+EOF
+    exit 0
+}
+
+# Show version
+show_version() {
+    echo "Engraver Installer v${INSTALLER_VERSION}"
+    exit 0
+}
+
+# Parse command line arguments
+USE_SUDO=true
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --version)
+                show_version
+                ;;
+            --help|-h)
+                show_help
+                ;;
+            --no-sudo)
+                USE_SUDO=false
+                shift
+                ;;
+            *)
+                error "Unknown option: $1. Use --help for usage."
+                ;;
+        esac
+    done
+}
 
 # Detect OS and architecture
 detect_platform() {
@@ -63,8 +122,10 @@ install_binary() {
     info "Installing to ${INSTALL_DIR}..."
     if [[ -w "$INSTALL_DIR" ]]; then
         cp "${extract_dir}/engraver" "$INSTALL_DIR/"
-    else
+    elif [[ "$USE_SUDO" == "true" ]]; then
         sudo cp "${extract_dir}/engraver" "$INSTALL_DIR/"
+    else
+        error "Cannot write to ${INSTALL_DIR}. Set INSTALL_DIR to a writable location or remove --no-sudo."
     fi
     chmod +x "${INSTALL_DIR}/engraver"
     
@@ -78,18 +139,27 @@ install_binary() {
 install_completions() {
     local src_dir="$1"
     
+    # Helper to copy with optional sudo
+    maybe_sudo_cp() {
+        if [[ -w "$(dirname "$2")" ]]; then
+            cp "$1" "$2" 2>/dev/null || true
+        elif [[ "$USE_SUDO" == "true" ]]; then
+            sudo cp "$1" "$2" 2>/dev/null || true
+        fi
+    }
+
     # Bash
     if [[ -d /usr/local/share/bash-completion/completions ]]; then
         info "Installing bash completions..."
-        sudo cp "${src_dir}/completions/engraver.bash" /usr/local/share/bash-completion/completions/engraver 2>/dev/null || true
+        maybe_sudo_cp "${src_dir}/completions/engraver.bash" /usr/local/share/bash-completion/completions/engraver
     elif [[ -d /etc/bash_completion.d ]]; then
-        sudo cp "${src_dir}/completions/engraver.bash" /etc/bash_completion.d/engraver 2>/dev/null || true
+        maybe_sudo_cp "${src_dir}/completions/engraver.bash" /etc/bash_completion.d/engraver
     fi
-    
+
     # Zsh
     if [[ -d /usr/local/share/zsh/site-functions ]]; then
         info "Installing zsh completions..."
-        sudo cp "${src_dir}/completions/_engraver" /usr/local/share/zsh/site-functions/ 2>/dev/null || true
+        maybe_sudo_cp "${src_dir}/completions/_engraver" /usr/local/share/zsh/site-functions/_engraver
     fi
     
     # Fish
@@ -101,10 +171,23 @@ install_completions() {
 
 install_man_pages() {
     local src_dir="$1"
-    
-    if [[ -d "$MAN_DIR" ]] || sudo mkdir -p "$MAN_DIR" 2>/dev/null; then
+
+    # Try to create MAN_DIR if needed
+    if [[ ! -d "$MAN_DIR" ]]; then
+        if [[ "$USE_SUDO" == "true" ]]; then
+            sudo mkdir -p "$MAN_DIR" 2>/dev/null || return
+        else
+            mkdir -p "$MAN_DIR" 2>/dev/null || return
+        fi
+    fi
+
+    if [[ -d "$MAN_DIR" ]]; then
         info "Installing man pages..."
-        sudo cp "${src_dir}"/man/*.1 "$MAN_DIR/" 2>/dev/null || true
+        if [[ -w "$MAN_DIR" ]]; then
+            cp "${src_dir}"/man/*.1 "$MAN_DIR/" 2>/dev/null || true
+        elif [[ "$USE_SUDO" == "true" ]]; then
+            sudo cp "${src_dir}"/man/*.1 "$MAN_DIR/" 2>/dev/null || true
+        fi
     fi
 }
 
@@ -128,8 +211,10 @@ install_from_source() {
     info "Installing to ${INSTALL_DIR}..."
     if [[ -w "$INSTALL_DIR" ]]; then
         cp target/release/engraver "$INSTALL_DIR/"
-    else
+    elif [[ "$USE_SUDO" == "true" ]]; then
         sudo cp target/release/engraver "$INSTALL_DIR/"
+    else
+        error "Cannot write to ${INSTALL_DIR}. Set INSTALL_DIR to a writable location or remove --no-sudo."
     fi
     
     # Generate and install completions
@@ -146,11 +231,13 @@ install_from_source() {
 }
 
 main() {
+    parse_args "$@"
+
     echo "╔════════════════════════════════════════╗"
-    echo "║     Engraver Installer                 ║"
+    echo "║     Engraver Installer v${INSTALLER_VERSION}            ║"
     echo "╚════════════════════════════════════════╝"
     echo
-    
+
     local platform version
     platform=$(detect_platform)
     

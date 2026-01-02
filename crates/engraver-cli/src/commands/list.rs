@@ -4,7 +4,7 @@ use anyhow::Result;
 use console::style;
 
 /// Execute the list command
-pub fn execute(show_all: bool, json: bool) -> Result<()> {
+pub fn execute(show_all: bool, json: bool, silent: bool) -> Result<()> {
     let all_drives = engraver_detect::list_drives()?;
 
     let drives: Vec<_> = if show_all {
@@ -17,10 +17,15 @@ pub fn execute(show_all: bool, json: bool) -> Result<()> {
             .collect()
     };
 
-    // JSON output mode
+    // JSON output mode - always output even in silent mode (it's machine-readable)
     if json {
         let output = serde_json_drives(&drives);
         println!("{}", output);
+        return Ok(());
+    }
+
+    // Silent mode - no human-readable output
+    if silent {
         return Ok(());
     }
 
@@ -88,15 +93,26 @@ fn print_drive(drive: &engraver_detect::Drive) {
         removable
     );
 
-    // Show drive type
+    // Show drive type and USB speed if applicable
+    let usb_speed_info = if let Some(speed) = &drive.usb_speed {
+        if speed.is_slow() {
+            format!(" | {} {}", style(speed.to_string()).yellow(), style("(slow)").yellow().bold())
+        } else {
+            format!(" | {}", style(speed.to_string()).green())
+        }
+    } else {
+        String::new()
+    };
+
     println!(
-        "    Type: {} | {}",
+        "    Type: {} | {}{}",
         style(drive.drive_type.to_string()).dim(),
         if drive.is_system {
             style("SYSTEM DRIVE").red().bold().to_string()
         } else {
             style("safe target").green().to_string()
-        }
+        },
+        usb_speed_info
     );
 
     // Show reason if system drive
@@ -166,6 +182,14 @@ fn serde_json_drives(drives: &[engraver_detect::Drive]) -> String {
         output.push_str(&format!(
             "    \"drive_type\": \"{}\",\n",
             drive.drive_type
+        ));
+        output.push_str(&format!(
+            "    \"usb_speed\": {},\n",
+            drive.usb_speed.as_ref().map_or("null".to_string(), |s| format!("\"{}\"", s))
+        ));
+        output.push_str(&format!(
+            "    \"usb_speed_slow\": {},\n",
+            drive.usb_speed.as_ref().map_or(false, |s| s.is_slow())
         ));
         output.push_str(&format!(
             "    \"mount_points\": [{}],\n",

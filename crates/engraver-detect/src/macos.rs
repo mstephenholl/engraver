@@ -2,7 +2,7 @@
 //!
 //! Uses `diskutil` command for device enumeration and information.
 
-use super::{DetectError, Drive, DriveType, Partition, Result, is_system_mount_point};
+use super::{DetectError, Drive, DriveType, Partition, Result, UsbSpeed, is_system_mount_point};
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -173,6 +173,13 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
 
     let (is_system, system_reason) = check_if_system_drive(&info, &mount_points, internal);
 
+    // Get USB speed for USB devices
+    let usb_speed = if drive_type == DriveType::Usb {
+        get_usb_speed_for_disk(disk_name, &info)
+    } else {
+        None
+    };
+
     let display_name = vendor
         .clone()
         .or_else(|| model.clone())
@@ -194,6 +201,7 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
         mount_points,
         partitions,
         system_reason,
+        usb_speed,
     }))
 }
 
@@ -355,6 +363,123 @@ pub(crate) fn detect_drive_type(info: &HashMap<String, String>) -> DriveType {
     }
 
     DriveType::Other
+}
+
+/// Get USB speed for a device by querying system_profiler
+///
+/// Parses `system_profiler SPUSBDataType` output to find the speed
+/// of the USB device matching the given disk name.
+fn get_usb_speed_for_disk(disk_name: &str, info: &HashMap<String, String>) -> Option<UsbSpeed> {
+    // Only check USB devices
+    let protocol = info.get("DeviceProtocol").or_else(|| info.get("BusProtocol"));
+    if protocol.map(|s| s.as_str()) != Some("USB") {
+        return None;
+    }
+
+    // Get the media name to help match in USB tree
+    let media_name = info.get("MediaName").cloned();
+
+    // Run system_profiler to get USB device info
+    let output = Command::new("system_profiler")
+        .args(["SPUSBDataType", "-detailLevel", "mini"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    parse_usb_speed_from_profiler(&output_str, disk_name, media_name.as_deref())
+}
+
+/// Parse USB speed from system_profiler output
+///
+/// The output format is hierarchical text like:
+/// ```text
+/// USB 3.0 Bus:
+///   Host Controller Driver: AppleUSBXHCI
+///   USB3.1 Hub:
+///     Product ID: 0x0612
+///     Speed: Up to 10 Gb/s
+///     SanDisk Ultra:
+///       Product ID: 0x5591
+///       Speed: Up to 5 Gb/s
+/// ```
+pub(crate) fn parse_usb_speed_from_profiler(
+    output: &str,
+    _disk_name: &str,
+    media_name: Option<&str>,
+) -> Option<UsbSpeed> {
+    // Look for the device by media name in the USB tree
+    let search_name = media_name?;
+
+    let mut found_device = false;
+    let mut in_device_section = false;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+
+        // Check if this line contains our device name
+        if !found_device && trimmed.contains(search_name) {
+            found_device = true;
+            in_device_section = true;
+            continue;
+        }
+
+        // Once we found the device, look for Speed line
+        if in_device_section {
+            // Check if we've moved to a different device (less indentation or new device header)
+            if !line.starts_with(' ') && !line.is_empty() {
+                // Left the device section
+                break;
+            }
+
+            if trimmed.starts_with("Speed:") {
+                let speed_str = trimmed.trim_start_matches("Speed:").trim();
+                return parse_speed_string(speed_str);
+            }
+        }
+    }
+
+    None
+}
+
+/// Parse a speed string like "Up to 5 Gb/s" or "Up to 480 Mb/s"
+fn parse_speed_string(speed_str: &str) -> Option<UsbSpeed> {
+    let lower = speed_str.to_lowercase();
+
+    // Parse "Up to X Gb/s" or "Up to X Mb/s"
+    if lower.contains("gb/s") || lower.contains("gbps") {
+        // Extract the number
+        let num_str: String = lower.chars().filter(|c| c.is_ascii_digit()).collect();
+        if let Ok(gbps) = num_str.parse::<u32>() {
+            let mbps = gbps * 1000;
+            return Some(UsbSpeed::from_mbps(mbps));
+        }
+    } else if lower.contains("mb/s") || lower.contains("mbps") {
+        let num_str: String = lower.chars().filter(|c| c.is_ascii_digit()).collect();
+        if let Ok(mbps) = num_str.parse::<u32>() {
+            return Some(UsbSpeed::from_mbps(mbps));
+        }
+    }
+
+    // Try common patterns
+    if lower.contains("superspeed+") || lower.contains("20 g") {
+        Some(UsbSpeed::SuperSpeedPlus20)
+    } else if lower.contains("superspeed") && lower.contains("10") {
+        Some(UsbSpeed::SuperSpeedPlus)
+    } else if lower.contains("superspeed") || lower.contains("5 g") {
+        Some(UsbSpeed::SuperSpeed)
+    } else if lower.contains("high") || lower.contains("480") {
+        Some(UsbSpeed::High)
+    } else if lower.contains("full") || lower.contains("12") {
+        Some(UsbSpeed::Full)
+    } else if lower.contains("low") {
+        Some(UsbSpeed::Low)
+    } else {
+        None
+    }
 }
 
 /// Check if this is a system drive
@@ -652,13 +777,82 @@ mod tests {
     fn test_list_drives_real() {
         let drives = list_drives();
         assert!(drives.is_ok(), "Should be able to list drives");
-        
+
         let drives = drives.unwrap();
         // On a Mac, there should be at least one drive (the system drive)
         assert!(!drives.is_empty(), "Should find at least one drive");
-        
+
         // System drive should be present and marked as system
         let system_drive = drives.iter().find(|d| d.is_system);
         assert!(system_drive.is_some(), "Should identify a system drive");
+    }
+
+    // -------------------------------------------------------------------------
+    // USB speed parsing tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_speed_string_gbps() {
+        assert_eq!(parse_speed_string("Up to 5 Gb/s"), Some(UsbSpeed::SuperSpeed));
+        assert_eq!(parse_speed_string("Up to 10 Gb/s"), Some(UsbSpeed::SuperSpeedPlus));
+        assert_eq!(parse_speed_string("Up to 20 Gb/s"), Some(UsbSpeed::SuperSpeedPlus20));
+    }
+
+    #[test]
+    fn test_parse_speed_string_mbps() {
+        assert_eq!(parse_speed_string("Up to 480 Mb/s"), Some(UsbSpeed::High));
+        assert_eq!(parse_speed_string("Up to 12 Mb/s"), Some(UsbSpeed::Full));
+    }
+
+    #[test]
+    fn test_parse_speed_string_keywords() {
+        assert_eq!(parse_speed_string("High Speed"), Some(UsbSpeed::High));
+        assert_eq!(parse_speed_string("Full Speed"), Some(UsbSpeed::Full));
+        assert_eq!(parse_speed_string("Low Speed"), Some(UsbSpeed::Low));
+        assert_eq!(parse_speed_string("SuperSpeed"), Some(UsbSpeed::SuperSpeed));
+    }
+
+    #[test]
+    fn test_parse_usb_speed_from_profiler() {
+        let output = r#"
+USB:
+
+    USB 3.1 Bus:
+
+      Host Controller Driver: AppleUSBXHCIPPT
+
+        SanDisk Ultra:
+
+          Product ID: 0x5591
+          Vendor ID: 0x0781
+          Speed: Up to 5 Gb/s
+          Manufacturer: SanDisk
+          Serial Number: ABC123
+
+        Kingston DataTraveler:
+
+          Product ID: 0x1666
+          Speed: Up to 480 Mb/s
+
+    USB 2.0 Bus:
+
+      Host Controller Driver: AppleUSBEHCI
+"#;
+
+        // Should find SanDisk at SuperSpeed
+        let speed = parse_usb_speed_from_profiler(output, "disk2", Some("SanDisk Ultra"));
+        assert_eq!(speed, Some(UsbSpeed::SuperSpeed));
+
+        // Should find Kingston at High Speed
+        let speed = parse_usb_speed_from_profiler(output, "disk3", Some("Kingston DataTraveler"));
+        assert_eq!(speed, Some(UsbSpeed::High));
+
+        // Should not find non-existent device
+        let speed = parse_usb_speed_from_profiler(output, "disk4", Some("NonExistent"));
+        assert_eq!(speed, None);
+
+        // Should return None if no media name
+        let speed = parse_usb_speed_from_profiler(output, "disk2", None);
+        assert_eq!(speed, None);
     }
 }
