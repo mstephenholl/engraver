@@ -18,6 +18,9 @@ checksum = ["sha2", "md-5", "crc32fast"]
 [dependencies]
 thiserror = "2"
 tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs-next = "2"
 
 # Compression (optional)
 flate2 = { version = "1", optional = true }

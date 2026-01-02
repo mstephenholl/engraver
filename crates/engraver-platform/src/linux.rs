@@ -40,8 +40,12 @@ impl PlatformOps for LinuxPlatform {
     }
 
     fn has_elevated_privileges() -> bool {
-        // Check if running as root
-        unsafe { libc::geteuid() == 0 }
+        // SAFETY: geteuid() is a simple syscall that returns the effective user ID.
+        // It has no preconditions and cannot cause undefined behavior.
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::geteuid() == 0
+        }
     }
 
     fn get_block_size(path: &str) -> Result<u32> {
@@ -71,6 +75,10 @@ impl AlignedBuffer {
         Self { data, alignment }
     }
 
+    /// Returns an aligned slice for reading.
+    ///
+    /// This is the immutable counterpart to [`Self::as_aligned_slice_mut`].
+    #[allow(dead_code)] // Provided for API completeness
     fn as_aligned_slice(&self, len: usize) -> &[u8] {
         let ptr = self.data.as_ptr();
         let aligned_ptr = align_up(ptr as usize, self.alignment) as *const u8;
@@ -158,6 +166,9 @@ impl RawDevice for LinuxDevice {
     fn sync(&self) -> Result<()> {
         // Use fsync to flush writes
         let fd = self.file.as_raw_fd();
+        // SAFETY: fsync() is called with a valid file descriptor obtained from as_raw_fd().
+        // The fd remains valid for the lifetime of self.file.
+        #[allow(unsafe_code)]
         let result = unsafe { libc::fsync(fd) };
         if result == 0 {
             Ok(())
@@ -280,6 +291,9 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
         const BLKGETSIZE64: libc::c_ulong = 0x80081272;
 
         let mut size: u64 = 0;
+        // SAFETY: ioctl with BLKGETSIZE64 writes a u64 to the provided pointer.
+        // We pass a valid mutable reference to a u64, and fd is valid.
+        #[allow(unsafe_code)]
         let result = unsafe { libc::ioctl(fd, BLKGETSIZE64, &mut size) };
 
         if result == 0 && size > 0 {
@@ -288,6 +302,9 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
     }
 
     // Fallback: seek to end
+    // SAFETY: lseek64 is called with a valid fd. We save/restore the current position
+    // to avoid side effects. The fd remains valid throughout these calls.
+    #[allow(unsafe_code)]
     let size = unsafe {
         let current = libc::lseek64(fd, 0, libc::SEEK_CUR);
         let end = libc::lseek64(fd, 0, libc::SEEK_END);
@@ -296,9 +313,8 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
     };
 
     if size < 0 {
-        Err(PlatformError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to get size of {}", path),
+        Err(PlatformError::Io(std::io::Error::other(
+            format!("Failed to get size of {path}"),
         )))
     } else {
         Ok(size as u64)
@@ -310,7 +326,7 @@ fn get_device_block_size(path: &str) -> Result<u32> {
     let file = StdOpenOptions::new()
         .read(true)
         .open(path)
-        .map_err(|e| PlatformError::Io(e))?;
+        .map_err(PlatformError::Io)?;
 
     let fd = file.as_raw_fd();
 
@@ -319,6 +335,9 @@ fn get_device_block_size(path: &str) -> Result<u32> {
         const BLKSSZGET: libc::c_ulong = 0x1268;
 
         let mut block_size: i32 = 0;
+        // SAFETY: ioctl with BLKSSZGET writes an i32 to the provided pointer.
+        // We pass a valid mutable reference to an i32, and fd is valid.
+        #[allow(unsafe_code)]
         let result = unsafe { libc::ioctl(fd, BLKSSZGET, &mut block_size) };
 
         if result == 0 && block_size > 0 {

@@ -40,6 +40,10 @@ struct Cli {
     #[arg(short, long, global = true)]
     quiet: bool,
 
+    /// Suppress ALL output (implies --quiet and --yes)
+    #[arg(long, global = true)]
+    silent: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -92,6 +96,14 @@ enum Commands {
         /// Do not unmount partitions before writing
         #[arg(long)]
         no_unmount: bool,
+
+        /// Resume an interrupted write operation
+        #[arg(long)]
+        resume: bool,
+
+        /// Enable checkpointing for resume support (auto-enabled with --resume)
+        #[arg(long)]
+        checkpoint: bool,
     },
 
     /// Verify a drive against a source image
@@ -158,10 +170,11 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging
+    // --silent implies --quiet (no logs at all, not even errors to tracing)
     let filter = if cli.verbose {
         EnvFilter::new("debug")
-    } else if cli.quiet {
-        EnvFilter::new("error")
+    } else if cli.quiet || cli.silent {
+        EnvFilter::new("off")
     } else {
         EnvFilter::new("info")
     };
@@ -172,22 +185,30 @@ fn run() -> Result<()> {
         .without_time()
         .init();
 
-    // Set up Ctrl+C handler
+    // --silent implies --yes (skip confirmations)
+    let silent = cli.silent;
+
+    // Set up Ctrl+C handler (suppress messages in silent mode)
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let r = running.clone();
+    let silent_for_handler = silent;
     ctrlc::set_handler(move || {
         if !r.load(std::sync::atomic::Ordering::SeqCst) {
             // Second Ctrl+C, force exit
-            eprintln!("\n{}", style("Forced exit").red().bold());
+            if !silent_for_handler {
+                eprintln!("\n{}", style("Forced exit").red().bold());
+            }
             std::process::exit(130);
         }
         r.store(false, std::sync::atomic::Ordering::SeqCst);
-        eprintln!("\n{}", style("Cancelling... Press Ctrl+C again to force exit").yellow());
+        if !silent_for_handler {
+            eprintln!("\n{}", style("Cancelling... Press Ctrl+C again to force exit").yellow());
+        }
     })?;
 
     match cli.command {
         Commands::List { all, json } => {
-            commands::list::execute(all, json)
+            commands::list::execute(all, json, silent)
         }
         Commands::Write {
             source,
@@ -199,18 +220,23 @@ fn run() -> Result<()> {
             checksum_algo,
             force,
             no_unmount,
+            resume,
+            checkpoint,
         } => {
             commands::write::execute(commands::write::WriteArgs {
                 source,
                 target,
                 verify,
-                skip_confirm: yes,
+                skip_confirm: yes || silent, // --silent implies --yes
                 block_size,
                 checksum,
                 checksum_algo,
                 force,
                 no_unmount,
                 cancel_flag: running,
+                silent,
+                resume,
+                checkpoint: checkpoint || resume, // --resume implies --checkpoint
             })
         }
         Commands::Verify {
@@ -218,10 +244,10 @@ fn run() -> Result<()> {
             target,
             block_size,
         } => {
-            commands::verify::execute(&source, &target, &block_size, running)
+            commands::verify::execute(&source, &target, &block_size, running, silent)
         }
         Commands::Checksum { source, algorithm } => {
-            commands::checksum::execute(&source, &algorithm)
+            commands::checksum::execute(&source, &algorithm, silent)
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -239,16 +265,18 @@ fn run() -> Result<()> {
             let mut buffer = Vec::new();
             man.render(&mut buffer)?;
             std::fs::write(out_path.join("engraver.1"), buffer)?;
-            println!("Generated: {}/engraver.1", out_dir);
+            if !silent {
+                println!("Generated: {}/engraver.1", out_dir);
+            }
 
             // Generate man pages for subcommands
             for subcommand in cmd.get_subcommands() {
                 let name = subcommand.get_name();
                 // Skip hidden commands and meta commands
-                if subcommand.is_hide_set() 
-                    || name == "completions" 
-                    || name == "mangen" 
-                    || name == "help" 
+                if subcommand.is_hide_set()
+                    || name == "completions"
+                    || name == "mangen"
+                    || name == "help"
                 {
                     continue;
                 }
@@ -258,10 +286,14 @@ fn run() -> Result<()> {
                 man.render(&mut buffer)?;
                 let filename = format!("engraver-{}.1", name);
                 std::fs::write(out_path.join(&filename), buffer)?;
-                println!("Generated: {}/{}", out_dir, filename);
+                if !silent {
+                    println!("Generated: {}/{}", out_dir, filename);
+                }
             }
 
-            println!("\nInstall with: sudo cp {}/*.1 /usr/local/share/man/man1/", out_dir);
+            if !silent {
+                println!("\nInstall with: sudo cp {}/*.1 /usr/local/share/man/man1/", out_dir);
+            }
             Ok(())
         }
     }

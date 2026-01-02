@@ -10,12 +10,27 @@ use engraver_core::{validate_source, ChecksumAlgorithm, Source, SourceType, Veri
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, OpenOptions};
 
+/// Conditionally println based on silent mode
+macro_rules! println_if {
+    ($silent:expr) => {
+        if !$silent {
+            println!();
+        }
+    };
+    ($silent:expr, $($arg:tt)*) => {
+        if !$silent {
+            println!($($arg)*);
+        }
+    };
+}
+
 /// Execute the verify command
 pub fn execute(
     source: &str,
     target: &str,
     block_size_str: &str,
     cancel_flag: Arc<AtomicBool>,
+    silent: bool,
 ) -> Result<()> {
     // Parse block size
     let block_size = parse_block_size(block_size_str)?;
@@ -39,7 +54,7 @@ pub fn execute(
     }
 
     // Validate source
-    println!("{} {}", style("Source:").bold(), style(source).cyan());
+    println_if!(silent, "{} {}", style("Source:").bold(), style(source).cyan());
 
     let source_info =
         validate_source(source).with_context(|| format!("Failed to validate source: {}", source))?;
@@ -48,26 +63,27 @@ pub fn execute(
     let source_is_local = source_info.source_type == SourceType::LocalFile;
 
     if let Some(size) = source_size {
-        println!("  {} ({})", style("✓").green(), format_size(size));
+        println_if!(silent, "  {} ({})", style("✓").green(), format_size(size));
     } else {
-        println!("  {} (size unknown)", style("✓").green());
+        println_if!(silent, "  {} (size unknown)", style("✓").green());
     }
 
     // Validate target
-    println!("\n{} {}", style("Target:").bold(), style(target).cyan());
+    println_if!(silent, "\n{} {}", style("Target:").bold(), style(target).cyan());
 
     let drives = list_drives().context("Failed to list drives")?;
     let target_drive = drives.iter().find(|d| d.path == target || d.raw_path == target);
 
     if let Some(drive) = target_drive {
-        println!(
+        println_if!(
+            silent,
             "  {} {} ({})",
             style("✓").green(),
             drive.display_name(),
             format_size(drive.size)
         );
     } else {
-        println!("  {} Device found", style("✓").green());
+        println_if!(silent, "  {} Device found", style("✓").green());
     }
 
     // Open target device for reading using platform layer
@@ -83,7 +99,7 @@ pub fn execute(
 
     let total_size = source_size.unwrap_or(0);
 
-    println!("\n{}", style("Verifying...").bold());
+    println_if!(silent, "\n{}", style("Verifying...").bold());
 
     // Set up cancel handler
     let cancel_clone = cancel_flag.clone();
@@ -94,20 +110,24 @@ pub fn execute(
             .with_context(|| format!("Failed to open source: {}", source))?;
 
         // Create progress bar
-        let pb = if total_size > 0 {
+        let pb = if silent {
+            ProgressBar::hidden()
+        } else if total_size > 0 {
             ProgressBar::new(total_size)
         } else {
             ProgressBar::new_spinner()
         };
 
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "  {spinner:.green} Comparing [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
-                )
-                .unwrap()
-                .progress_chars("█▓░"),
-        );
+        if !silent {
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template(
+                        "  {spinner:.green} Comparing [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+                    )
+                    .unwrap()
+                    .progress_chars("█▓░"),
+            );
+        }
 
         // Set up verifier
         let config = VerifyConfig::new().block_size(block_size);
@@ -133,22 +153,29 @@ pub fn execute(
 
         pb.finish_and_clear();
 
-        handle_verify_result(result)
+        handle_verify_result(result, silent)
     } else {
         // For remote/compressed sources, compare checksums
-        println!(
+        println_if!(
+            silent,
             "  {} Source is remote/compressed, using checksum verification",
             style("ℹ").blue()
         );
 
         // Calculate checksum of target
-        let pb = ProgressBar::new(total_size);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("  {spinner:.green} Checksumming target [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
-                .unwrap()
-                .progress_chars("█▓░"),
-        );
+        let pb = if silent {
+            ProgressBar::hidden()
+        } else {
+            ProgressBar::new(total_size)
+        };
+        if !silent {
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("  {spinner:.green} Checksumming target [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
+                    .unwrap()
+                    .progress_chars("█▓░"),
+            );
+        }
 
         let config = VerifyConfig::new().block_size(block_size);
         let pb_clone = pb.clone();
@@ -163,21 +190,25 @@ pub fn execute(
         pb.finish_and_clear();
 
         // Calculate checksum of source
-        println!("  Calculating source checksum...");
+        println_if!(silent, "  Calculating source checksum...");
         let mut source_reader =
             Source::open(source).with_context(|| format!("Failed to open source: {}", source))?;
 
-        let pb = if let Some(size) = source_size {
+        let pb = if silent {
+            ProgressBar::hidden()
+        } else if let Some(size) = source_size {
             ProgressBar::new(size)
         } else {
             ProgressBar::new_spinner()
         };
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("  {spinner:.green} Checksumming source [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
-                .unwrap()
-                .progress_chars("█▓░"),
-        );
+        if !silent {
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("  {spinner:.green} Checksumming source [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
+                    .unwrap()
+                    .progress_chars("█▓░"),
+            );
+        }
 
         let config = VerifyConfig::new().block_size(block_size);
         let pb_clone = pb.clone();
@@ -192,33 +223,37 @@ pub fn execute(
         pb.finish_and_clear();
 
         if target_checksum.matches(&source_checksum) {
-            println!(
+            println_if!(
+                silent,
                 "  {} Checksum verification passed!",
                 style("✓").green().bold()
             );
-            println!("    SHA-256: {}", source_checksum.to_hex());
+            println_if!(silent, "    SHA-256: {}", source_checksum.to_hex());
             Ok(())
         } else {
-            println!(
+            println_if!(
+                silent,
                 "  {} Checksum verification FAILED!",
                 style("✗").red().bold()
             );
-            println!("    Source:  {}", source_checksum.to_hex());
-            println!("    Target:  {}", target_checksum.to_hex());
+            println_if!(silent, "    Source:  {}", source_checksum.to_hex());
+            println_if!(silent, "    Target:  {}", target_checksum.to_hex());
             bail!("Verification failed: checksums do not match");
         }
     }
 }
 
 /// Handle verification result
-fn handle_verify_result(result: std::result::Result<engraver_core::VerificationResult, engraver_core::Error>) -> Result<()> {
+fn handle_verify_result(result: std::result::Result<engraver_core::VerificationResult, engraver_core::Error>, silent: bool) -> Result<()> {
     match result {
         Ok(result) if result.success => {
-            println!(
+            println_if!(
+                silent,
                 "  {} Verification passed!",
                 style("✓").green().bold()
             );
-            println!(
+            println_if!(
+                silent,
                 "    {} bytes verified in {:.1}s ({}/s)",
                 result.bytes_verified,
                 result.elapsed.as_secs_f64(),
@@ -227,21 +262,23 @@ fn handle_verify_result(result: std::result::Result<engraver_core::VerificationR
             Ok(())
         }
         Ok(result) => {
-            println!(
+            println_if!(
+                silent,
                 "  {} Verification FAILED!",
                 style("✗").red().bold()
             );
-            println!(
+            println_if!(
+                silent,
                 "    {} mismatch(es) found",
                 result.mismatches
             );
             if let Some(offset) = result.first_mismatch_offset {
-                println!("    First mismatch at byte offset: {}", offset);
+                println_if!(silent, "    First mismatch at byte offset: {}", offset);
             }
             bail!("Verification failed");
         }
         Err(engraver_core::Error::Cancelled) => {
-            println!("\n{}", style("Verification cancelled.").yellow());
+            println_if!(silent, "\n{}", style("Verification cancelled.").yellow());
             Ok(())
         }
         Err(e) => {

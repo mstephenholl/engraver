@@ -37,12 +37,17 @@
 
 pub mod config;
 pub mod error;
+pub mod resume;
 pub mod source;
 pub mod verifier;
 pub mod writer;
 
 pub use config::Config;
 pub use error::{Error, Result};
+pub use resume::{
+    default_checkpoint_dir, validate_checkpoint, CheckpointManager, CheckpointValidation,
+    WriteCheckpoint, CHECKPOINT_VERSION,
+};
 pub use source::{
     detect_source_type, get_source_size, validate_source, Source, SourceInfo, SourceType,
 };

@@ -23,6 +23,7 @@
 //! ```
 
 use crate::error::{Error, Result};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -32,7 +33,7 @@ use std::path::Path;
 // ============================================================================
 
 /// Source type enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceType {
     /// Local uncompressed file
     LocalFile,
@@ -559,16 +560,33 @@ impl Source {
     ///
     /// Automatically detects the source type and compression.
     pub fn open(path: &str) -> Result<Self> {
+        Self::open_with_offset(path, 0)
+    }
+
+    /// Open a source from a path or URL, seeking to the specified offset
+    ///
+    /// This is useful for resuming interrupted writes. For local files, this
+    /// seeks to the offset. For HTTP sources, this uses Range headers.
+    /// Compressed sources cannot be resumed (returns error if offset > 0).
+    pub fn open_with_offset(path: &str, offset: u64) -> Result<Self> {
         let source_type = detect_source_type(path);
 
         match source_type {
             SourceType::LocalFile => {
-                let source = LocalFileSource::open(path)?;
+                let mut source = LocalFileSource::open(path)?;
+                if offset > 0 {
+                    source.seek(SeekFrom::Start(offset))?;
+                }
                 Ok(Source::Local(source))
             }
 
             #[cfg(feature = "compression")]
             SourceType::Gzip => {
+                if offset > 0 {
+                    return Err(Error::InvalidConfig(
+                        "Cannot resume from compressed gzip source".to_string(),
+                    ));
+                }
                 let file = open_file_buffered(path)?;
                 let compressed_size = file.get_ref().metadata()?.len();
                 let info = SourceInfo::compressed(path, compressed_size, SourceType::Gzip);
@@ -577,6 +595,11 @@ impl Source {
 
             #[cfg(feature = "compression")]
             SourceType::Xz => {
+                if offset > 0 {
+                    return Err(Error::InvalidConfig(
+                        "Cannot resume from compressed xz source".to_string(),
+                    ));
+                }
                 let file = open_file_buffered(path)?;
                 let compressed_size = file.get_ref().metadata()?.len();
                 let info = SourceInfo::compressed(path, compressed_size, SourceType::Xz);
@@ -585,6 +608,11 @@ impl Source {
 
             #[cfg(feature = "compression")]
             SourceType::Zstd => {
+                if offset > 0 {
+                    return Err(Error::InvalidConfig(
+                        "Cannot resume from compressed zstd source".to_string(),
+                    ));
+                }
                 let file = open_file_buffered(path)?;
                 let compressed_size = file.get_ref().metadata()?.len();
                 let info = SourceInfo::compressed(path, compressed_size, SourceType::Zstd);
@@ -593,6 +621,11 @@ impl Source {
 
             #[cfg(feature = "compression")]
             SourceType::Bzip2 => {
+                if offset > 0 {
+                    return Err(Error::InvalidConfig(
+                        "Cannot resume from compressed bzip2 source".to_string(),
+                    ));
+                }
                 let file = open_file_buffered(path)?;
                 let compressed_size = file.get_ref().metadata()?.len();
                 let info = SourceInfo::compressed(path, compressed_size, SourceType::Bzip2);
@@ -601,12 +634,17 @@ impl Source {
 
             #[cfg(feature = "remote")]
             SourceType::Remote => {
-                let http_source = HttpSource::open(path)?;
+                let http_source = HttpSource::open_with_resume(path, offset)?;
                 Ok(Source::Http(http_source))
             }
 
             #[cfg(not(feature = "compression"))]
             SourceType::Gzip | SourceType::Xz | SourceType::Zstd | SourceType::Bzip2 => {
+                if offset > 0 {
+                    return Err(Error::InvalidConfig(
+                        "Cannot resume from compressed source".to_string(),
+                    ));
+                }
                 Err(Error::InvalidConfig(
                     "Compression support not enabled. Rebuild with 'compression' feature."
                         .to_string(),

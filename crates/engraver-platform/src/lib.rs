@@ -192,7 +192,7 @@ pub fn is_aligned(value: usize, alignment: usize) -> bool {
     if alignment == 0 {
         return true;
     }
-    value % alignment == 0
+    value.is_multiple_of(alignment)
 }
 
 /// Check if a pointer is aligned to the given alignment

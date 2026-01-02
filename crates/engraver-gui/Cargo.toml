@@ -1,9 +1,13 @@
 [package]
 name = "engraver-gui"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2021"
+authors = ["Engraver Contributors"]
+license = "MIT"
+repository = "https://github.com/mstephenholl/engraver"
+keywords = ["gui", "imaging", "iso", "usb", "flash"]
+categories = ["gui", "filesystem"]
+readme = "README.md"
 description = "GUI for Engraver - create bootable USB drives from ISO images"
 
 # GUI binary will be added later

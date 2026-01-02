@@ -758,11 +758,12 @@ fn parse_gnu_format(line: &str) -> Option<ChecksumEntry> {
     let chars: Vec<char> = line.chars().collect();
 
     for i in 0..chars.len() {
-        if chars[i] == ' ' {
-            if i + 1 < chars.len() && (chars[i + 1] == ' ' || chars[i + 1] == '*') {
-                split_idx = Some(i);
-                break;
-            }
+        if chars[i] == ' '
+            && i + 1 < chars.len()
+            && (chars[i + 1] == ' ' || chars[i + 1] == '*')
+        {
+            split_idx = Some(i);
+            break;
         }
     }
 
@@ -857,7 +858,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 
 /// Convert hex string to bytes
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(Error::InvalidConfig(
             "Hex string must have even length".to_string(),
         ));
@@ -1427,11 +1428,11 @@ mod tests {
 
     #[test]
     fn test_hex_to_bytes() {
-        assert_eq!(hex_to_bytes("").unwrap(), vec![]);
-        assert_eq!(hex_to_bytes("00").unwrap(), vec![0x00]);
-        assert_eq!(hex_to_bytes("ff").unwrap(), vec![0xff]);
-        assert_eq!(hex_to_bytes("FF").unwrap(), vec![0xff]);
-        assert_eq!(hex_to_bytes("012345").unwrap(), vec![0x01, 0x23, 0x45]);
+        assert_eq!(hex_to_bytes("").unwrap(), Vec::<u8>::new());
+        assert_eq!(hex_to_bytes("00").unwrap(), vec![0x00u8]);
+        assert_eq!(hex_to_bytes("ff").unwrap(), vec![0xffu8]);
+        assert_eq!(hex_to_bytes("FF").unwrap(), vec![0xffu8]);
+        assert_eq!(hex_to_bytes("012345").unwrap(), vec![0x01u8, 0x23, 0x45]);
     }
 
     #[test]

@@ -6,15 +6,29 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use engraver_core::{validate_source, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
 
+/// Conditionally println based on silent mode
+macro_rules! println_if {
+    ($silent:expr) => {
+        if !$silent {
+            println!();
+        }
+    };
+    ($silent:expr, $($arg:tt)*) => {
+        if !$silent {
+            println!($($arg)*);
+        }
+    };
+}
+
 /// Execute the checksum command
-pub fn execute(source: &str, algorithm: &str) -> Result<()> {
+pub fn execute(source: &str, algorithm: &str, silent: bool) -> Result<()> {
     // Parse algorithm
     let algo: ChecksumAlgorithm = algorithm
         .parse()
         .with_context(|| format!("Invalid algorithm: {}", algorithm))?;
 
     // Validate source
-    println!("{} {}", style("Source:").bold(), style(source).cyan());
+    println_if!(silent, "{} {}", style("Source:").bold(), style(source).cyan());
 
     let source_info =
         validate_source(source).with_context(|| format!("Failed to validate source: {}", source))?;
@@ -22,11 +36,12 @@ pub fn execute(source: &str, algorithm: &str) -> Result<()> {
     let source_size = source_info.size.or(source_info.compressed_size);
 
     if let Some(size) = source_size {
-        println!("  Size: {}", format_size(size));
+        println_if!(silent, "  Size: {}", format_size(size));
     }
 
     // Open source
-    println!(
+    println_if!(
+        silent,
         "\n{} {} checksum...",
         style("Calculating").bold(),
         algo.name()
@@ -36,17 +51,23 @@ pub fn execute(source: &str, algorithm: &str) -> Result<()> {
         Source::open(source).with_context(|| format!("Failed to open source: {}", source))?;
 
     // Create progress bar
-    let pb = match source_size {
-        Some(size) => ProgressBar::new(size),
-        None => ProgressBar::new_spinner(),
+    let pb = if silent {
+        ProgressBar::hidden()
+    } else {
+        match source_size {
+            Some(size) => ProgressBar::new(size),
+            None => ProgressBar::new_spinner(),
+        }
     };
 
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("  {spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-            .unwrap()
-            .progress_chars("█▓░"),
-    );
+    if !silent {
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("  {spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                .unwrap()
+                .progress_chars("█▓░"),
+        );
+    }
 
     // Calculate checksum
     let config = VerifyConfig::new();
@@ -61,23 +82,28 @@ pub fn execute(source: &str, algorithm: &str) -> Result<()> {
 
     pb.finish_and_clear();
 
-    // Output result
-    println!();
-    println!(
-        "{} ({}):",
-        style(algo.name()).green().bold(),
-        source
-    );
-    println!("{}", checksum.to_hex());
+    // Output result - always print the checksum hash even in silent mode (it's the useful output)
+    if silent {
+        // In silent mode, just output the bare checksum
+        println!("{}", checksum.to_hex());
+    } else {
+        println!();
+        println!(
+            "{} ({}):",
+            style(algo.name()).green().bold(),
+            source
+        );
+        println!("{}", checksum.to_hex());
 
-    // Also output in common checksum file format
-    println!();
-    println!("{}:", style("Checksum file format").dim());
-    println!(
-        "{}  {}",
-        checksum.to_hex(),
-        source.split('/').last().unwrap_or(source)
-    );
+        // Also output in common checksum file format
+        println!();
+        println!("{}:", style("Checksum file format").dim());
+        println!(
+            "{}  {}",
+            checksum.to_hex(),
+            source.split('/').next_back().unwrap_or(source)
+        );
+    }
 
     Ok(())
 }

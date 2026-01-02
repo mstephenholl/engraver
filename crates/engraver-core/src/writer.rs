@@ -55,7 +55,7 @@ pub struct WriteProgress {
 impl WriteProgress {
     /// Create a new progress instance
     pub fn new(total_bytes: u64, block_size: usize) -> Self {
-        let total_blocks = (total_bytes + block_size as u64 - 1) / block_size as u64;
+        let total_blocks = total_bytes.div_ceil(block_size as u64);
         Self {
             bytes_written: 0,
             total_bytes,
@@ -255,9 +255,37 @@ impl Writer {
     /// * `Err(Error)` - Write failed
     pub fn write<R, W>(
         &mut self,
+        source: R,
+        target: W,
+        source_size: u64,
+    ) -> Result<WriteResult>
+    where
+        R: Read,
+        W: Write + Seek,
+    {
+        self.write_from_offset(source, target, source_size, 0)
+    }
+
+    /// Write from source to target, starting from a specific offset
+    ///
+    /// This is useful for resuming interrupted writes. The source must already
+    /// be seeked to the correct position before calling this method.
+    ///
+    /// # Arguments
+    /// * `source` - Readable source (already seeked to start_offset)
+    /// * `target` - Writable target (device, file, etc.)
+    /// * `source_size` - Total size of source in bytes
+    /// * `start_offset` - Byte offset to start writing from
+    ///
+    /// # Returns
+    /// * `Ok(WriteResult)` - Write completed successfully
+    /// * `Err(Error)` - Write failed
+    pub fn write_from_offset<R, W>(
+        &mut self,
         mut source: R,
         mut target: W,
         source_size: u64,
+        start_offset: u64,
     ) -> Result<WriteResult>
     where
         R: Read,
@@ -273,8 +301,12 @@ impl Writer {
         let mut progress = WriteProgress::new(source_size, block_size);
         let mut speed_tracker = SpeedTracker::new();
 
-        // Seek target to beginning
-        target.seek(SeekFrom::Start(0))?;
+        // Initialize progress with already-written bytes for resumed writes
+        progress.bytes_written = start_offset;
+        progress.current_block = start_offset / block_size as u64;
+
+        // Seek target to the starting offset
+        target.seek(SeekFrom::Start(start_offset))?;
 
         loop {
             // Check for cancellation
