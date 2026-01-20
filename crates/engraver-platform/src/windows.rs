@@ -6,16 +6,16 @@ use crate::{DeviceInfo, OpenOptions, PlatformError, PlatformOps, RawDevice, Resu
 use std::io::{Read, Seek, SeekFrom, Write};
 
 #[cfg(target_os = "windows")]
-use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
-#[cfg(target_os = "windows")]
 use std::ptr;
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FlushFileBuffers, GetFileSizeEx, ReadFile, SetFilePointerEx, WriteFile,
     FILE_BEGIN, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING,
+    OPEN_EXISTING,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Ioctl::{FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME};
