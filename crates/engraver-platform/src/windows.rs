@@ -121,7 +121,7 @@ impl WindowsDevice {
                 ptr::null(),
                 OPEN_EXISTING,
                 flags,
-                ptr::null_mut(),
+                0, // Template file handle - HANDLE is isize in windows-sys
             )
         };
 
