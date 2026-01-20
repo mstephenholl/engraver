@@ -112,8 +112,9 @@ install_binary() {
     local tmpdir
     
     tmpdir=$(mktemp -d)
+    # shellcheck disable=SC2064  # Intentional: expand tmpdir now, not at trap time
     trap "rm -rf $tmpdir" EXIT
-    
+
     info "Downloading engraver v${version} for ${platform}..."
     curl -fsSL "$url" | tar -xz -C "$tmpdir"
     
@@ -201,8 +202,9 @@ install_from_source() {
     
     local tmpdir
     tmpdir=$(mktemp -d)
+    # shellcheck disable=SC2064  # Intentional: expand tmpdir now, not at trap time
     trap "rm -rf $tmpdir" EXIT
-    
+
     git clone "https://github.com/${REPO}.git" "$tmpdir/engraver"
     cd "$tmpdir/engraver"
     

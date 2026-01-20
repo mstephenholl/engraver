@@ -394,6 +394,60 @@ fn test_write_block_size_flag() {
         .failure();
 }
 
+#[test]
+fn test_write_auto_checksum_flag() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.iso");
+    fs::write(&test_file, "test content").unwrap();
+
+    // --auto-checksum flag should be accepted (will fail for other reasons)
+    engraver()
+        .args([
+            "write",
+            test_file.to_str().unwrap(),
+            "/dev/nonexistent",
+            "--auto-checksum",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("privileges required")
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("not found")),
+        );
+}
+
+#[test]
+fn test_write_auto_checksum_from_config() {
+    let (temp_dir, config_dir, config_file, env_vars) = setup_config_test();
+
+    // Create a config with auto_detect enabled
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        &config_file,
+        r#"
+[checksum]
+auto_detect = true
+"#,
+    )
+    .unwrap();
+
+    let test_file = temp_dir.path().join("test.iso");
+    fs::write(&test_file, "test content").unwrap();
+
+    // Command should run (will fail for privilege/device reasons, not config)
+    let mut cmd = engraver();
+    cmd.args(["write", test_file.to_str().unwrap(), "/dev/nonexistent"]);
+    for (key, value) in &env_vars {
+        cmd.env(key, value);
+    }
+    cmd.assert().failure().stderr(
+        predicate::str::contains("privileges required")
+            .or(predicate::str::contains("Administrator"))
+            .or(predicate::str::contains("not found")),
+    );
+}
+
 // ============================================================================
 // Verify Command Error Tests
 // ============================================================================
@@ -727,6 +781,41 @@ fn test_mangen_content() {
 // Config Command Tests
 // ============================================================================
 
+/// Helper to set up config directory for tests in a cross-platform way.
+/// On Linux, dirs_next uses $XDG_CONFIG_HOME
+/// On macOS, dirs_next uses $HOME/Library/Application Support
+/// Returns (temp_dir, config_dir, config_file, env_vars)
+fn setup_config_test() -> (
+    TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    Vec<(&'static str, std::path::PathBuf)>,
+) {
+    let temp_dir = TempDir::new().unwrap();
+
+    #[cfg(target_os = "macos")]
+    let (config_dir, config_file, env_vars) = {
+        // macOS uses $HOME/Library/Application Support/engraver/
+        let home_dir = temp_dir.path().to_path_buf();
+        let config_dir = home_dir.join("Library/Application Support/engraver");
+        let config_file = config_dir.join("engraver_config.toml");
+        let env_vars: Vec<(&'static str, std::path::PathBuf)> = vec![("HOME", home_dir)];
+        (config_dir, config_file, env_vars)
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let (config_dir, config_file, env_vars) = {
+        // Linux/others use $XDG_CONFIG_HOME/engraver/
+        let xdg_dir = temp_dir.path().to_path_buf();
+        let config_dir = xdg_dir.join("engraver");
+        let config_file = config_dir.join("engraver_config.toml");
+        let env_vars: Vec<(&'static str, std::path::PathBuf)> = vec![("XDG_CONFIG_HOME", xdg_dir)];
+        (config_dir, config_file, env_vars)
+    };
+
+    (temp_dir, config_dir, config_file, env_vars)
+}
+
 #[test]
 fn test_config_help() {
     engraver()
@@ -781,16 +870,15 @@ fn test_config_json_output() {
 
 #[test]
 fn test_config_init_creates_file() {
-    // Create a temp directory and set XDG_CONFIG_HOME to it
-    let temp_dir = TempDir::new().unwrap();
-    let config_dir = temp_dir.path().join("engraver");
-    let config_file = config_dir.join("engraver_config.toml");
+    let (_temp_dir, _config_dir, config_file, env_vars) = setup_config_test();
 
     // config --init should create a config file
-    engraver()
-        .args(["config", "--init"])
-        .env("XDG_CONFIG_HOME", temp_dir.path())
-        .assert()
+    let mut cmd = engraver();
+    cmd.args(["config", "--init"]);
+    for (key, value) in &env_vars {
+        cmd.env(key, value);
+    }
+    cmd.assert()
         .success()
         .stdout(predicate::str::contains("Created configuration file"));
 
@@ -807,19 +895,19 @@ fn test_config_init_creates_file() {
 
 #[test]
 fn test_config_init_warns_if_exists() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_dir = temp_dir.path().join("engraver");
-    let config_file = config_dir.join("engraver_config.toml");
+    let (_temp_dir, config_dir, config_file, env_vars) = setup_config_test();
 
     // Create the config file first
     fs::create_dir_all(&config_dir).unwrap();
     fs::write(&config_file, "[write]\nverify = true").unwrap();
 
     // config --init should warn that file exists
-    engraver()
-        .args(["config", "--init"])
-        .env("XDG_CONFIG_HOME", temp_dir.path())
-        .assert()
+    let mut cmd = engraver();
+    cmd.args(["config", "--init"]);
+    for (key, value) in &env_vars {
+        cmd.env(key, value);
+    }
+    cmd.assert()
         .success()
         .stderr(predicate::str::contains("already exists"));
 
@@ -830,9 +918,7 @@ fn test_config_init_warns_if_exists() {
 
 #[test]
 fn test_config_loads_custom_settings() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_dir = temp_dir.path().join("engraver");
-    let config_file = config_dir.join("engraver_config.toml");
+    let (_temp_dir, config_dir, config_file, env_vars) = setup_config_test();
 
     // Create a custom config file
     fs::create_dir_all(&config_dir).unwrap();
@@ -853,10 +939,12 @@ quiet = true
     .unwrap();
 
     // config should show the custom settings
-    engraver()
-        .arg("config")
-        .env("XDG_CONFIG_HOME", temp_dir.path())
-        .assert()
+    let mut cmd = engraver();
+    cmd.arg("config");
+    for (key, value) in &env_vars {
+        cmd.env(key, value);
+    }
+    cmd.assert()
         .success()
         .stdout(predicate::str::contains("2M"))
         .stdout(predicate::str::contains("sha512"));
@@ -864,9 +952,7 @@ quiet = true
 
 #[test]
 fn test_config_json_with_custom_settings() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_dir = temp_dir.path().join("engraver");
-    let config_file = config_dir.join("engraver_config.toml");
+    let (_temp_dir, config_dir, config_file, env_vars) = setup_config_test();
 
     // Create a custom config file
     fs::create_dir_all(&config_dir).unwrap();
@@ -884,10 +970,12 @@ auto_detect = true
     .unwrap();
 
     // config --json should reflect custom settings
-    engraver()
-        .args(["config", "--json"])
-        .env("XDG_CONFIG_HOME", temp_dir.path())
-        .assert()
+    let mut cmd = engraver();
+    cmd.args(["config", "--json"]);
+    for (key, value) in &env_vars {
+        cmd.env(key, value);
+    }
+    cmd.assert()
         .success()
         .stdout(predicate::str::contains("\"verify\": true"))
         .stdout(predicate::str::contains("\"checkpoint\": true"))

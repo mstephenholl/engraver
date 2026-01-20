@@ -71,6 +71,7 @@ sudo engraver verify ubuntu.iso /dev/sdb
 | `--silent` | No output (implies -y) |
 | `--checkpoint` | Enable resume support |
 | `--resume` | Resume interrupted write |
+| `--auto-checksum` | Auto-detect .sha256/.md5 checksum files |
 | `--all` | Show all drives (including non-removable) |
 
 ## Working with Compressed Images
@@ -97,6 +98,28 @@ sudo engraver write large-image.iso /dev/sdb --resume
 ```
 
 **Note:** Compressed files cannot be resumed.
+
+## Checksum Verification
+
+Verify source integrity before writing:
+
+```bash
+# Provide checksum manually
+sudo engraver write ubuntu.iso /dev/sdb --checksum abc123...
+
+# Auto-detect from companion files (e.g., ubuntu.iso.sha256, SHA256SUMS)
+sudo engraver write ubuntu.iso /dev/sdb --auto-checksum
+
+# Enable auto-detection by default in config
+engraver config --init
+# Then edit ~/.config/engraver/engraver_config.toml:
+# [checksum]
+# auto_detect = true
+```
+
+Supported checksum file formats:
+- Direct: `image.iso.sha256`, `image.iso.sha512`, `image.iso.md5`
+- SUMS files: `SHA256SUMS`, `SHA512SUMS`, `MD5SUMS` (in same directory)
 
 ## Configuration
 

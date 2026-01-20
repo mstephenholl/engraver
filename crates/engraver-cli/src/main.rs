@@ -105,6 +105,10 @@ enum Commands {
         /// Enable checkpointing for resume support (auto-enabled with --resume, can be set in config)
         #[arg(long)]
         checkpoint: bool,
+
+        /// Automatically detect and verify checksum from .sha256, .sha512, .md5 files
+        #[arg(long)]
+        auto_checksum: bool,
     },
 
     /// Verify a drive against a source image
@@ -243,6 +247,7 @@ fn run() -> Result<()> {
             no_unmount,
             resume,
             checkpoint,
+            auto_checksum,
         } => {
             // Apply settings as defaults when CLI options are not explicitly set
             let effective_block_size =
@@ -253,6 +258,7 @@ fn run() -> Result<()> {
             let effective_verify = verify || settings.write.verify;
             let effective_checkpoint = checkpoint || resume || settings.write.checkpoint;
             let effective_skip_confirm = yes || silent || settings.behavior.skip_confirmation;
+            let effective_auto_checksum = auto_checksum || settings.checksum.auto_detect;
 
             commands::write::execute(commands::write::WriteArgs {
                 source,
@@ -268,6 +274,7 @@ fn run() -> Result<()> {
                 silent,
                 resume,
                 checkpoint: effective_checkpoint,
+                auto_checksum: effective_auto_checksum,
             })
         }
         Commands::Verify {

@@ -18,8 +18,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use engraver_core::{
-    validate_checkpoint, validate_source, CheckpointManager, ChecksumAlgorithm, Source, SourceType,
-    Verifier, VerifyConfig, WriteCheckpoint, WriteConfig, Writer,
+    auto_detect_checksum, validate_checkpoint, validate_source, CheckpointManager,
+    ChecksumAlgorithm, Source, SourceType, Verifier, VerifyConfig, WriteCheckpoint, WriteConfig,
+    Writer,
 };
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
@@ -39,6 +40,7 @@ pub struct WriteArgs {
     pub silent: bool,
     pub resume: bool,
     pub checkpoint: bool,
+    pub auto_checksum: bool,
 }
 
 /// Conditionally print based on silent mode
@@ -287,14 +289,45 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         }
     }
 
-    // Step 5: Verify source checksum (if provided)
-    if let Some(expected_checksum) = &args.checksum {
+    // Step 5: Auto-detect and verify source checksum
+    // First, try to auto-detect if enabled and no explicit checksum provided
+    let (effective_checksum, effective_algo) = if args.checksum.is_none() && args.auto_checksum {
+        // Try to auto-detect checksum file
+        if let Some(detected) = auto_detect_checksum(&args.source) {
+            println_if!(
+                silent,
+                "\n{} Found checksum file: {}",
+                style("✓").green(),
+                detected.source_file.display()
+            );
+            (Some(detected.checksum), Some(detected.algorithm))
+        } else {
+            println_if!(
+                silent,
+                "\n{} No checksum file found (tried .sha256, .sha512, .md5, SHA256SUMS, etc.)",
+                style("ℹ").blue()
+            );
+            (None, None)
+        }
+    } else {
+        // Use explicit checksum if provided
+        let algo = args.checksum.as_ref().map(|_| {
+            args.checksum_algo
+                .parse::<ChecksumAlgorithm>()
+                .unwrap_or(ChecksumAlgorithm::Sha256)
+        });
+        (args.checksum.clone(), algo)
+    };
+
+    // Verify source checksum if we have one (either explicit or auto-detected)
+    if let Some(expected_checksum) = &effective_checksum {
         println_if!(silent, "\n{}", style("Verifying source checksum...").bold());
 
-        let algo: ChecksumAlgorithm = args
-            .checksum_algo
-            .parse()
-            .with_context(|| format!("Invalid checksum algorithm: {}", args.checksum_algo))?;
+        let algo: ChecksumAlgorithm = effective_algo.unwrap_or_else(|| {
+            args.checksum_algo
+                .parse()
+                .unwrap_or(ChecksumAlgorithm::Sha256)
+        });
 
         let mut source_for_checksum =
             Source::open(&args.source).context("Failed to open source for checksum")?;
@@ -1143,6 +1176,7 @@ mod tests {
             silent: false,
             resume: false,
             checkpoint: true,
+            auto_checksum: false,
         };
 
         assert_eq!(args.source, "ubuntu.iso");
@@ -1153,5 +1187,6 @@ mod tests {
         assert!(args.checksum.is_some());
         assert!(!args.force);
         assert!(!args.cancel_flag.load(Ordering::Relaxed));
+        assert!(!args.auto_checksum);
     }
 }

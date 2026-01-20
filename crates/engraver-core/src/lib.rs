@@ -55,9 +55,10 @@ pub use source::{
     detect_source_type, get_source_size, validate_source, Source, SourceInfo, SourceType,
 };
 pub use verifier::{
-    find_checksum_for_file, parse_checksum_file, verify_write, Checksum, ChecksumAlgorithm,
-    ChecksumEntry, VerificationOperation, VerificationProgress, VerificationResult, Verifier,
-    VerifyConfig, DEFAULT_VERIFY_BLOCK_SIZE, MAX_VERIFY_BLOCK_SIZE, MIN_VERIFY_BLOCK_SIZE,
+    auto_detect_checksum, find_checksum_for_file, parse_checksum_file, verify_write, Checksum,
+    ChecksumAlgorithm, ChecksumEntry, DetectedChecksum, VerificationOperation,
+    VerificationProgress, VerificationResult, Verifier, VerifyConfig, DEFAULT_VERIFY_BLOCK_SIZE,
+    MAX_VERIFY_BLOCK_SIZE, MIN_VERIFY_BLOCK_SIZE,
 };
 pub use writer::{
     format_duration, format_speed, WriteConfig, WriteProgress, WriteResult, Writer,

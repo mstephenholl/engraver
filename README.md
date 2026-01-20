@@ -90,6 +90,9 @@ engraver write ubuntu.iso /dev/sdb --checkpoint
 
 # Resume an interrupted write
 engraver write ubuntu.iso /dev/sdb --resume
+
+# Auto-detect and verify checksum from .sha256/.sha512/.md5 files
+engraver write ubuntu.iso /dev/sdb --auto-checksum
 ```
 
 ## Resume Support

@@ -783,6 +783,130 @@ fn parse_gnu_format(line: &str) -> Option<ChecksumEntry> {
     })
 }
 
+/// Result of auto-detecting a checksum file
+#[derive(Debug, Clone)]
+pub struct DetectedChecksum {
+    /// The checksum value (hex string)
+    pub checksum: String,
+    /// The detected algorithm
+    pub algorithm: ChecksumAlgorithm,
+    /// Path to the checksum file that was found
+    pub source_file: std::path::PathBuf,
+}
+
+/// Attempt to find and parse a checksum file for the given source path
+///
+/// This function looks for checksum files in common locations:
+/// 1. `{source}.sha256`, `{source}.sha512`, `{source}.md5` (direct extensions)
+/// 2. `{source}.sha256sum`, `{source}.sha512sum`, `{source}.md5sum`
+/// 3. `SHA256SUMS`, `SHA512SUMS`, `MD5SUMS` in the same directory
+///
+/// Returns the checksum value and algorithm if found.
+///
+/// # Example
+///
+/// ```no_run
+/// use engraver_core::verifier::auto_detect_checksum;
+///
+/// // If ubuntu.iso.sha256 exists alongside ubuntu.iso
+/// if let Some(detected) = auto_detect_checksum("ubuntu.iso") {
+///     println!("Found {} checksum: {}", detected.algorithm, detected.checksum);
+/// }
+/// ```
+pub fn auto_detect_checksum(source_path: &str) -> Option<DetectedChecksum> {
+    use std::path::Path;
+
+    let source = Path::new(source_path);
+
+    // Skip auto-detection for URLs
+    if source_path.starts_with("http://") || source_path.starts_with("https://") {
+        return None;
+    }
+
+    // Get the source filename for matching in SUMS files
+    let source_filename = source.file_name()?.to_str()?;
+    let parent_dir = source.parent().unwrap_or_else(|| Path::new("."));
+
+    // Extensions to try (in order of preference)
+    let direct_extensions = [
+        ("sha256", ChecksumAlgorithm::Sha256),
+        ("sha256sum", ChecksumAlgorithm::Sha256),
+        ("sha512", ChecksumAlgorithm::Sha512),
+        ("sha512sum", ChecksumAlgorithm::Sha512),
+        ("md5", ChecksumAlgorithm::Md5),
+        ("md5sum", ChecksumAlgorithm::Md5),
+    ];
+
+    // Try direct extensions: source.sha256, source.sha256sum, etc.
+    for (ext, algorithm) in &direct_extensions {
+        let checksum_path = source.with_extension(
+            source
+                .extension()
+                .map(|e| format!("{}.{}", e.to_string_lossy(), ext))
+                .unwrap_or_else(|| ext.to_string()),
+        );
+
+        if let Some(detected) = try_parse_checksum_file(&checksum_path, source_filename, *algorithm)
+        {
+            return Some(detected);
+        }
+    }
+
+    // SUMS files to check in the same directory
+    let sums_files = [
+        ("SHA256SUMS", ChecksumAlgorithm::Sha256),
+        ("SHA256SUM", ChecksumAlgorithm::Sha256),
+        ("sha256sums", ChecksumAlgorithm::Sha256),
+        ("sha256sum.txt", ChecksumAlgorithm::Sha256),
+        ("SHA512SUMS", ChecksumAlgorithm::Sha512),
+        ("SHA512SUM", ChecksumAlgorithm::Sha512),
+        ("sha512sums", ChecksumAlgorithm::Sha512),
+        ("MD5SUMS", ChecksumAlgorithm::Md5),
+        ("MD5SUM", ChecksumAlgorithm::Md5),
+        ("md5sums", ChecksumAlgorithm::Md5),
+        ("md5sum.txt", ChecksumAlgorithm::Md5),
+    ];
+
+    // Try SUMS files in the same directory
+    for (sums_filename, algorithm) in &sums_files {
+        let sums_path = parent_dir.join(sums_filename);
+        if let Some(detected) = try_parse_checksum_file(&sums_path, source_filename, *algorithm) {
+            return Some(detected);
+        }
+    }
+
+    None
+}
+
+/// Try to parse a checksum file and find the entry for the given filename
+fn try_parse_checksum_file(
+    checksum_path: &std::path::Path,
+    source_filename: &str,
+    expected_algorithm: ChecksumAlgorithm,
+) -> Option<DetectedChecksum> {
+    if !checksum_path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(checksum_path).ok()?;
+    let entries = parse_checksum_file(&content);
+
+    // Find the entry for our source file
+    let entry = find_checksum_for_file(&entries, source_filename)?;
+
+    // Verify the checksum looks valid
+    let algorithm = entry.algorithm.unwrap_or(expected_algorithm);
+    if entry.checksum.len() != algorithm.hex_length() {
+        return None;
+    }
+
+    Some(DetectedChecksum {
+        checksum: entry.checksum.clone(),
+        algorithm,
+        source_file: checksum_path.to_path_buf(),
+    })
+}
+
 /// Find checksum for a specific filename in entries
 pub fn find_checksum_for_file<'a>(
     entries: &'a [ChecksumEntry],
@@ -1436,6 +1560,173 @@ mod tests {
     fn test_hex_to_bytes_invalid() {
         assert!(hex_to_bytes("0").is_err()); // Odd length
         assert!(hex_to_bytes("gg").is_err()); // Invalid chars
+    }
+
+    // -------------------------------------------------------------------------
+    // Auto-detect checksum tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_auto_detect_checksum_direct_extension() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let iso_path = temp_dir.path().join("test.iso");
+        let checksum_path = temp_dir.path().join("test.iso.sha256");
+
+        // Create dummy files
+        std::fs::write(&iso_path, b"test content").unwrap();
+        std::fs::write(
+            &checksum_path,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  test.iso\n",
+        )
+        .unwrap();
+
+        let detected = auto_detect_checksum(iso_path.to_str().unwrap());
+        assert!(detected.is_some());
+
+        let detected = detected.unwrap();
+        assert_eq!(detected.algorithm, ChecksumAlgorithm::Sha256);
+        assert_eq!(
+            detected.checksum,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(detected.source_file, checksum_path);
+    }
+
+    #[test]
+    fn test_auto_detect_checksum_sums_file() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let iso_path = temp_dir.path().join("ubuntu.iso");
+        let sums_path = temp_dir.path().join("SHA256SUMS");
+
+        // Create dummy files
+        // Note: SHA-256 checksums are exactly 64 hex characters
+        std::fs::write(&iso_path, b"ubuntu content").unwrap();
+        std::fs::write(
+            &sums_path,
+            "abc123def456abc123def456abc123def456abc123def456abc123def456abc12345  ubuntu.iso\n\
+             def456abc123def456abc123def456abc123def456abc123def456abc123def45678  other.iso\n",
+        )
+        .unwrap();
+
+        let detected = auto_detect_checksum(iso_path.to_str().unwrap());
+        // This should fail because the checksums are 65 chars, not 64
+        // The validation rejects invalid length checksums
+        assert!(detected.is_none());
+    }
+
+    #[test]
+    fn test_auto_detect_checksum_sums_file_valid() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let iso_path = temp_dir.path().join("ubuntu.iso");
+        let sums_path = temp_dir.path().join("SHA256SUMS");
+
+        // Create dummy files with valid 64-char SHA-256 checksums
+        std::fs::write(&iso_path, b"ubuntu content").unwrap();
+        std::fs::write(
+            &sums_path,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ubuntu.iso\n\
+             d41d8cd98f00b204e9800998ecf8427e0000000000000000000000000000000a  other.iso\n",
+        )
+        .unwrap();
+
+        let detected = auto_detect_checksum(iso_path.to_str().unwrap());
+        assert!(detected.is_some());
+
+        let detected = detected.unwrap();
+        assert_eq!(detected.algorithm, ChecksumAlgorithm::Sha256);
+        assert_eq!(
+            detected.checksum,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn test_auto_detect_checksum_md5() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let iso_path = temp_dir.path().join("test.iso");
+        let checksum_path = temp_dir.path().join("test.iso.md5");
+
+        std::fs::write(&iso_path, b"test content").unwrap();
+        std::fs::write(
+            &checksum_path,
+            "d41d8cd98f00b204e9800998ecf8427e  test.iso\n",
+        )
+        .unwrap();
+
+        let detected = auto_detect_checksum(iso_path.to_str().unwrap());
+        assert!(detected.is_some());
+
+        let detected = detected.unwrap();
+        assert_eq!(detected.algorithm, ChecksumAlgorithm::Md5);
+        assert_eq!(detected.checksum, "d41d8cd98f00b204e9800998ecf8427e");
+    }
+
+    #[test]
+    fn test_auto_detect_checksum_not_found() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let iso_path = temp_dir.path().join("test.iso");
+        std::fs::write(&iso_path, b"test content").unwrap();
+
+        let detected = auto_detect_checksum(iso_path.to_str().unwrap());
+        assert!(detected.is_none());
+    }
+
+    #[test]
+    fn test_auto_detect_checksum_url_skipped() {
+        // URLs should be skipped
+        let detected = auto_detect_checksum("https://example.com/ubuntu.iso");
+        assert!(detected.is_none());
+
+        let detected = auto_detect_checksum("http://example.com/ubuntu.iso");
+        assert!(detected.is_none());
+    }
+
+    #[test]
+    fn test_auto_detect_checksum_sha256sum_extension() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let iso_path = temp_dir.path().join("test.iso");
+        let checksum_path = temp_dir.path().join("test.iso.sha256sum");
+
+        std::fs::write(&iso_path, b"test content").unwrap();
+        std::fs::write(
+            &checksum_path,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  test.iso\n",
+        )
+        .unwrap();
+
+        let detected = auto_detect_checksum(iso_path.to_str().unwrap());
+        assert!(detected.is_some());
+        assert_eq!(detected.unwrap().algorithm, ChecksumAlgorithm::Sha256);
+    }
+
+    #[test]
+    fn test_auto_detect_checksum_prefers_direct_extension() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let iso_path = temp_dir.path().join("test.iso");
+        let direct_path = temp_dir.path().join("test.iso.sha256");
+        let sums_path = temp_dir.path().join("SHA256SUMS");
+
+        std::fs::write(&iso_path, b"test content").unwrap();
+        // Direct extension has one checksum
+        std::fs::write(
+            &direct_path,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  test.iso\n",
+        )
+        .unwrap();
+        // SUMS file has different checksum
+        std::fs::write(
+            &sums_path,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  test.iso\n",
+        )
+        .unwrap();
+
+        let detected = auto_detect_checksum(iso_path.to_str().unwrap());
+        assert!(detected.is_some());
+        // Should find the direct extension first
+        assert_eq!(
+            detected.unwrap().checksum,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
     }
 
     // -------------------------------------------------------------------------

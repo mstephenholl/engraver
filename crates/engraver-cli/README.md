@@ -60,6 +60,9 @@ engraver write ubuntu.iso /dev/sdb --block-size 1M
 
 # Verify checksum before writing
 engraver write ubuntu.iso /dev/sdb --checksum abc123... --checksum-algo sha256
+
+# Auto-detect checksum from companion files (.sha256, .sha512, .md5, SHA256SUMS, etc.)
+engraver write ubuntu.iso /dev/sdb --auto-checksum
 ```
 
 ### Verify a Drive
