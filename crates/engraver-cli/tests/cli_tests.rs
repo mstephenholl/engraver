@@ -722,3 +722,194 @@ fn test_mangen_content() {
     assert!(content.contains("engraver"));
     assert!(content.contains("bootable"));
 }
+
+// ============================================================================
+// Config Command Tests
+// ============================================================================
+
+#[test]
+fn test_config_help() {
+    engraver()
+        .args(["config", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("configuration"))
+        .stdout(predicate::str::contains("--init"))
+        .stdout(predicate::str::contains("--path"))
+        .stdout(predicate::str::contains("--json"));
+}
+
+#[test]
+fn test_config_shows_defaults() {
+    // Running config without arguments should show current settings
+    engraver()
+        .arg("config")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[write]"))
+        .stdout(predicate::str::contains("[checksum]"))
+        .stdout(predicate::str::contains("[behavior]"))
+        .stdout(predicate::str::contains("block_size"))
+        .stdout(predicate::str::contains("verify"))
+        .stdout(predicate::str::contains("algorithm"));
+}
+
+#[test]
+fn test_config_path_flag() {
+    // --path should show the config file path
+    engraver()
+        .args(["config", "--path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("engraver_config.toml"));
+}
+
+#[test]
+fn test_config_json_output() {
+    // --json should output valid JSON
+    engraver()
+        .args(["config", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("{"))
+        .stdout(predicate::str::contains("\"write\""))
+        .stdout(predicate::str::contains("\"checksum\""))
+        .stdout(predicate::str::contains("\"behavior\""))
+        .stdout(predicate::str::contains("\"block_size\""))
+        .stdout(predicate::str::contains("\"algorithm\""));
+}
+
+#[test]
+fn test_config_init_creates_file() {
+    // Create a temp directory and set XDG_CONFIG_HOME to it
+    let temp_dir = TempDir::new().unwrap();
+    let config_dir = temp_dir.path().join("engraver");
+    let config_file = config_dir.join("engraver_config.toml");
+
+    // config --init should create a config file
+    engraver()
+        .args(["config", "--init"])
+        .env("XDG_CONFIG_HOME", temp_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created configuration file"));
+
+    // Verify file was created
+    assert!(config_file.exists());
+
+    // Read and verify content
+    let content = fs::read_to_string(&config_file).unwrap();
+    assert!(content.contains("[write]"));
+    assert!(content.contains("[checksum]"));
+    assert!(content.contains("[behavior]"));
+    assert!(content.contains("block_size"));
+}
+
+#[test]
+fn test_config_init_warns_if_exists() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_dir = temp_dir.path().join("engraver");
+    let config_file = config_dir.join("engraver_config.toml");
+
+    // Create the config file first
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(&config_file, "[write]\nverify = true").unwrap();
+
+    // config --init should warn that file exists
+    engraver()
+        .args(["config", "--init"])
+        .env("XDG_CONFIG_HOME", temp_dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already exists"));
+
+    // Verify original content is preserved
+    let content = fs::read_to_string(&config_file).unwrap();
+    assert!(content.contains("verify = true"));
+}
+
+#[test]
+fn test_config_loads_custom_settings() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_dir = temp_dir.path().join("engraver");
+    let config_file = config_dir.join("engraver_config.toml");
+
+    // Create a custom config file
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        &config_file,
+        r#"
+[write]
+block_size = "2M"
+verify = true
+
+[checksum]
+algorithm = "sha512"
+
+[behavior]
+quiet = true
+"#,
+    )
+    .unwrap();
+
+    // config should show the custom settings
+    engraver()
+        .arg("config")
+        .env("XDG_CONFIG_HOME", temp_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2M"))
+        .stdout(predicate::str::contains("sha512"));
+}
+
+#[test]
+fn test_config_json_with_custom_settings() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_dir = temp_dir.path().join("engraver");
+    let config_file = config_dir.join("engraver_config.toml");
+
+    // Create a custom config file
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(
+        &config_file,
+        r#"
+[write]
+verify = true
+checkpoint = true
+
+[checksum]
+auto_detect = true
+"#,
+    )
+    .unwrap();
+
+    // config --json should reflect custom settings
+    engraver()
+        .args(["config", "--json"])
+        .env("XDG_CONFIG_HOME", temp_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"verify\": true"))
+        .stdout(predicate::str::contains("\"checkpoint\": true"))
+        .stdout(predicate::str::contains("\"auto_detect\": true"));
+}
+
+#[test]
+fn test_config_silent_mode() {
+    // --silent should suppress output
+    engraver()
+        .args(["--silent", "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn test_config_path_silent_mode() {
+    // --path with --silent should still output the path
+    engraver()
+        .args(["--silent", "config", "--path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}

@@ -21,6 +21,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use clap_mangen::Man;
 use console::style;
+use engraver_core::Settings;
 use tracing_subscriber::EnvFilter;
 
 mod commands;
@@ -69,7 +70,7 @@ enum Commands {
         /// Target device (e.g., /dev/sdb, /dev/disk2, \\.\PhysicalDrive1)
         target: String,
 
-        /// Verify write by reading back and comparing
+        /// Verify write by reading back and comparing (can be set in config)
         #[arg(long)]
         verify: bool,
 
@@ -77,17 +78,17 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Block size for writing (e.g., 4M, 1M, 512K)
-        #[arg(short, long, default_value = "4M")]
-        block_size: String,
+        /// Block size for writing (e.g., 4M, 1M, 512K). Default from config or 4M
+        #[arg(short, long)]
+        block_size: Option<String>,
 
         /// Verify checksum against expected value
         #[arg(long, value_name = "CHECKSUM")]
         checksum: Option<String>,
 
-        /// Checksum algorithm (sha256, sha512, md5)
-        #[arg(long, default_value = "sha256")]
-        checksum_algo: String,
+        /// Checksum algorithm (sha256, sha512, md5). Default from config or sha256
+        #[arg(long)]
+        checksum_algo: Option<String>,
 
         /// Force write even to system drives (DANGEROUS!)
         #[arg(long, hide = true)]
@@ -101,7 +102,7 @@ enum Commands {
         #[arg(long)]
         resume: bool,
 
-        /// Enable checkpointing for resume support (auto-enabled with --resume)
+        /// Enable checkpointing for resume support (auto-enabled with --resume, can be set in config)
         #[arg(long)]
         checkpoint: bool,
     },
@@ -124,9 +125,9 @@ enum Commands {
         /// Source image (local file or URL)
         source: String,
 
-        /// Checksum algorithm (sha256, sha512, md5, crc32)
-        #[arg(short, long, default_value = "sha256")]
-        algorithm: String,
+        /// Checksum algorithm (sha256, sha512, md5, crc32). Default from config or sha256
+        #[arg(short, long)]
+        algorithm: Option<String>,
     },
 
     /// Generate shell completions
@@ -141,6 +142,21 @@ enum Commands {
         /// Output directory for man pages
         #[arg(short, long, default_value = ".")]
         out_dir: String,
+    },
+
+    /// Manage configuration settings
+    Config {
+        /// Initialize a new configuration file with defaults
+        #[arg(long)]
+        init: bool,
+
+        /// Show the path to the configuration file
+        #[arg(long)]
+        path: bool,
+
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -169,11 +185,15 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
+    // Load user settings from config file
+    let settings = Settings::load();
+
     // Initialize logging
     // --silent implies --quiet (no logs at all, not even errors to tracing)
+    // Settings can also set quiet mode
     let filter = if cli.verbose {
         EnvFilter::new("debug")
-    } else if cli.quiet || cli.silent {
+    } else if cli.quiet || cli.silent || settings.behavior.quiet {
         EnvFilter::new("off")
     } else {
         EnvFilter::new("info")
@@ -224,20 +244,30 @@ fn run() -> Result<()> {
             resume,
             checkpoint,
         } => {
+            // Apply settings as defaults when CLI options are not explicitly set
+            let effective_block_size =
+                block_size.unwrap_or_else(|| settings.write.block_size.clone());
+            let effective_checksum_algo =
+                checksum_algo.unwrap_or_else(|| settings.checksum.algorithm.clone());
+            // CLI flags || settings defaults
+            let effective_verify = verify || settings.write.verify;
+            let effective_checkpoint = checkpoint || resume || settings.write.checkpoint;
+            let effective_skip_confirm = yes || silent || settings.behavior.skip_confirmation;
+
             commands::write::execute(commands::write::WriteArgs {
                 source,
                 target,
-                verify,
-                skip_confirm: yes || silent, // --silent implies --yes
-                block_size,
+                verify: effective_verify,
+                skip_confirm: effective_skip_confirm,
+                block_size: effective_block_size,
                 checksum,
-                checksum_algo,
+                checksum_algo: effective_checksum_algo,
                 force,
                 no_unmount,
                 cancel_flag: running,
                 silent,
                 resume,
-                checkpoint: checkpoint || resume, // --resume implies --checkpoint
+                checkpoint: effective_checkpoint,
             })
         }
         Commands::Verify {
@@ -246,7 +276,9 @@ fn run() -> Result<()> {
             block_size,
         } => commands::verify::execute(&source, &target, &block_size, running, silent),
         Commands::Checksum { source, algorithm } => {
-            commands::checksum::execute(&source, &algorithm, silent)
+            let effective_algorithm =
+                algorithm.unwrap_or_else(|| settings.checksum.algorithm.clone());
+            commands::checksum::execute(&source, &effective_algorithm, silent)
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -297,6 +329,14 @@ fn run() -> Result<()> {
                 );
             }
             Ok(())
+        }
+        Commands::Config { init, path, json } => {
+            commands::config::execute(commands::config::ConfigArgs {
+                init,
+                path,
+                json,
+                silent,
+            })
         }
     }
 }

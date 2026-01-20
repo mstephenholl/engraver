@@ -169,6 +169,62 @@ engraver completions powershell >> $PROFILE
 engraver completions elvish >> ~/.elvish/rc.elv
 ```
 
+## Configuration
+
+Engraver supports a configuration file for persistent settings. This allows you to set default values for frequently used options.
+
+### Configuration File Location
+
+- Linux/macOS: `~/.config/engraver/engraver_config.toml`
+- Windows: `%APPDATA%\engraver\engraver_config.toml`
+
+### Managing Configuration
+
+```bash
+# View current settings
+engraver config
+
+# View settings as JSON
+engraver config --json
+
+# Show config file path
+engraver config --path
+
+# Create a new config file with defaults
+engraver config --init
+```
+
+### Example Configuration
+
+```toml
+[write]
+block_size = "4M"
+verify = true
+checkpoint = false
+
+[checksum]
+algorithm = "sha256"
+auto_detect = false
+
+[behavior]
+skip_confirmation = false
+quiet = false
+```
+
+### Configuration Options
+
+| Section | Option | Description | Default |
+|---------|--------|-------------|---------|
+| `[write]` | `block_size` | Default block size for writes | `"4M"` |
+| `[write]` | `verify` | Always verify writes | `false` |
+| `[write]` | `checkpoint` | Enable checkpointing by default | `false` |
+| `[checksum]` | `algorithm` | Default checksum algorithm | `"sha256"` |
+| `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
+| `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
+| `[behavior]` | `quiet` | Suppress non-error output | `false` |
+
+Command-line flags always override configuration file settings.
+
 ## Safety
 
 Engraver includes multiple safety mechanisms:

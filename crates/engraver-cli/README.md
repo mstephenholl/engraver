@@ -81,6 +81,43 @@ engraver checksum ubuntu.iso --algorithm md5
 engraver checksum ubuntu.iso --algorithm sha512
 ```
 
+### Manage Configuration
+
+```bash
+# View current settings
+engraver config
+
+# View settings as JSON
+engraver config --json
+
+# Show config file path
+engraver config --path
+
+# Create a default config file
+engraver config --init
+```
+
+## Configuration File
+
+Engraver supports a configuration file at `~/.config/engraver/engraver_config.toml` (Linux/macOS) or `%APPDATA%\engraver\engraver_config.toml` (Windows).
+
+```toml
+[write]
+block_size = "4M"     # Default block size
+verify = true         # Always verify writes
+checkpoint = false    # Enable checkpointing
+
+[checksum]
+algorithm = "sha256"  # Default checksum algorithm
+auto_detect = false   # Auto-detect .sha256/.md5 files
+
+[behavior]
+skip_confirmation = false
+quiet = false
+```
+
+Command-line arguments override configuration file settings.
+
 ## Platform-Specific Notes
 
 ### Linux

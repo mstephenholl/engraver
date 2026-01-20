@@ -1,6 +1,9 @@
-edition = "2024"
+edition = "2021"
 max_width = 100
 tab_spaces = 4
 use_small_heuristics = "Default"
-imports_granularity = "Module"
-group_imports = "StdExternalCrate"
+
+# Note: These options require nightly Rust
+# Uncomment if using nightly: rustup run nightly cargo fmt
+# imports_granularity = "Module"
+# group_imports = "StdExternalCrate"

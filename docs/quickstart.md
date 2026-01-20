@@ -98,6 +98,29 @@ sudo engraver write large-image.iso /dev/sdb --resume
 
 **Note:** Compressed files cannot be resumed.
 
+## Configuration
+
+Create a configuration file to set persistent defaults:
+
+```bash
+# Create default config file
+engraver config --init
+
+# View current settings
+engraver config
+```
+
+Configuration file location: `~/.config/engraver/engraver_config.toml`
+
+Example settings:
+```toml
+[write]
+verify = true      # Always verify writes
+
+[checksum]
+algorithm = "sha256"
+```
+
 ## Safety Features
 
 Engraver protects you from accidents:

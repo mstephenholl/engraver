@@ -8,7 +8,8 @@
 //! - `writer`: High-performance block writing engine with progress tracking
 //! - `verifier`: Post-write verification and checksum validation
 //! - `error`: Error types and result aliases
-//! - `config`: Configuration and settings
+//! - `config`: Runtime configuration
+//! - `settings`: Persistent user settings from configuration file
 //!
 //! ## Example
 //!
@@ -38,6 +39,7 @@
 pub mod config;
 pub mod error;
 pub mod resume;
+pub mod settings;
 pub mod source;
 pub mod verifier;
 pub mod writer;
@@ -48,6 +50,7 @@ pub use resume::{
     default_checkpoint_dir, validate_checkpoint, CheckpointManager, CheckpointValidation,
     WriteCheckpoint, CHECKPOINT_VERSION,
 };
+pub use settings::{BehaviorSettings, ChecksumSettings, Settings, SettingsError, WriteSettings};
 pub use source::{
     detect_source_type, get_source_size, validate_source, Source, SourceInfo, SourceType,
 };
