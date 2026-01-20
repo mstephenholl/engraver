@@ -1,6 +1,6 @@
 //! Windows drive detection implementation
 //!
-//! Uses `wmic` and WMI queries for device enumeration.
+//! Uses PowerShell and WMI/CIM queries for device enumeration.
 
 use super::{is_system_mount_point, DetectError, Drive, DriveType, Partition, Result, UsbSpeed};
 use std::collections::HashMap;
@@ -70,47 +70,48 @@ pub(crate) struct PhysicalDisk {
     pub serial: Option<String>,
 }
 
-/// Get physical disks using wmic
+/// Get physical disks using PowerShell Get-CimInstance
 fn get_physical_disks() -> Result<Vec<PhysicalDisk>> {
-    let output = Command::new("wmic")
-        .args([
-            "diskdrive",
-            "get",
-            "Index,DeviceID,Model,Size,MediaType,InterfaceType,SerialNumber",
-            "/format:csv",
-        ])
+    let ps_command = r#"Get-CimInstance -ClassName Win32_DiskDrive | Select-Object Index,DeviceID,Model,Size,MediaType,InterfaceType,SerialNumber | ConvertTo-Csv -NoTypeInformation"#;
+
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("wmic failed: {}", e)))?;
+        .map_err(|e| DetectError::CommandFailed(format!("PowerShell failed: {}", e)))?;
 
     if !output.status.success() {
         return Err(DetectError::CommandFailed(format!(
-            "wmic failed: {}",
+            "PowerShell failed: {}",
             String::from_utf8_lossy(&output.stderr)
         )));
     }
 
     let output_str = String::from_utf8_lossy(&output.stdout);
-    parse_wmic_disks(&output_str)
+    parse_powershell_disks(&output_str)
 }
 
-/// Parse wmic diskdrive CSV output
-pub(crate) fn parse_wmic_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
+/// Parse PowerShell CSV output for disks
+pub(crate) fn parse_powershell_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
     let mut disks = Vec::new();
-    let mut headers: Vec<String> = Vec::new();
+    let mut lines = csv.lines().peekable();
 
-    for line in csv.lines() {
+    // First line should be headers
+    let headers: Vec<String> = match lines.next() {
+        Some(line) => parse_csv_line(line),
+        None => return Ok(disks),
+    };
+
+    if headers.is_empty() {
+        return Ok(disks);
+    }
+
+    for line in lines {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
 
-        let fields: Vec<&str> = line.split(',').collect();
-
-        if headers.is_empty() {
-            headers = fields.iter().map(|s| s.to_string()).collect();
-            continue;
-        }
-
+        let fields = parse_csv_line(line);
         if fields.len() != headers.len() {
             continue;
         }
@@ -118,7 +119,7 @@ pub(crate) fn parse_wmic_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
         let mut row: HashMap<&str, &str> = HashMap::new();
         for (i, header) in headers.iter().enumerate() {
             if let Some(value) = fields.get(i) {
-                row.insert(header.as_str(), *value);
+                row.insert(header.as_str(), value.as_str());
             }
         }
 
@@ -126,9 +127,8 @@ pub(crate) fn parse_wmic_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
             .get("Index")
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
-
         let device_id = row.get("DeviceID").unwrap_or(&"").to_string();
-        let model = row.get("Model").unwrap_or(&"Unknown").trim().to_string();
+        let model = row.get("Model").unwrap_or(&"Unknown").to_string();
         let size = row
             .get("Size")
             .and_then(|s| s.parse::<u64>().ok())
@@ -138,8 +138,9 @@ pub(crate) fn parse_wmic_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
         let serial = row
             .get("SerialNumber")
             .filter(|s| !s.is_empty())
-            .map(|s| s.trim().to_string());
+            .map(|s| s.to_string());
 
+        // Skip disks with zero size
         if size == 0 {
             continue;
         }
@@ -158,6 +159,26 @@ pub(crate) fn parse_wmic_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
     Ok(disks)
 }
 
+/// Parse a CSV line handling quoted fields
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for c in line.chars() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                fields.push(current.trim().to_string());
+                current = String::new();
+            }
+            _ => current.push(c),
+        }
+    }
+    fields.push(current.trim().to_string());
+    fields
+}
+
 /// Volume info
 #[derive(Debug, Clone)]
 pub(crate) struct VolumeInfo {
@@ -167,44 +188,45 @@ pub(crate) struct VolumeInfo {
     pub size: u64,
 }
 
-/// Get volumes using wmic
+/// Get volumes using PowerShell Get-CimInstance
 fn get_volumes() -> Result<Vec<VolumeInfo>> {
-    let output = Command::new("wmic")
-        .args([
-            "volume",
-            "get",
-            "DriveLetter,Label,FileSystem,Capacity",
-            "/format:csv",
-        ])
+    let ps_command = r#"Get-CimInstance -ClassName Win32_Volume | Where-Object { $_.DriveLetter -ne $null } | Select-Object DriveLetter,Label,FileSystem,Capacity | ConvertTo-Csv -NoTypeInformation"#;
+
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("wmic volume failed: {}", e)))?;
+        .map_err(|e| DetectError::CommandFailed(format!("PowerShell failed: {}", e)))?;
 
     if !output.status.success() {
         return Ok(Vec::new());
     }
 
     let output_str = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_wmic_volumes(&output_str))
+    Ok(parse_powershell_volumes(&output_str))
 }
 
-/// Parse volume CSV output
-pub(crate) fn parse_wmic_volumes(csv: &str) -> Vec<VolumeInfo> {
+/// Parse PowerShell CSV output for volumes
+pub(crate) fn parse_powershell_volumes(csv: &str) -> Vec<VolumeInfo> {
     let mut volumes = Vec::new();
-    let mut headers: Vec<String> = Vec::new();
+    let mut lines = csv.lines().peekable();
 
-    for line in csv.lines() {
+    // First line should be headers
+    let headers: Vec<String> = match lines.next() {
+        Some(line) => parse_csv_line(line),
+        None => return volumes,
+    };
+
+    if headers.is_empty() {
+        return volumes;
+    }
+
+    for line in lines {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
 
-        let fields: Vec<&str> = line.split(',').collect();
-
-        if headers.is_empty() {
-            headers = fields.iter().map(|s| s.to_string()).collect();
-            continue;
-        }
-
+        let fields = parse_csv_line(line);
         if fields.len() != headers.len() {
             continue;
         }
@@ -212,7 +234,7 @@ pub(crate) fn parse_wmic_volumes(csv: &str) -> Vec<VolumeInfo> {
         let mut row: HashMap<&str, &str> = HashMap::new();
         for (i, header) in headers.iter().enumerate() {
             if let Some(value) = fields.get(i) {
-                row.insert(header.as_str(), *value);
+                row.insert(header.as_str(), value.as_str());
             }
         }
 
@@ -420,17 +442,17 @@ mod tests {
     use super::*;
 
     // -------------------------------------------------------------------------
-    // parse_wmic_disks tests
+    // parse_powershell_disks tests
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_parse_wmic_disks_basic() {
-        let csv = r#"
-Node,DeviceID,Index,InterfaceType,MediaType,Model,SerialNumber,Size
-DESKTOP,\\.\PHYSICALDRIVE0,0,SCSI,Fixed hard disk media,Samsung SSD 970,S123456,512110190592
-DESKTOP,\\.\PHYSICALDRIVE1,1,USB,Removable Media,SanDisk Ultra,,32015679488
+    fn test_parse_powershell_disks_basic() {
+        // PowerShell CSV format: quoted fields, no Node column
+        let csv = r#""Index","DeviceID","Model","Size","MediaType","InterfaceType","SerialNumber"
+"0","\\.\PHYSICALDRIVE0","Samsung SSD 970","512110190592","Fixed hard disk media","SCSI","S123456"
+"1","\\.\PHYSICALDRIVE1","SanDisk Ultra","32015679488","Removable Media","USB",""
 "#;
-        let disks = parse_wmic_disks(csv).unwrap();
+        let disks = parse_powershell_disks(csv).unwrap();
         assert_eq!(disks.len(), 2);
 
         assert_eq!(disks[0].index, 0);
@@ -446,43 +468,42 @@ DESKTOP,\\.\PHYSICALDRIVE1,1,USB,Removable Media,SanDisk Ultra,,32015679488
     }
 
     #[test]
-    fn test_parse_wmic_disks_empty() {
+    fn test_parse_powershell_disks_empty() {
         let csv = "";
-        let disks = parse_wmic_disks(csv).unwrap();
+        let disks = parse_powershell_disks(csv).unwrap();
         assert!(disks.is_empty());
     }
 
     #[test]
-    fn test_parse_wmic_disks_headers_only() {
-        let csv = "Node,DeviceID,Index,InterfaceType,MediaType,Model,SerialNumber,Size";
-        let disks = parse_wmic_disks(csv).unwrap();
+    fn test_parse_powershell_disks_headers_only() {
+        let csv = r#""Index","DeviceID","Model","Size","MediaType","InterfaceType","SerialNumber""#;
+        let disks = parse_powershell_disks(csv).unwrap();
         assert!(disks.is_empty());
     }
 
     #[test]
-    fn test_parse_wmic_disks_skip_zero_size() {
-        let csv = r#"
-Node,DeviceID,Index,InterfaceType,MediaType,Model,SerialNumber,Size
-DESKTOP,\\.\PHYSICALDRIVE0,0,SCSI,Fixed hard disk media,Drive1,,0
-DESKTOP,\\.\PHYSICALDRIVE1,1,USB,Removable Media,Drive2,,32015679488
+    fn test_parse_powershell_disks_skip_zero_size() {
+        let csv = r#""Index","DeviceID","Model","Size","MediaType","InterfaceType","SerialNumber"
+"0","\\.\PHYSICALDRIVE0","Drive1","0","Fixed hard disk media","SCSI",""
+"1","\\.\PHYSICALDRIVE1","Drive2","32015679488","Removable Media","USB",""
 "#;
-        let disks = parse_wmic_disks(csv).unwrap();
+        let disks = parse_powershell_disks(csv).unwrap();
         assert_eq!(disks.len(), 1);
         assert_eq!(disks[0].model, "Drive2");
     }
 
     // -------------------------------------------------------------------------
-    // parse_wmic_volumes tests
+    // parse_powershell_volumes tests
     // -------------------------------------------------------------------------
 
     #[test]
-    fn test_parse_wmic_volumes_basic() {
-        let csv = r#"
-Node,Capacity,DriveLetter,FileSystem,Label
-DESKTOP,511999156224,C:,NTFS,Windows
-DESKTOP,32010928128,D:,FAT32,USB_DRIVE
+    fn test_parse_powershell_volumes_basic() {
+        // PowerShell CSV format: quoted fields
+        let csv = r#""DriveLetter","Label","FileSystem","Capacity"
+"C:","Windows","NTFS","511999156224"
+"D:","USB_DRIVE","FAT32","32010928128"
 "#;
-        let volumes = parse_wmic_volumes(csv);
+        let volumes = parse_powershell_volumes(csv);
         assert_eq!(volumes.len(), 2);
 
         assert_eq!(volumes[0].drive_letter, "C:");
@@ -494,13 +515,12 @@ DESKTOP,32010928128,D:,FAT32,USB_DRIVE
     }
 
     #[test]
-    fn test_parse_wmic_volumes_skip_empty_drive_letter() {
-        let csv = r#"
-Node,Capacity,DriveLetter,FileSystem,Label
-DESKTOP,511999156224,,NTFS,Recovery
-DESKTOP,32010928128,E:,FAT32,USB
+    fn test_parse_powershell_volumes_skip_empty_drive_letter() {
+        let csv = r#""DriveLetter","Label","FileSystem","Capacity"
+"","Recovery","NTFS","511999156224"
+"E:","USB","FAT32","32010928128"
 "#;
-        let volumes = parse_wmic_volumes(csv);
+        let volumes = parse_powershell_volumes(csv);
         assert_eq!(volumes.len(), 1);
         assert_eq!(volumes[0].drive_letter, "E:");
     }

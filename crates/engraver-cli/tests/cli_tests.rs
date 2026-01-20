@@ -784,6 +784,7 @@ fn test_mangen_content() {
 /// Helper to set up config directory for tests in a cross-platform way.
 /// On Linux, dirs_next uses $XDG_CONFIG_HOME
 /// On macOS, dirs_next uses $HOME/Library/Application Support
+/// On Windows, dirs_next uses %APPDATA%
 /// Returns (temp_dir, config_dir, config_file, env_vars)
 fn setup_config_test() -> (
     TempDir,
@@ -803,7 +804,17 @@ fn setup_config_test() -> (
         (config_dir, config_file, env_vars)
     };
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let (config_dir, config_file, env_vars) = {
+        // Windows uses %APPDATA%/engraver/
+        let appdata_dir = temp_dir.path().to_path_buf();
+        let config_dir = appdata_dir.join("engraver");
+        let config_file = config_dir.join("engraver_config.toml");
+        let env_vars: Vec<(&'static str, std::path::PathBuf)> = vec![("APPDATA", appdata_dir)];
+        (config_dir, config_file, env_vars)
+    };
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let (config_dir, config_file, env_vars) = {
         // Linux/others use $XDG_CONFIG_HOME/engraver/
         let xdg_dir = temp_dir.path().to_path_buf();
