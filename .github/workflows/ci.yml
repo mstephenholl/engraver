@@ -10,31 +10,62 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets --all-features
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-  test:
-    name: Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+jobs:
+  # ============================================================================
+  # Stage 1: Quick checks (fail fast)
+  # ============================================================================
+
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      docs: ${{ steps.filter.outputs.docs }}
+      scripts: ${{ steps.filter.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - '.github/workflows/ci.yml'
+            docs:
+              - '**/*.md'
+              - 'docs/**'
+            scripts:
+              - 'install.sh'
+              - 'scripts/**'
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # ============================================================================
+  # Stage 2: Lint checks (after format passes)
+  # ============================================================================
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    needs: [changes, fmt]
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,19 +74,72 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
-  fmt:
-    name: Format
+  check:
+    name: Check
     runs-on: ubuntu-latest
+    needs: [changes, fmt]
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets --all-features
+
+  # ============================================================================
+  # Stage 3: Fast tests (unit tests only, parallel across platforms)
+  # ============================================================================
+
+  test-unit:
+    name: Unit Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [changes, clippy, check]
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          components: rustfmt
-      - run: cargo fmt --all -- --check
+          key: ${{ matrix.os }}
+      # Run library tests only (fast)
+      - name: Run unit tests
+        run: cargo test --lib --all-features
+
+  # ============================================================================
+  # Stage 4: Integration tests (CLI tests, after unit tests pass)
+  # ============================================================================
+
+  test-integration:
+    name: Integration Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [changes, test-unit]
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-integration
+      # Run integration tests (CLI tests)
+      - name: Run integration tests
+        run: cargo test --test '*' --all-features
+
+  # ============================================================================
+  # Stage 3 (parallel): Documentation and other checks
+  # ============================================================================
 
   docs:
     name: Docs
     runs-on: ubuntu-latest
+    needs: [changes, fmt]
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.docs == 'true' || github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -67,6 +151,8 @@ jobs:
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true' || github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
       - name: Install ShellCheck
@@ -75,3 +161,27 @@ jobs:
         run: bash -n install.sh
       - name: Run ShellCheck
         run: shellcheck install.sh
+
+  # ============================================================================
+  # Final status check (for branch protection)
+  # ============================================================================
+
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, check, test-unit, test-integration, docs, shellcheck]
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [[ "${{ needs.fmt.result }}" == "failure" ]] || \
+             [[ "${{ needs.clippy.result }}" == "failure" ]] || \
+             [[ "${{ needs.check.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-unit.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-integration.result }}" == "failure" ]] || \
+             [[ "${{ needs.docs.result }}" == "failure" ]] || \
+             [[ "${{ needs.shellcheck.result }}" == "failure" ]]; then
+            echo "One or more jobs failed"
+            exit 1
+          fi
+          echo "All jobs passed or were skipped"
