@@ -351,6 +351,7 @@ pub const SYSTEM_MOUNT_POINTS: &[&str] = &[
     "/System",
     "/Applications",
     "/Library",
+    "C:",
     "C:\\",
     "C:\\Windows",
 ];
