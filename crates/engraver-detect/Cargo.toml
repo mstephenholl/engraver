@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Engraver Contributors"]
 license = "MIT"
 description = "Safe drive detection and enumeration for Engraver"
-repository = "https://github.com/yourusername/engraver"
+repository = "https://github.com/mstephenholl/engraver"
 keywords = ["usb", "drive", "detection", "disk"]
 categories = ["hardware-support", "os"]
 

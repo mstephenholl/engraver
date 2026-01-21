@@ -78,6 +78,20 @@ Planned features and improvements for Engraver.
   - CI testing via `vmactions/freebsd-vm` GitHub Action
   - Lower priority - implement based on user demand
 
+## Dependency Management
+
+- [ ] **Tighten cargo-deny configuration**
+  - Review and reduce permissiveness in `deny.toml`
+  - Consider stricter license allow-list
+  - Evaluate changing `multiple-versions = "warn"` to `"deny"`
+  - Review `wildcards = "allow"` setting for workspace dependencies
+
+- [ ] **Audit and remediate unmaintained dependencies**
+  - `number_prefix` (RUSTSEC-2025-0119) - transitive via `indicatif`
+    - Track upstream: wait for indicatif to update or find alternative
+  - Periodically review advisory-db ignore list
+  - Consider pinning or replacing problematic transitive deps
+
 ## Improvements
 
 - [ ] Better error messages for common failures

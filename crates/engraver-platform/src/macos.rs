@@ -48,8 +48,6 @@ impl PlatformOps for MacOSPlatform {
 pub struct MacOSDevice {
     file: File,
     info: DeviceInfo,
-    #[allow(dead_code)]
-    aligned_buffer: Vec<u8>,
 }
 
 impl MacOSDevice {
@@ -117,14 +115,7 @@ impl MacOSDevice {
             direct_io: options.direct_io,
         };
 
-        // Create aligned buffer
-        let aligned_buffer = vec![0u8; options.block_size * 2];
-
-        Ok(Self {
-            file,
-            info,
-            aligned_buffer,
-        })
+        Ok(Self { file, info })
     }
 }
 

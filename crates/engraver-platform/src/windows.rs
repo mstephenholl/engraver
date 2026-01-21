@@ -80,8 +80,6 @@ impl PlatformOps for WindowsPlatform {
 pub struct WindowsDevice {
     handle: HANDLE,
     info: DeviceInfo,
-    #[allow(dead_code)]
-    aligned_buffer: Vec<u8>,
 }
 
 #[cfg(target_os = "windows")]
@@ -152,14 +150,7 @@ impl WindowsDevice {
             direct_io: options.direct_io,
         };
 
-        // Create aligned buffer
-        let aligned_buffer = vec![0u8; options.block_size * 2];
-
-        Ok(Self {
-            handle,
-            info,
-            aligned_buffer,
-        })
+        Ok(Self { handle, info })
     }
 
     /// Lock the volume for exclusive access

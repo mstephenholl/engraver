@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Engraver Contributors"]
 license = "MIT"
 description = "Core library for Engraver disk imaging tool"
-repository = "https://github.com/yourusername/engraver"
+repository = "https://github.com/mstephenholl/engraver"
 keywords = ["disk", "imaging", "iso", "usb", "flash"]
 categories = ["command-line-utilities", "filesystem"]
 

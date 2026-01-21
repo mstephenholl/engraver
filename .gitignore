@@ -37,3 +37,24 @@ dist/
 *.dmg
 *.msi
 *.AppImage
+
+# AI Coding Agents
+.claude/
+.cursor/
+.cursorules
+.cursorrules
+.copilot/
+.aider*
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v3/
+.codeium/
+.continue/
+.windsurf/
+.amazonq/
+.tabnine/
+.cody/
+.augment/
+.sourcery/
+.codegen/
+*.aider.md
