@@ -7,10 +7,58 @@
 //! - Sync/flush management
 
 use crate::error::{Error, Result};
+use crate::verifier::ChecksumAlgorithm;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// Trait alias for types that can be read and seeked (used for verification)
+pub trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
+/// Internal hasher enum for calculating checksums during write
+#[cfg(feature = "checksum")]
+enum SourceHasher {
+    Sha256(sha2::Sha256),
+    Sha512(sha2::Sha512),
+    Md5(md5::Md5),
+    Crc32(crc32fast::Hasher),
+}
+
+#[cfg(feature = "checksum")]
+impl SourceHasher {
+    fn update(&mut self, data: &[u8]) {
+        use sha2::Digest;
+        match self {
+            SourceHasher::Sha256(h) => h.update(data),
+            SourceHasher::Sha512(h) => h.update(data),
+            SourceHasher::Md5(h) => h.update(data),
+            SourceHasher::Crc32(h) => h.update(data),
+        }
+    }
+
+    fn finalize_hex(self) -> String {
+        use sha2::Digest;
+        match self {
+            SourceHasher::Sha256(h) => {
+                let result = h.finalize();
+                result.iter().map(|b| format!("{:02x}", b)).collect()
+            }
+            SourceHasher::Sha512(h) => {
+                let result = h.finalize();
+                result.iter().map(|b| format!("{:02x}", b)).collect()
+            }
+            SourceHasher::Md5(h) => {
+                let result = h.finalize();
+                result.iter().map(|b| format!("{:02x}", b)).collect()
+            }
+            SourceHasher::Crc32(h) => {
+                format!("{:08x}", h.finalize())
+            }
+        }
+    }
+}
 
 /// Default block size for write operations (4 MB)
 pub const DEFAULT_BLOCK_SIZE: usize = 4 * 1024 * 1024;
@@ -119,6 +167,11 @@ pub struct WriteConfig {
 
     /// Whether to verify writes (read back and compare)
     pub verify: bool,
+
+    /// Checksum algorithm for parallel verification (calculated during write)
+    /// When set, the checksum is computed while writing data and then verified
+    /// by reading back the written data, avoiding a second read of the source.
+    pub checksum_algorithm: Option<ChecksumAlgorithm>,
 }
 
 impl Default for WriteConfig {
@@ -130,6 +183,7 @@ impl Default for WriteConfig {
             retry_attempts: DEFAULT_RETRY_ATTEMPTS,
             retry_delay: Duration::from_millis(100),
             verify: false,
+            checksum_algorithm: None,
         }
     }
 }
@@ -175,6 +229,16 @@ impl WriteConfig {
         self.verify = verify;
         self
     }
+
+    /// Set checksum algorithm for parallel verification
+    ///
+    /// When set, the writer will calculate a checksum of the source data
+    /// during the write operation, then verify the written data by reading
+    /// it back and comparing checksums. This avoids reading the source twice.
+    pub fn checksum_algorithm(mut self, algorithm: Option<ChecksumAlgorithm>) -> Self {
+        self.checksum_algorithm = algorithm;
+        self
+    }
 }
 
 /// Result of a write operation
@@ -194,6 +258,15 @@ pub struct WriteResult {
 
     /// Whether verification passed (if enabled)
     pub verified: Option<bool>,
+
+    /// Checksum calculated from source data during write (if checksum_algorithm was set)
+    pub source_checksum: Option<String>,
+
+    /// Checksum calculated from target data during verification (if verification was performed)
+    pub target_checksum: Option<String>,
+
+    /// Time spent on verification (if performed)
+    pub verification_elapsed: Option<Duration>,
 }
 
 impl WriteResult {
@@ -277,8 +350,242 @@ impl Writer {
     /// * `Err(Error)` - Write failed
     pub fn write_from_offset<R, W>(
         &mut self,
-        mut source: R,
+        source: R,
         mut target: W,
+        source_size: u64,
+        start_offset: u64,
+    ) -> Result<WriteResult>
+    where
+        R: Read,
+        W: Write + Seek,
+    {
+        self.write_internal(source, &mut target, source_size, start_offset)
+    }
+
+    /// Write from source to target with parallel verification
+    ///
+    /// This method calculates a checksum of the source data during the write operation,
+    /// then reads back the written data to verify it matches. This is more efficient than
+    /// a separate verification pass because the source only needs to be read once.
+    ///
+    /// Requires `checksum_algorithm` to be set in the config.
+    ///
+    /// # Arguments
+    /// * `source` - Readable source
+    /// * `target` - Target device (must be readable for verification)
+    /// * `source_size` - Total size of source in bytes
+    ///
+    /// # Returns
+    /// * `Ok(WriteResult)` - Write completed with verification results
+    /// * `Err(Error)` - Write or verification failed
+    #[cfg(feature = "checksum")]
+    pub fn write_and_verify<R, W>(
+        &mut self,
+        source: R,
+        mut target: W,
+        source_size: u64,
+    ) -> Result<WriteResult>
+    where
+        R: Read,
+        W: Read + Write + Seek,
+    {
+        // First, write the data (this calculates source checksum if algorithm is set)
+        let mut result = self.write_internal(source, &mut target, source_size, 0)?;
+
+        // If we have a source checksum, verify by reading back the target
+        if let Some(ref source_checksum) = result.source_checksum {
+            let verify_start = Instant::now();
+
+            // Seek back to start
+            target.seek(SeekFrom::Start(0))?;
+
+            // Calculate target checksum
+            let algorithm = self.config.checksum_algorithm.ok_or_else(|| {
+                Error::InvalidConfig("checksum_algorithm must be set for verification".to_string())
+            })?;
+
+            let target_checksum = self.calculate_checksum(&mut target, source_size, algorithm)?;
+
+            result.verified = Some(&target_checksum == source_checksum);
+            result.target_checksum = Some(target_checksum);
+            result.verification_elapsed = Some(verify_start.elapsed());
+        }
+
+        Ok(result)
+    }
+
+    /// Calculate checksum of a reader (used for verification)
+    #[cfg(feature = "checksum")]
+    fn calculate_checksum<R: Read>(
+        &self,
+        reader: &mut R,
+        size: u64,
+        algorithm: ChecksumAlgorithm,
+    ) -> Result<String> {
+        use sha2::Digest;
+
+        let mut hasher = match algorithm {
+            ChecksumAlgorithm::Sha256 => SourceHasher::Sha256(sha2::Sha256::new()),
+            ChecksumAlgorithm::Sha512 => SourceHasher::Sha512(sha2::Sha512::new()),
+            ChecksumAlgorithm::Md5 => SourceHasher::Md5(md5::Md5::new()),
+            ChecksumAlgorithm::Crc32 => SourceHasher::Crc32(crc32fast::Hasher::new()),
+        };
+
+        let block_size = self.config.block_size;
+        let mut buffer = vec![0u8; block_size];
+        let mut bytes_read_total = 0u64;
+
+        while bytes_read_total < size {
+            // Check for cancellation
+            if self.cancel_flag.load(Ordering::SeqCst) {
+                return Err(Error::Cancelled);
+            }
+
+            let to_read = block_size.min((size - bytes_read_total) as usize);
+            let bytes_read = read_exact_or_eof(reader, &mut buffer[..to_read])?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            hasher.update(&buffer[..bytes_read]);
+            bytes_read_total += bytes_read as u64;
+        }
+
+        Ok(hasher.finalize_hex())
+    }
+
+    /// Internal write implementation with checksum calculation
+    #[cfg(feature = "checksum")]
+    fn write_internal<R, W>(
+        &mut self,
+        mut source: R,
+        target: &mut W,
+        source_size: u64,
+        start_offset: u64,
+    ) -> Result<WriteResult>
+    where
+        R: Read,
+        W: Write + Seek,
+    {
+        use sha2::Digest;
+
+        // Reset cancel flag
+        self.cancel_flag.store(false, Ordering::SeqCst);
+
+        let start_time = Instant::now();
+        let block_size = self.config.block_size;
+
+        let mut buffer = vec![0u8; block_size];
+        let mut progress = WriteProgress::new(source_size, block_size);
+        let mut speed_tracker = SpeedTracker::new();
+
+        // Initialize progress with already-written bytes for resumed writes
+        progress.bytes_written = start_offset;
+        progress.current_block = start_offset / block_size as u64;
+
+        // Create hasher if checksum algorithm is set
+        let mut hasher: Option<SourceHasher> =
+            self.config.checksum_algorithm.map(|alg| match alg {
+                ChecksumAlgorithm::Sha256 => SourceHasher::Sha256(sha2::Sha256::new()),
+                ChecksumAlgorithm::Sha512 => SourceHasher::Sha512(sha2::Sha512::new()),
+                ChecksumAlgorithm::Md5 => SourceHasher::Md5(md5::Md5::new()),
+                ChecksumAlgorithm::Crc32 => SourceHasher::Crc32(crc32fast::Hasher::new()),
+            });
+
+        // Seek target to the starting offset
+        target.seek(SeekFrom::Start(start_offset))?;
+
+        loop {
+            // Check for cancellation
+            if self.cancel_flag.load(Ordering::SeqCst) {
+                return Err(Error::Cancelled);
+            }
+
+            // Read a block from source
+            let bytes_read = read_exact_or_eof(&mut source, &mut buffer)?;
+
+            if bytes_read == 0 {
+                break; // EOF
+            }
+
+            // Update hasher with source data
+            if let Some(ref mut h) = hasher {
+                h.update(&buffer[..bytes_read]);
+            }
+
+            // Write the block with retry logic
+            let write_result = self.write_block_with_retry(
+                target,
+                &buffer[..bytes_read],
+                progress.bytes_written,
+                &mut progress.retry_count,
+            );
+
+            match write_result {
+                Ok(bytes_written) => {
+                    progress.bytes_written += bytes_written as u64;
+                    progress.current_block += 1;
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+
+            // Sync if configured
+            if self.config.sync_each_block {
+                target.flush()?;
+            }
+
+            // Update progress
+            progress.elapsed = start_time.elapsed();
+            speed_tracker.update(progress.bytes_written);
+            progress.speed_bps = speed_tracker.current_speed();
+            progress.eta_seconds = calculate_eta(
+                progress.bytes_written,
+                progress.total_bytes,
+                progress.speed_bps,
+            );
+
+            // Call progress callback
+            if let Some(ref callback) = self.progress_callback {
+                callback(&progress);
+            }
+        }
+
+        // Final sync
+        if self.config.sync_on_complete {
+            target.flush()?;
+        }
+
+        let write_elapsed = start_time.elapsed();
+        let average_speed = if write_elapsed.as_secs() > 0 {
+            progress.bytes_written / write_elapsed.as_secs()
+        } else {
+            progress.bytes_written
+        };
+
+        // Get source checksum if calculated
+        let source_checksum = hasher.map(|h| h.finalize_hex());
+
+        Ok(WriteResult {
+            bytes_written: progress.bytes_written,
+            elapsed: write_elapsed,
+            average_speed,
+            retry_count: progress.retry_count,
+            verified: None,
+            source_checksum,
+            target_checksum: None,
+            verification_elapsed: None,
+        })
+    }
+
+    /// Internal write implementation without checksum feature
+    #[cfg(not(feature = "checksum"))]
+    fn write_internal<R, W>(
+        &mut self,
+        mut source: R,
+        target: &mut W,
         source_size: u64,
         start_offset: u64,
     ) -> Result<WriteResult>
@@ -318,7 +625,7 @@ impl Writer {
 
             // Write the block with retry logic
             let write_result = self.write_block_with_retry(
-                &mut target,
+                target,
                 &buffer[..bytes_read],
                 progress.bytes_written,
                 &mut progress.retry_count,
@@ -367,20 +674,15 @@ impl Writer {
             progress.bytes_written
         };
 
-        // Verification if enabled
-        let verified = if self.config.verify {
-            // Verification would go here - for now just mark as not done
-            None
-        } else {
-            None
-        };
-
         Ok(WriteResult {
             bytes_written: progress.bytes_written,
             elapsed,
             average_speed,
             retry_count: progress.retry_count,
-            verified,
+            verified: None,
+            source_checksum: None,
+            target_checksum: None,
+            verification_elapsed: None,
         })
     }
 
@@ -894,8 +1196,129 @@ mod tests {
             average_speed: 50 * 1024 * 1024,
             retry_count: 0,
             verified: None,
+            source_checksum: None,
+            target_checksum: None,
+            verification_elapsed: None,
         };
 
         assert_eq!(result.speed_display(), "50.0 MB/s");
+    }
+
+    // -------------------------------------------------------------------------
+    // Parallel verification tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_with_checksum_algorithm_calculates_source_checksum() {
+        use crate::verifier::ChecksumAlgorithm;
+
+        let source_data = vec![0xABu8; 1024];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; 1024]);
+
+        let config = WriteConfig::new()
+            .block_size(MIN_BLOCK_SIZE)
+            .checksum_algorithm(Some(ChecksumAlgorithm::Sha256));
+        let mut writer = Writer::with_config(config);
+
+        let result = writer.write(source, target, 1024).unwrap();
+
+        assert_eq!(result.bytes_written, 1024);
+        assert!(result.source_checksum.is_some());
+        // SHA-256 produces 64 hex characters
+        assert_eq!(result.source_checksum.as_ref().unwrap().len(), 64);
+    }
+
+    #[test]
+    fn test_write_without_checksum_algorithm_no_checksum() {
+        let source_data = vec![0xABu8; 1024];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; 1024]);
+
+        let config = WriteConfig::new().block_size(MIN_BLOCK_SIZE);
+        let mut writer = Writer::with_config(config);
+
+        let result = writer.write(source, target, 1024).unwrap();
+
+        assert_eq!(result.bytes_written, 1024);
+        assert!(result.source_checksum.is_none());
+    }
+
+    #[test]
+    fn test_write_and_verify_success() {
+        use crate::verifier::ChecksumAlgorithm;
+
+        let source_data = vec![0xABu8; 4096];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; 4096]);
+
+        let config = WriteConfig::new()
+            .block_size(MIN_BLOCK_SIZE)
+            .checksum_algorithm(Some(ChecksumAlgorithm::Sha256));
+        let mut writer = Writer::with_config(config);
+
+        let result = writer.write_and_verify(source, target, 4096).unwrap();
+
+        assert_eq!(result.bytes_written, 4096);
+        assert!(result.source_checksum.is_some());
+        assert!(result.target_checksum.is_some());
+        assert_eq!(result.source_checksum, result.target_checksum);
+        assert_eq!(result.verified, Some(true));
+        assert!(result.verification_elapsed.is_some());
+    }
+
+    #[test]
+    fn test_write_and_verify_with_md5() {
+        use crate::verifier::ChecksumAlgorithm;
+
+        let source_data = vec![0x42u8; 2048];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; 2048]);
+
+        let config = WriteConfig::new()
+            .block_size(MIN_BLOCK_SIZE)
+            .checksum_algorithm(Some(ChecksumAlgorithm::Md5));
+        let mut writer = Writer::with_config(config);
+
+        let result = writer.write_and_verify(source, target, 2048).unwrap();
+
+        assert_eq!(result.bytes_written, 2048);
+        assert!(result.source_checksum.is_some());
+        // MD5 produces 32 hex characters
+        assert_eq!(result.source_checksum.as_ref().unwrap().len(), 32);
+        assert_eq!(result.verified, Some(true));
+    }
+
+    #[test]
+    fn test_write_and_verify_with_crc32() {
+        use crate::verifier::ChecksumAlgorithm;
+
+        let source_data = vec![0x55u8; 1024];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; 1024]);
+
+        let config = WriteConfig::new()
+            .block_size(MIN_BLOCK_SIZE)
+            .checksum_algorithm(Some(ChecksumAlgorithm::Crc32));
+        let mut writer = Writer::with_config(config);
+
+        let result = writer.write_and_verify(source, target, 1024).unwrap();
+
+        assert_eq!(result.bytes_written, 1024);
+        assert!(result.source_checksum.is_some());
+        // CRC32 produces 8 hex characters
+        assert_eq!(result.source_checksum.as_ref().unwrap().len(), 8);
+        assert_eq!(result.verified, Some(true));
+    }
+
+    #[test]
+    fn test_checksum_config_builder() {
+        use crate::verifier::ChecksumAlgorithm;
+
+        let config = WriteConfig::new().checksum_algorithm(Some(ChecksumAlgorithm::Sha512));
+        assert_eq!(config.checksum_algorithm, Some(ChecksumAlgorithm::Sha512));
+
+        let config = WriteConfig::new().checksum_algorithm(None);
+        assert_eq!(config.checksum_algorithm, None);
     }
 }

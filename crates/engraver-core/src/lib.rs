@@ -70,7 +70,7 @@ pub use verifier::{
     MAX_VERIFY_BLOCK_SIZE, MIN_VERIFY_BLOCK_SIZE,
 };
 pub use writer::{
-    format_duration, format_speed, WriteConfig, WriteProgress, WriteResult, Writer,
+    format_duration, format_speed, ReadSeek, WriteConfig, WriteProgress, WriteResult, Writer,
     DEFAULT_BLOCK_SIZE, MAX_BLOCK_SIZE, MIN_BLOCK_SIZE,
 };
 
