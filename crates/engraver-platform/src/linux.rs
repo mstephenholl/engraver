@@ -291,7 +291,8 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
     // Try BLKGETSIZE64 ioctl first
     #[cfg(target_os = "linux")]
     {
-        const BLKGETSIZE64: libc::c_ulong = 0x80081272;
+        // Use libc::Ioctl type for cross-platform compatibility
+        const BLKGETSIZE64: libc::Ioctl = 0x80081272;
 
         let mut size: u64 = 0;
         // SAFETY: ioctl with BLKGETSIZE64 writes a u64 to the provided pointer.
@@ -335,7 +336,8 @@ fn get_device_block_size(path: &str) -> Result<u32> {
 
     #[cfg(target_os = "linux")]
     {
-        const BLKSSZGET: libc::c_ulong = 0x1268;
+        // Use libc::Ioctl type for cross-platform compatibility
+        const BLKSSZGET: libc::Ioctl = 0x1268;
 
         let mut block_size: i32 = 0;
         // SAFETY: ioctl with BLKSSZGET writes an i32 to the provided pointer.
