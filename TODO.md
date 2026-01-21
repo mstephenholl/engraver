@@ -40,13 +40,16 @@ Planned features and improvements for Engraver.
   - Shows speed in `engraver list` output
   - Warns during `engraver write` if using slow USB 2.0
 
-- [ ] **Write speed benchmarking mode**
-  - Benchmark write speed without actually writing data
-  - Help users identify slow drives or connections
+- [x] **Write speed benchmarking mode**
+  - `engraver benchmark /dev/sdb` to test drive write speed
+  - Supports custom test size, block size, and data patterns
+  - `--test-block-sizes` to find optimal block size
+  - Color-coded progress bar (red→yellow→green→blue)
 
-- [ ] **Configuration file support**
+- [x] **Configuration file support**
   - `~/.config/engraver/config.toml` for default settings
-  - Per-project configuration files
+  - `engraver config --init` to create, `engraver config` to view
+  - `--config-file` flag for custom config path
 
 - [ ] **Cloud storage support (S3/GCS/Azure Blob)**
   - Download ISOs directly from cloud storage buckets
@@ -65,6 +68,15 @@ Planned features and improvements for Engraver.
   - Custom headers for authentication or CDN access
   - Basic/Digest/Bearer token authentication
   - Configurable timeouts and retry policies
+
+## Platform Support
+
+- [ ] **FreeBSD support**
+  - Cross-compile using `x86_64-unknown-freebsd` target
+  - Implement drive detection via `geom` subsystem
+  - Device paths: `/dev/da0`, `/dev/ada0`, etc.
+  - CI testing via `vmactions/freebsd-vm` GitHub Action
+  - Lower priority - implement based on user demand
 
 ## Improvements
 

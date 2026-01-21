@@ -93,6 +93,15 @@ engraver write ubuntu.iso /dev/sdb --resume
 
 # Auto-detect and verify checksum from .sha256/.sha512/.md5 files
 engraver write ubuntu.iso /dev/sdb --auto-checksum
+
+# Benchmark drive write speed
+engraver benchmark /dev/sdb
+
+# Benchmark with custom settings
+engraver benchmark /dev/sdb --size 1G --pattern random
+
+# Test multiple block sizes to find optimal performance
+engraver benchmark /dev/sdb --test-block-sizes "4K,64K,1M,4M,16M"
 ```
 
 ## Resume Support
@@ -212,6 +221,13 @@ auto_detect = false
 [behavior]
 skip_confirmation = false
 quiet = false
+
+[benchmark]
+block_size = "4M"
+test_size = "256M"
+pattern = "zeros"
+passes = 1
+json = false
 ```
 
 ### Configuration Options
@@ -225,8 +241,45 @@ quiet = false
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
 | `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
 | `[behavior]` | `quiet` | Suppress non-error output | `false` |
+| `[benchmark]` | `block_size` | Default block size for benchmarks | `"4M"` |
+| `[benchmark]` | `test_size` | Default test data size | `"256M"` |
+| `[benchmark]` | `pattern` | Default data pattern (`zeros`, `random`, `sequential`) | `"zeros"` |
+| `[benchmark]` | `passes` | Default number of benchmark passes | `1` |
+| `[benchmark]` | `json` | Output benchmark results in JSON format | `false` |
 
 Command-line flags always override configuration file settings.
+
+## Benchmarking
+
+Test drive write speed before committing to a long write operation:
+
+```bash
+# Basic benchmark (256 MB test, 4 MB blocks)
+engraver benchmark /dev/sdb
+
+# Custom test size and pattern
+engraver benchmark /dev/sdb --size 1G --pattern random
+
+# Test multiple block sizes to find optimal performance
+engraver benchmark /dev/sdb --test-block-sizes "4K,64K,1M,4M,16M"
+
+# JSON output for scripting
+engraver benchmark /dev/sdb --json
+```
+
+### Benchmark Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--size` | Amount of data to write | `256M` |
+| `--block-size` | Block size for writes | `4M` |
+| `--pattern` | Data pattern: `zeros`, `random`, `sequential` | `zeros` |
+| `--passes` | Number of benchmark passes | `1` |
+| `--test-block-sizes` | Test multiple block sizes (comma-separated) | - |
+
+**Note:** `--size` and `--test-block-sizes` are mutually exclusive. All size values must be powers of 2, with block sizes limited to 64 MB maximum.
+
+**Warning:** Benchmarking is a destructive operation that will overwrite data on the target device.
 
 ## Safety
 

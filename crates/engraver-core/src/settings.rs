@@ -17,6 +17,13 @@
 //!
 //! [behavior]
 //! skip_confirmation = false
+//!
+//! [benchmark]
+//! block_size = "4M"
+//! test_size = "256M"
+//! pattern = "zeros"
+//! passes = 1
+//! json = false
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +50,9 @@ pub struct Settings {
 
     /// Behavior settings
     pub behavior: BehaviorSettings,
+
+    /// Benchmark settings
+    pub benchmark: BenchmarkSettings,
 }
 
 /// Settings for write operations
@@ -79,6 +89,38 @@ pub struct BehaviorSettings {
 
     /// Whether to suppress non-error output
     pub quiet: bool,
+}
+
+/// Settings for benchmark operations
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct BenchmarkSettings {
+    /// Default block size for benchmarks (e.g., "4M", "1M", "64K")
+    pub block_size: String,
+
+    /// Default test size (e.g., "256M", "512M", "1G")
+    pub test_size: String,
+
+    /// Default data pattern (zeros, random, sequential)
+    pub pattern: String,
+
+    /// Default number of benchmark passes
+    pub passes: u32,
+
+    /// Output results in JSON format by default
+    pub json: bool,
+}
+
+impl Default for BenchmarkSettings {
+    fn default() -> Self {
+        Self {
+            block_size: DEFAULT_BLOCK_SIZE_STR.to_string(),
+            test_size: "256M".to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json: false,
+        }
+    }
 }
 
 impl Default for WriteSettings {
@@ -229,6 +271,12 @@ mod tests {
         assert!(!settings.checksum.auto_detect);
         assert!(!settings.behavior.skip_confirmation);
         assert!(!settings.behavior.quiet);
+        // Benchmark defaults
+        assert_eq!(settings.benchmark.block_size, "4M");
+        assert_eq!(settings.benchmark.test_size, "256M");
+        assert_eq!(settings.benchmark.pattern, "zeros");
+        assert_eq!(settings.benchmark.passes, 1);
+        assert!(!settings.benchmark.json);
     }
 
     #[test]
@@ -249,6 +297,13 @@ mod tests {
             behavior: BehaviorSettings {
                 skip_confirmation: true,
                 quiet: false,
+            },
+            benchmark: BenchmarkSettings {
+                block_size: "16M".to_string(),
+                test_size: "512M".to_string(),
+                pattern: "random".to_string(),
+                passes: 3,
+                json: true,
             },
         };
 
@@ -301,8 +356,12 @@ verify = true
         assert!(config_str.contains("[write]"));
         assert!(config_str.contains("[checksum]"));
         assert!(config_str.contains("[behavior]"));
+        assert!(config_str.contains("[benchmark]"));
         assert!(config_str.contains("block_size"));
         assert!(config_str.contains("algorithm"));
+        assert!(config_str.contains("test_size"));
+        assert!(config_str.contains("pattern"));
+        assert!(config_str.contains("passes"));
     }
 
     #[test]

@@ -36,6 +36,7 @@
 #![warn(clippy::all)]
 #![allow(dead_code)] // Allow during development
 
+pub mod benchmark;
 pub mod config;
 pub mod error;
 pub mod resume;
@@ -44,13 +45,21 @@ pub mod source;
 pub mod verifier;
 pub mod writer;
 
+pub use benchmark::{
+    format_duration as benchmark_format_duration, format_size,
+    format_speed as benchmark_format_speed, is_power_of_two, parse_block_sizes, parse_size,
+    BenchmarkConfig, BenchmarkError, BenchmarkProgress, BenchmarkResult, BenchmarkRunner,
+    BenchmarkSummary, BlockSizeTestResult, DataPattern, PassResult,
+};
 pub use config::Config;
 pub use error::{Error, Result};
 pub use resume::{
     default_checkpoint_dir, validate_checkpoint, CheckpointManager, CheckpointValidation,
     WriteCheckpoint, CHECKPOINT_VERSION,
 };
-pub use settings::{BehaviorSettings, ChecksumSettings, Settings, SettingsError, WriteSettings};
+pub use settings::{
+    BehaviorSettings, BenchmarkSettings, ChecksumSettings, Settings, SettingsError, WriteSettings,
+};
 pub use source::{
     detect_source_type, get_source_size, validate_source, Source, SourceInfo, SourceType,
 };

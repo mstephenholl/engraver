@@ -167,6 +167,40 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Benchmark write speed of a drive (DESTRUCTIVE)
+    Benchmark {
+        /// Target device (e.g., /dev/sdb, \\.\PhysicalDrive1)
+        target: String,
+
+        /// Amount of data to write for the test (e.g., 256M, 1G). Mutually exclusive with --test-block-sizes. Default from config or 256M
+        #[arg(short, long)]
+        size: Option<String>,
+
+        /// Block size for writing (e.g., 4K, 1M, 4M). Must be power of 2, max 64M. Default from config or 4M
+        #[arg(short, long)]
+        block_size: Option<String>,
+
+        /// Data pattern: zeros, random, sequential. Default from config or zeros
+        #[arg(long)]
+        pattern: Option<String>,
+
+        /// Number of benchmark passes. Default from config or 1
+        #[arg(long)]
+        passes: Option<u32>,
+
+        /// Test multiple block sizes (comma-separated, e.g., "4K,64K,1M,4M,16M"). Mutually exclusive with --size
+        #[arg(long)]
+        test_block_sizes: Option<String>,
+
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+
+        /// Skip confirmation prompt (DANGEROUS!)
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 fn main() {
@@ -353,6 +387,48 @@ fn run() -> Result<()> {
                 json,
                 silent,
                 config_file: cli.config_file,
+            })
+        }
+        Commands::Benchmark {
+            target,
+            size,
+            block_size,
+            pattern,
+            passes,
+            test_block_sizes,
+            json,
+            yes,
+        } => {
+            let effective_skip_confirm = yes || silent || settings.behavior.skip_confirmation;
+
+            // Apply settings as defaults when CLI options are not explicitly set
+            let effective_block_size =
+                block_size.unwrap_or_else(|| settings.benchmark.block_size.clone());
+            let effective_pattern = pattern.unwrap_or_else(|| settings.benchmark.pattern.clone());
+            let effective_passes = passes.unwrap_or(settings.benchmark.passes);
+            // For test_size: use CLI value if provided, otherwise use config default
+            // (but only when not using --test-block-sizes)
+            let effective_test_size = size.or_else(|| {
+                if test_block_sizes.is_none() {
+                    Some(settings.benchmark.test_size.clone())
+                } else {
+                    None
+                }
+            });
+            // JSON output: CLI flag overrides config
+            let effective_json = json || settings.benchmark.json;
+
+            commands::benchmark::execute(commands::benchmark::BenchmarkArgs {
+                target,
+                test_size: effective_test_size,
+                block_size: effective_block_size,
+                pattern: effective_pattern,
+                passes: effective_passes,
+                json: effective_json,
+                skip_confirm: effective_skip_confirm,
+                silent,
+                test_block_sizes,
+                cancel_flag: running,
             })
         }
     }

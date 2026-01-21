@@ -29,7 +29,8 @@ fn test_help_flag() {
         .stdout(predicate::str::contains("write"))
         .stdout(predicate::str::contains("verify"))
         .stdout(predicate::str::contains("list"))
-        .stdout(predicate::str::contains("checksum"));
+        .stdout(predicate::str::contains("checksum"))
+        .stdout(predicate::str::contains("benchmark"));
 }
 
 #[test]
@@ -978,4 +979,405 @@ fn test_config_path_silent_mode() {
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
+}
+
+// ============================================================================
+// Benchmark Command Tests
+// ============================================================================
+
+#[test]
+fn test_benchmark_help() {
+    engraver()
+        .args(["benchmark", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Benchmark"))
+        .stdout(predicate::str::contains("<TARGET>"))
+        .stdout(predicate::str::contains("--size"))
+        .stdout(predicate::str::contains("--block-size"))
+        .stdout(predicate::str::contains("--pattern"))
+        .stdout(predicate::str::contains("--passes"))
+        .stdout(predicate::str::contains("--test-block-sizes"))
+        .stdout(predicate::str::contains("--json"))
+        .stdout(predicate::str::contains("--yes"));
+}
+
+#[test]
+fn test_benchmark_missing_target() {
+    engraver()
+        .arg("benchmark")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("required"));
+}
+
+#[test]
+fn test_benchmark_mutual_exclusivity_size_and_test_block_sizes() {
+    // --size and --test-block-sizes are mutually exclusive
+    engraver()
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--size",
+            "256M",
+            "--test-block-sizes",
+            "4K,1M,4M",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Cannot use both --size and --test-block-sizes",
+        ));
+}
+
+#[test]
+fn test_benchmark_invalid_block_size_not_power_of_2() {
+    // Block size must be power of 2
+    engraver()
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--block-size",
+            "3M",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be a power of 2"));
+}
+
+#[test]
+fn test_benchmark_invalid_size_not_power_of_2() {
+    // Test size must be power of 2
+    engraver()
+        .args(["benchmark", "/dev/nonexistent", "--size", "100M", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be a power of 2"));
+}
+
+#[test]
+fn test_benchmark_block_size_too_large() {
+    // Block size max is 64M
+    engraver()
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--block-size",
+            "128M",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot exceed 64 MB"));
+}
+
+#[test]
+fn test_benchmark_test_block_sizes_invalid_value() {
+    // Each block size in the list must be power of 2
+    engraver()
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--test-block-sizes",
+            "4K,3M,16M",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be a power of 2"));
+}
+
+#[test]
+fn test_benchmark_test_block_sizes_exceeds_max() {
+    // Each block size in the list must be <= 64M
+    engraver()
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--test-block-sizes",
+            "4K,1M,128M",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("exceeds maximum"));
+}
+
+#[test]
+fn test_benchmark_valid_patterns() {
+    // Test that valid patterns are accepted (will fail for other reasons)
+    for pattern in ["zeros", "random", "sequential"] {
+        engraver()
+            .args([
+                "benchmark",
+                "/dev/nonexistent",
+                "--pattern",
+                pattern,
+                "--yes",
+            ])
+            .assert()
+            .failure()
+            // Should fail due to device not found, not due to invalid pattern
+            .stderr(
+                predicate::str::contains("not found")
+                    .or(predicate::str::contains("privileges required"))
+                    .or(predicate::str::contains("Administrator"))
+                    .or(predicate::str::contains("No such file"))
+                    .or(predicate::str::contains("DESTRUCTIVE")),
+            );
+    }
+}
+
+#[test]
+fn test_benchmark_invalid_pattern() {
+    engraver()
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--pattern",
+            "invalid_pattern",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unknown pattern"));
+}
+
+#[test]
+fn test_benchmark_yes_flag_accepted() {
+    // --yes flag should be accepted
+    engraver()
+        .args(["benchmark", "/dev/nonexistent", "--yes"])
+        .assert()
+        .failure()
+        // Should fail for device reasons, not flag parsing
+        .stderr(
+            predicate::str::contains("not found")
+                .or(predicate::str::contains("privileges required"))
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("No such file"))
+                .or(predicate::str::contains("DESTRUCTIVE")),
+        );
+}
+
+#[test]
+fn test_benchmark_json_flag_accepted() {
+    // --json flag should be accepted
+    engraver()
+        .args(["benchmark", "/dev/nonexistent", "--json", "--yes"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_benchmark_passes_flag() {
+    // --passes flag should accept a number
+    engraver()
+        .args(["benchmark", "/dev/nonexistent", "--passes", "3", "--yes"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_benchmark_size_parsing() {
+    // Test various valid size formats
+    for size in ["128M", "256M", "512M", "1G"] {
+        engraver()
+            .args(["benchmark", "/dev/nonexistent", "--size", size, "--yes"])
+            .assert()
+            .failure()
+            // Should fail for device reasons, not size parsing
+            .stderr(
+                predicate::str::contains("not found")
+                    .or(predicate::str::contains("privileges required"))
+                    .or(predicate::str::contains("Administrator"))
+                    .or(predicate::str::contains("No such file"))
+                    .or(predicate::str::contains("DESTRUCTIVE")),
+            );
+    }
+}
+
+#[test]
+fn test_benchmark_block_size_parsing() {
+    // Test various valid block size formats
+    for block_size in ["4K", "64K", "1M", "4M", "16M", "64M"] {
+        engraver()
+            .args([
+                "benchmark",
+                "/dev/nonexistent",
+                "--block-size",
+                block_size,
+                "--yes",
+            ])
+            .assert()
+            .failure()
+            // Should fail for device reasons, not block size parsing
+            .stderr(
+                predicate::str::contains("not found")
+                    .or(predicate::str::contains("privileges required"))
+                    .or(predicate::str::contains("Administrator"))
+                    .or(predicate::str::contains("No such file"))
+                    .or(predicate::str::contains("DESTRUCTIVE")),
+            );
+    }
+}
+
+#[test]
+fn test_benchmark_test_block_sizes_parsing() {
+    // Test comma-separated block sizes
+    engraver()
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--test-block-sizes",
+            "4K,64K,1M,4M,16M",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        // Should fail for device reasons, not parsing
+        .stderr(
+            predicate::str::contains("not found")
+                .or(predicate::str::contains("privileges required"))
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("No such file"))
+                .or(predicate::str::contains("DESTRUCTIVE")),
+        );
+}
+
+#[test]
+fn test_benchmark_config_settings_loaded() {
+    let (_temp_dir, config_file) = setup_config_test();
+
+    // Create a config with benchmark settings
+    fs::write(
+        &config_file,
+        r#"
+[benchmark]
+block_size = "16M"
+test_size = "512M"
+pattern = "random"
+passes = 3
+"#,
+    )
+    .unwrap();
+
+    // When running with the config, should use config values as defaults
+    // (will fail for device reasons, but validates config is loaded)
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "benchmark",
+            "/dev/nonexistent",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("not found")
+                .or(predicate::str::contains("privileges required"))
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("No such file"))
+                .or(predicate::str::contains("DESTRUCTIVE")),
+        );
+}
+
+#[test]
+fn test_benchmark_cli_overrides_config() {
+    let (_temp_dir, config_file) = setup_config_test();
+
+    // Create a config with benchmark settings
+    fs::write(
+        &config_file,
+        r#"
+[benchmark]
+block_size = "16M"
+pattern = "random"
+passes = 3
+"#,
+    )
+    .unwrap();
+
+    // CLI options should override config values
+    // Using a different block size than config
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "benchmark",
+            "/dev/nonexistent",
+            "--block-size",
+            "4M",
+            "--pattern",
+            "zeros",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("not found")
+                .or(predicate::str::contains("privileges required"))
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("No such file"))
+                .or(predicate::str::contains("DESTRUCTIVE")),
+        );
+}
+
+#[test]
+fn test_benchmark_config_invalid_pattern_rejected() {
+    let (_temp_dir, config_file) = setup_config_test();
+
+    // Create a config with invalid benchmark pattern
+    fs::write(
+        &config_file,
+        r#"
+[benchmark]
+pattern = "invalid_pattern"
+"#,
+    )
+    .unwrap();
+
+    // Should fail with pattern validation error
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "benchmark",
+            "/dev/nonexistent",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unknown pattern"));
+}
+
+#[test]
+fn test_benchmark_config_invalid_block_size_rejected() {
+    let (_temp_dir, config_file) = setup_config_test();
+
+    // Create a config with invalid block size (not power of 2)
+    fs::write(
+        &config_file,
+        r#"
+[benchmark]
+block_size = "3M"
+"#,
+    )
+    .unwrap();
+
+    // Should fail with block size validation error
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "benchmark",
+            "/dev/nonexistent",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be a power of 2"));
 }

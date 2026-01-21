@@ -156,7 +156,7 @@ fn show_config(config_path: Option<PathBuf>, json: bool, silent: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engraver_core::{BehaviorSettings, ChecksumSettings, WriteSettings};
+    use engraver_core::{BehaviorSettings, BenchmarkSettings, ChecksumSettings, WriteSettings};
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -177,6 +177,7 @@ mod tests {
                 skip_confirmation: false,
                 quiet: false,
             },
+            benchmark: BenchmarkSettings::default(),
         };
         (settings, config_path)
     }
