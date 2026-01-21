@@ -419,10 +419,9 @@ fn test_write_auto_checksum_flag() {
 
 #[test]
 fn test_write_auto_checksum_from_config() {
-    let (temp_dir, config_dir, config_file, env_vars) = setup_config_test();
+    let (temp_dir, config_file) = setup_config_test();
 
     // Create a config with auto_detect enabled
-    fs::create_dir_all(&config_dir).unwrap();
     fs::write(
         &config_file,
         r#"
@@ -436,16 +435,21 @@ auto_detect = true
     fs::write(&test_file, "test content").unwrap();
 
     // Command should run (will fail for privilege/device reasons, not config)
-    let mut cmd = engraver();
-    cmd.args(["write", test_file.to_str().unwrap(), "/dev/nonexistent"]);
-    for (key, value) in &env_vars {
-        cmd.env(key, value);
-    }
-    cmd.assert().failure().stderr(
-        predicate::str::contains("privileges required")
-            .or(predicate::str::contains("Administrator"))
-            .or(predicate::str::contains("not found")),
-    );
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "write",
+            test_file.to_str().unwrap(),
+            "/dev/nonexistent",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("privileges required")
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("not found")),
+        );
 }
 
 // ============================================================================
@@ -781,50 +785,13 @@ fn test_mangen_content() {
 // Config Command Tests
 // ============================================================================
 
-/// Helper to set up config directory for tests in a cross-platform way.
-/// On Linux, dirs_next uses $XDG_CONFIG_HOME
-/// On macOS, dirs_next uses $HOME/Library/Application Support
-/// On Windows, dirs_next uses %APPDATA%
-/// Returns (temp_dir, config_dir, config_file, env_vars)
-fn setup_config_test() -> (
-    TempDir,
-    std::path::PathBuf,
-    std::path::PathBuf,
-    Vec<(&'static str, std::path::PathBuf)>,
-) {
+/// Helper to set up config file for tests in a cross-platform way.
+/// Uses --config-file flag instead of platform-specific env vars.
+/// Returns (temp_dir, config_file)
+fn setup_config_test() -> (TempDir, std::path::PathBuf) {
     let temp_dir = TempDir::new().unwrap();
-
-    #[cfg(target_os = "macos")]
-    let (config_dir, config_file, env_vars) = {
-        // macOS uses $HOME/Library/Application Support/engraver/
-        let home_dir = temp_dir.path().to_path_buf();
-        let config_dir = home_dir.join("Library/Application Support/engraver");
-        let config_file = config_dir.join("engraver_config.toml");
-        let env_vars: Vec<(&'static str, std::path::PathBuf)> = vec![("HOME", home_dir)];
-        (config_dir, config_file, env_vars)
-    };
-
-    #[cfg(target_os = "windows")]
-    let (config_dir, config_file, env_vars) = {
-        // Windows uses %APPDATA%/engraver/
-        let appdata_dir = temp_dir.path().to_path_buf();
-        let config_dir = appdata_dir.join("engraver");
-        let config_file = config_dir.join("engraver_config.toml");
-        let env_vars: Vec<(&'static str, std::path::PathBuf)> = vec![("APPDATA", appdata_dir)];
-        (config_dir, config_file, env_vars)
-    };
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let (config_dir, config_file, env_vars) = {
-        // Linux/others use $XDG_CONFIG_HOME/engraver/
-        let xdg_dir = temp_dir.path().to_path_buf();
-        let config_dir = xdg_dir.join("engraver");
-        let config_file = config_dir.join("engraver_config.toml");
-        let env_vars: Vec<(&'static str, std::path::PathBuf)> = vec![("XDG_CONFIG_HOME", xdg_dir)];
-        (config_dir, config_file, env_vars)
-    };
-
-    (temp_dir, config_dir, config_file, env_vars)
+    let config_file = temp_dir.path().join("engraver_config.toml");
+    (temp_dir, config_file)
 }
 
 #[test]
@@ -881,15 +848,17 @@ fn test_config_json_output() {
 
 #[test]
 fn test_config_init_creates_file() {
-    let (_temp_dir, _config_dir, config_file, env_vars) = setup_config_test();
+    let (_temp_dir, config_file) = setup_config_test();
 
     // config --init should create a config file
-    let mut cmd = engraver();
-    cmd.args(["config", "--init"]);
-    for (key, value) in &env_vars {
-        cmd.env(key, value);
-    }
-    cmd.assert()
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "config",
+            "--init",
+        ])
+        .assert()
         .success()
         .stdout(predicate::str::contains("Created configuration file"));
 
@@ -906,19 +875,20 @@ fn test_config_init_creates_file() {
 
 #[test]
 fn test_config_init_warns_if_exists() {
-    let (_temp_dir, config_dir, config_file, env_vars) = setup_config_test();
+    let (_temp_dir, config_file) = setup_config_test();
 
     // Create the config file first
-    fs::create_dir_all(&config_dir).unwrap();
     fs::write(&config_file, "[write]\nverify = true").unwrap();
 
     // config --init should warn that file exists
-    let mut cmd = engraver();
-    cmd.args(["config", "--init"]);
-    for (key, value) in &env_vars {
-        cmd.env(key, value);
-    }
-    cmd.assert()
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "config",
+            "--init",
+        ])
+        .assert()
         .success()
         .stderr(predicate::str::contains("already exists"));
 
@@ -929,10 +899,9 @@ fn test_config_init_warns_if_exists() {
 
 #[test]
 fn test_config_loads_custom_settings() {
-    let (_temp_dir, config_dir, config_file, env_vars) = setup_config_test();
+    let (_temp_dir, config_file) = setup_config_test();
 
     // Create a custom config file
-    fs::create_dir_all(&config_dir).unwrap();
     fs::write(
         &config_file,
         r#"
@@ -950,12 +919,9 @@ quiet = true
     .unwrap();
 
     // config should show the custom settings
-    let mut cmd = engraver();
-    cmd.arg("config");
-    for (key, value) in &env_vars {
-        cmd.env(key, value);
-    }
-    cmd.assert()
+    engraver()
+        .args(["--config-file", config_file.to_str().unwrap(), "config"])
+        .assert()
         .success()
         .stdout(predicate::str::contains("2M"))
         .stdout(predicate::str::contains("sha512"));
@@ -963,10 +929,9 @@ quiet = true
 
 #[test]
 fn test_config_json_with_custom_settings() {
-    let (_temp_dir, config_dir, config_file, env_vars) = setup_config_test();
+    let (_temp_dir, config_file) = setup_config_test();
 
     // Create a custom config file
-    fs::create_dir_all(&config_dir).unwrap();
     fs::write(
         &config_file,
         r#"
@@ -981,12 +946,14 @@ auto_detect = true
     .unwrap();
 
     // config --json should reflect custom settings
-    let mut cmd = engraver();
-    cmd.args(["config", "--json"]);
-    for (key, value) in &env_vars {
-        cmd.env(key, value);
-    }
-    cmd.assert()
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "config",
+            "--json",
+        ])
+        .assert()
         .success()
         .stdout(predicate::str::contains("\"verify\": true"))
         .stdout(predicate::str::contains("\"checkpoint\": true"))

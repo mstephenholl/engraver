@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use console::style;
 use engraver_core::Settings;
+use std::path::PathBuf;
 
 /// Arguments for the config command
 pub struct ConfigArgs {
@@ -14,13 +15,18 @@ pub struct ConfigArgs {
     pub json: bool,
     /// Suppress output (for scripting)
     pub silent: bool,
+    /// Custom configuration file path (overrides default)
+    pub config_file: Option<PathBuf>,
 }
 
 /// Execute the config command
 pub fn execute(args: ConfigArgs) -> Result<()> {
+    // Determine the effective config path
+    let config_path = args.config_file.clone().or_else(Settings::config_path);
+
     // Handle --path flag
     if args.path {
-        if let Some(path) = Settings::config_path() {
+        if let Some(path) = &config_path {
             if !args.silent {
                 println!("{}", path.display());
             }
@@ -32,16 +38,16 @@ pub fn execute(args: ConfigArgs) -> Result<()> {
 
     // Handle --init flag
     if args.init {
-        return init_config(args.silent);
+        return init_config(config_path, args.silent);
     }
 
     // Default: show current configuration
-    show_config(args.json, args.silent)
+    show_config(config_path, args.json, args.silent)
 }
 
 /// Initialize a new configuration file with default values
-fn init_config(silent: bool) -> Result<()> {
-    let path = Settings::config_path().context("Could not determine configuration directory")?;
+fn init_config(config_path: Option<PathBuf>, silent: bool) -> Result<()> {
+    let path = config_path.context("Could not determine configuration directory")?;
 
     if path.exists() {
         if !silent {
@@ -57,7 +63,7 @@ fn init_config(silent: bool) -> Result<()> {
 
     let settings = Settings::default();
     let saved_path = settings
-        .save()
+        .save_to_path(Some(path))
         .context("Failed to save configuration file")?;
 
     if !silent {
@@ -85,13 +91,13 @@ fn init_config(silent: bool) -> Result<()> {
 }
 
 /// Show the current configuration
-fn show_config(json: bool, silent: bool) -> Result<()> {
+fn show_config(config_path: Option<PathBuf>, json: bool, silent: bool) -> Result<()> {
     if silent {
         return Ok(());
     }
 
-    let settings = Settings::load();
-    let config_exists = Settings::config_exists();
+    let config_exists = config_path.as_ref().is_some_and(|p| p.exists());
+    let settings = Settings::load_from_path(config_path.clone());
 
     if json {
         // Output as JSON for scripting
@@ -103,7 +109,7 @@ fn show_config(json: bool, silent: bool) -> Result<()> {
         println!("{}", style("Engraver Configuration").bold());
         println!();
 
-        if let Some(path) = Settings::config_path() {
+        if let Some(path) = &config_path {
             if config_exists {
                 println!("  {} {}", style("Config file:").dim(), path.display());
             } else {
@@ -182,24 +188,26 @@ mod tests {
             path: false,
             json: false,
             silent: false,
+            config_file: None,
         };
         assert!(!args.init);
         assert!(!args.path);
         assert!(!args.json);
         assert!(!args.silent);
+        assert!(args.config_file.is_none());
     }
 
     #[test]
     fn test_show_config_silent() {
         // Silent mode should not panic and return Ok
-        let result = show_config(false, true);
+        let result = show_config(None, false, true);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_show_config_json_silent() {
         // Silent mode with JSON should still return Ok
-        let result = show_config(true, true);
+        let result = show_config(None, true, true);
         assert!(result.is_ok());
     }
 
@@ -210,6 +218,7 @@ mod tests {
             path: true,
             json: false,
             silent: true,
+            config_file: None,
         };
         let result = execute(args);
         assert!(result.is_ok());
@@ -222,6 +231,7 @@ mod tests {
             path: false,
             json: false,
             silent: true,
+            config_file: None,
         };
         let result = execute(args);
         assert!(result.is_ok());

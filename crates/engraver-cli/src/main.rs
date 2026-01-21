@@ -22,6 +22,7 @@ use clap_complete::{generate, Shell};
 use clap_mangen::Man;
 use console::style;
 use engraver_core::Settings;
+use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 mod commands;
@@ -44,6 +45,10 @@ struct Cli {
     /// Suppress ALL output (implies --quiet and --yes)
     #[arg(long, global = true)]
     silent: bool,
+
+    /// Use a custom configuration file instead of the default
+    #[arg(long, global = true, value_name = "PATH")]
+    config_file: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -189,8 +194,12 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // Load user settings from config file
-    let settings = Settings::load();
+    // Load user settings from config file (custom path takes precedence)
+    let settings = if let Some(ref config_path) = cli.config_file {
+        Settings::load_from_path(Some(config_path.clone()))
+    } else {
+        Settings::load()
+    };
 
     // Initialize logging
     // --silent implies --quiet (no logs at all, not even errors to tracing)
@@ -343,6 +352,7 @@ fn run() -> Result<()> {
                 path,
                 json,
                 silent,
+                config_file: cli.config_file,
             })
         }
     }
