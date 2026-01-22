@@ -706,3 +706,322 @@ fn output_multi_block_human(results: &[BlockSizeTestResult], silent: bool) {
     println_if!(silent);
     println_if!(silent, "{} Benchmark complete!", style("✓").green().bold());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engraver_detect::{Drive, DriveType, UsbSpeed};
+    use std::time::Duration;
+
+    // -------------------------------------------------------------------------
+    // BenchmarkArgs tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_benchmark_args_creation() {
+        let args = BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size: Some("256M".to_string()),
+            block_size: "4M".to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json: false,
+            skip_confirm: true,
+            silent: false,
+            test_block_sizes: None,
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+        };
+
+        assert_eq!(args.target, "/dev/sdb");
+        assert_eq!(args.test_size, Some("256M".to_string()));
+        assert_eq!(args.block_size, "4M");
+        assert_eq!(args.pattern, "zeros");
+        assert_eq!(args.passes, 1);
+        assert!(!args.json);
+        assert!(args.skip_confirm);
+    }
+
+    // -------------------------------------------------------------------------
+    // validate_args tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_args_valid() {
+        let args = BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size: Some("256M".to_string()),
+            block_size: "4M".to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json: false,
+            skip_confirm: true,
+            silent: false,
+            test_block_sizes: None,
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+        };
+
+        assert!(validate_args(&args).is_ok());
+    }
+
+    #[test]
+    fn test_validate_args_mutual_exclusion() {
+        let args = BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size: Some("256M".to_string()),
+            block_size: "4M".to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json: false,
+            skip_confirm: true,
+            silent: false,
+            test_block_sizes: Some("4K,1M,4M".to_string()),
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+        };
+
+        let result = validate_args(&args);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Cannot use both"));
+    }
+
+    #[test]
+    fn test_validate_args_block_size_too_large() {
+        let args = BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size: None,
+            block_size: "128M".to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json: false,
+            skip_confirm: true,
+            silent: false,
+            test_block_sizes: None,
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+        };
+
+        let result = validate_args(&args);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("64 MB"));
+    }
+
+    #[test]
+    fn test_validate_args_block_size_too_small() {
+        let args = BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size: None,
+            block_size: "1K".to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json: false,
+            skip_confirm: true,
+            silent: false,
+            test_block_sizes: None,
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+        };
+
+        let result = validate_args(&args);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("4 KB"));
+    }
+
+    #[test]
+    fn test_validate_args_invalid_pattern() {
+        let args = BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size: None,
+            block_size: "4M".to_string(),
+            pattern: "invalid_pattern".to_string(),
+            passes: 1,
+            json: false,
+            skip_confirm: true,
+            silent: false,
+            test_block_sizes: None,
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+        };
+
+        let result = validate_args(&args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_args_valid_patterns() {
+        for pattern in &["zeros", "random", "sequential", "seq", "zero"] {
+            let args = BenchmarkArgs {
+                target: "/dev/sdb".to_string(),
+                test_size: None,
+                block_size: "4M".to_string(),
+                pattern: pattern.to_string(),
+                passes: 1,
+                json: false,
+                skip_confirm: true,
+                silent: false,
+                test_block_sizes: None,
+                cancel_flag: Arc::new(AtomicBool::new(true)),
+            };
+
+            assert!(
+                validate_args(&args).is_ok(),
+                "Pattern '{}' should be valid",
+                pattern
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_args_test_block_sizes() {
+        let args = BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size: None,
+            block_size: "4M".to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json: false,
+            skip_confirm: true,
+            silent: false,
+            test_block_sizes: Some("4K,64K,1M,4M,16M".to_string()),
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+        };
+
+        assert!(validate_args(&args).is_ok());
+    }
+
+    // -------------------------------------------------------------------------
+    // format_eta tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_format_eta_zero_speed() {
+        let progress = BenchmarkProgress {
+            bytes_written: 100,
+            total_bytes: 1000,
+            current_pass: 1,
+            total_passes: 1,
+            current_speed_bps: 0,
+            elapsed: Duration::from_secs(1),
+        };
+
+        assert_eq!(format_eta(&progress), "");
+    }
+
+    #[test]
+    fn test_format_eta_seconds() {
+        let progress = BenchmarkProgress {
+            bytes_written: 500,
+            total_bytes: 1000,
+            current_pass: 1,
+            total_passes: 1,
+            current_speed_bps: 100, // 100 B/s -> 500 remaining / 100 = 5s
+            elapsed: Duration::from_secs(5),
+        };
+
+        assert_eq!(format_eta(&progress), "ETA: 5s");
+    }
+
+    #[test]
+    fn test_format_eta_minutes() {
+        let progress = BenchmarkProgress {
+            bytes_written: 0,
+            total_bytes: 7500,
+            current_pass: 1,
+            total_passes: 1,
+            current_speed_bps: 100, // 7500 / 100 = 75s = 1m 15s
+            elapsed: Duration::from_secs(0),
+        };
+
+        assert_eq!(format_eta(&progress), "ETA: 1m 15s");
+    }
+
+    #[test]
+    fn test_format_eta_complete() {
+        let progress = BenchmarkProgress {
+            bytes_written: 1000,
+            total_bytes: 1000,
+            current_pass: 1,
+            total_passes: 1,
+            current_speed_bps: 100,
+            elapsed: Duration::from_secs(10),
+        };
+
+        assert_eq!(format_eta(&progress), "ETA: 0s");
+    }
+
+    // -------------------------------------------------------------------------
+    // get_progress_style tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_progress_style_stages() {
+        // Just verify each stage returns a valid style without panicking
+        let _ = get_progress_style(0);
+        let _ = get_progress_style(25);
+        let _ = get_progress_style(49);
+        let _ = get_progress_style(50);
+        let _ = get_progress_style(74);
+        let _ = get_progress_style(75);
+        let _ = get_progress_style(99);
+        let _ = get_progress_style(100);
+    }
+
+    // -------------------------------------------------------------------------
+    // find_target_drive tests
+    // -------------------------------------------------------------------------
+
+    fn create_test_drive(path: &str, is_system: bool) -> Drive {
+        Drive {
+            path: path.to_string(),
+            raw_path: path.to_string(),
+            name: path.split('/').next_back().unwrap_or("drive").to_string(),
+            size: 16 * 1024 * 1024 * 1024,
+            removable: !is_system,
+            drive_type: DriveType::Usb,
+            vendor: Some("Test".to_string()),
+            model: Some("Drive".to_string()),
+            serial: None,
+            partitions: vec![],
+            mount_points: vec![],
+            is_system,
+            system_reason: if is_system {
+                Some("Test system drive".to_string())
+            } else {
+                None
+            },
+            usb_speed: Some(UsbSpeed::SuperSpeed),
+        }
+    }
+
+    #[test]
+    fn test_find_target_drive_exact_match() {
+        let drives = vec![
+            create_test_drive("/dev/sda", true),
+            create_test_drive("/dev/sdb", false),
+        ];
+
+        let result = find_target_drive(&drives, "/dev/sdb");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().path, "/dev/sdb");
+    }
+
+    #[test]
+    fn test_find_target_drive_not_found() {
+        let drives = vec![create_test_drive("/dev/sda", true)];
+
+        let result = find_target_drive(&drives, "/dev/sdb");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn test_find_target_drive_short_form() {
+        let drives = vec![create_test_drive("/dev/sdb", false)];
+
+        // On Linux, should normalize "sdb" to "/dev/sdb"
+        #[cfg(target_os = "linux")]
+        {
+            let result = find_target_drive(&drives, "sdb");
+            assert!(result.is_ok());
+        }
+    }
+}

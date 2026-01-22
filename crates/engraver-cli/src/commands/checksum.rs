@@ -125,3 +125,50 @@ fn format_size(bytes: u64) -> String {
         format!("{} B", bytes)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -------------------------------------------------------------------------
+    // format_size tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_format_size_bytes() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1), "1 B");
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1023), "1023 B");
+    }
+
+    #[test]
+    fn test_format_size_kilobytes() {
+        assert_eq!(format_size(1024), "1.00 KB");
+        assert_eq!(format_size(2048), "2.00 KB");
+        assert_eq!(format_size(1536), "1.50 KB");
+        assert_eq!(format_size(10 * 1024), "10.00 KB");
+    }
+
+    #[test]
+    fn test_format_size_megabytes() {
+        assert_eq!(format_size(1024 * 1024), "1.00 MB");
+        assert_eq!(format_size(100 * 1024 * 1024), "100.00 MB");
+        assert_eq!(format_size(1024 * 1024 + 512 * 1024), "1.50 MB");
+    }
+
+    #[test]
+    fn test_format_size_gigabytes() {
+        assert_eq!(format_size(1024 * 1024 * 1024), "1.00 GB");
+        assert_eq!(format_size(4u64 * 1024 * 1024 * 1024), "4.00 GB");
+        assert_eq!(format_size(32u64 * 1024 * 1024 * 1024), "32.00 GB");
+    }
+
+    #[test]
+    fn test_format_size_common_iso_sizes() {
+        // Common ISO image sizes
+        assert_eq!(format_size(700 * 1024 * 1024), "700.00 MB"); // CD image
+        assert_eq!(format_size(4700u64 * 1024 * 1024), "4.59 GB"); // DVD image
+        assert_eq!(format_size(3u64 * 1024 * 1024 * 1024), "3.00 GB"); // Ubuntu ISO
+    }
+}

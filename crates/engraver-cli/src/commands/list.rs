@@ -234,3 +234,205 @@ fn opt_json_str(opt: &Option<String>) -> String {
         None => "null".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engraver_detect::{Drive, DriveType, Partition, UsbSpeed};
+
+    // -------------------------------------------------------------------------
+    // escape_json tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_escape_json_no_special_chars() {
+        assert_eq!(escape_json("hello world"), "hello world");
+        assert_eq!(escape_json("simple"), "simple");
+        assert_eq!(escape_json(""), "");
+    }
+
+    #[test]
+    fn test_escape_json_backslash() {
+        assert_eq!(escape_json("path\\to\\file"), "path\\\\to\\\\file");
+        assert_eq!(escape_json("\\"), "\\\\");
+    }
+
+    #[test]
+    fn test_escape_json_quotes() {
+        assert_eq!(escape_json("say \"hello\""), "say \\\"hello\\\"");
+        assert_eq!(escape_json("\"quoted\""), "\\\"quoted\\\"");
+    }
+
+    #[test]
+    fn test_escape_json_newlines() {
+        assert_eq!(escape_json("line1\nline2"), "line1\\nline2");
+        assert_eq!(escape_json("with\r\nwindows"), "with\\r\\nwindows");
+    }
+
+    #[test]
+    fn test_escape_json_tabs() {
+        assert_eq!(escape_json("col1\tcol2"), "col1\\tcol2");
+    }
+
+    #[test]
+    fn test_escape_json_combined() {
+        assert_eq!(
+            escape_json("path\\with \"quotes\"\nand\ttabs"),
+            "path\\\\with \\\"quotes\\\"\\nand\\ttabs"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // opt_json_str tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_opt_json_str_some() {
+        assert_eq!(opt_json_str(&Some("value".to_string())), "\"value\"");
+        assert_eq!(opt_json_str(&Some("SanDisk".to_string())), "\"SanDisk\"");
+    }
+
+    #[test]
+    fn test_opt_json_str_none() {
+        assert_eq!(opt_json_str(&None), "null");
+    }
+
+    #[test]
+    fn test_opt_json_str_escapes() {
+        assert_eq!(
+            opt_json_str(&Some("with \"quotes\"".to_string())),
+            "\"with \\\"quotes\\\"\""
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // serde_json_drives tests
+    // -------------------------------------------------------------------------
+
+    fn create_test_drive() -> Drive {
+        Drive {
+            path: "/dev/sdb".to_string(),
+            raw_path: "/dev/sdb".to_string(),
+            name: "sdb".to_string(),
+            size: 16 * 1024 * 1024 * 1024, // 16 GB
+            removable: true,
+            drive_type: DriveType::Usb,
+            vendor: Some("SanDisk".to_string()),
+            model: Some("Ultra USB 3.0".to_string()),
+            serial: None,
+            partitions: vec![],
+            mount_points: vec!["/mnt/usb".to_string()],
+            is_system: false,
+            system_reason: None,
+            usb_speed: Some(UsbSpeed::SuperSpeed),
+        }
+    }
+
+    #[test]
+    fn test_serde_json_drives_empty() {
+        let drives: Vec<Drive> = vec![];
+        let json = serde_json_drives(&drives);
+        assert_eq!(json, "[\n]");
+    }
+
+    #[test]
+    fn test_serde_json_drives_single() {
+        let drives = vec![create_test_drive()];
+        let json = serde_json_drives(&drives);
+
+        assert!(json.starts_with("[\n"));
+        assert!(json.ends_with("\n]"));
+        assert!(json.contains("\"path\": \"/dev/sdb\""));
+        assert!(json.contains("\"vendor\": \"SanDisk\""));
+        assert!(json.contains("\"model\": \"Ultra USB 3.0\""));
+        assert!(json.contains("\"size\": 17179869184"));
+        assert!(json.contains("\"removable\": true"));
+        assert!(json.contains("\"is_system\": false"));
+        assert!(json.contains("\"is_safe_target\": true"));
+        assert!(json.contains("\"drive_type\": \"USB\""));
+        assert!(json.contains("\"usb_speed\": \"USB 3.0 (5 Gbps)\""));
+        assert!(json.contains("\"mount_points\": [\"/mnt/usb\"]"));
+    }
+
+    #[test]
+    fn test_serde_json_drives_multiple() {
+        let drive1 = create_test_drive();
+        let mut drive2 = create_test_drive();
+        drive2.path = "/dev/sdc".to_string();
+        drive2.vendor = None;
+
+        let drives = vec![drive1, drive2];
+        let json = serde_json_drives(&drives);
+
+        // Should have comma between objects
+        assert!(json.contains("},\n"));
+        // Should have both paths
+        assert!(json.contains("\"/dev/sdb\""));
+        assert!(json.contains("\"/dev/sdc\""));
+        // Check null handling
+        assert!(json.contains("\"vendor\": \"SanDisk\""));
+        assert!(json.contains("\"vendor\": null"));
+    }
+
+    #[test]
+    fn test_serde_json_drives_with_partitions() {
+        let mut drive = create_test_drive();
+        drive.partitions = vec![
+            Partition {
+                path: "/dev/sdb1".to_string(),
+                size: 8 * 1024 * 1024 * 1024,
+                filesystem: Some("vfat".to_string()),
+                label: Some("BOOT".to_string()),
+                mount_point: Some("/boot/efi".to_string()),
+            },
+            Partition {
+                path: "/dev/sdb2".to_string(),
+                size: 8 * 1024 * 1024 * 1024,
+                filesystem: Some("ext4".to_string()),
+                label: None,
+                mount_point: None,
+            },
+        ];
+
+        let drives = vec![drive];
+        let json = serde_json_drives(&drives);
+
+        assert!(json.contains("\"partition_count\": 2"));
+    }
+
+    #[test]
+    fn test_serde_json_drives_escaping() {
+        let mut drive = create_test_drive();
+        drive.model = Some("Model \"with\" quotes".to_string());
+
+        let drives = vec![drive];
+        let json = serde_json_drives(&drives);
+
+        assert!(json.contains("Model \\\"with\\\" quotes"));
+    }
+
+    #[test]
+    fn test_serde_json_drives_slow_usb() {
+        let mut drive = create_test_drive();
+        drive.usb_speed = Some(UsbSpeed::High); // USB 2.0 High Speed
+
+        let drives = vec![drive];
+        let json = serde_json_drives(&drives);
+
+        // High speed (USB 2.0) is considered slow for USB 3.0 capable devices
+        assert!(json.contains("\"usb_speed\":"));
+        assert!(json.contains("\"usb_speed_slow\": true"));
+    }
+
+    #[test]
+    fn test_serde_json_drives_no_usb_speed() {
+        let mut drive = create_test_drive();
+        drive.usb_speed = None;
+
+        let drives = vec![drive];
+        let json = serde_json_drives(&drives);
+
+        assert!(json.contains("\"usb_speed\": null"));
+        assert!(json.contains("\"usb_speed_slow\": false"));
+    }
+}
