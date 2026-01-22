@@ -374,4 +374,85 @@ verify = true
             assert!(p.to_string_lossy().contains("engraver_config.toml"));
         }
     }
+
+    #[test]
+    fn test_config_dir() {
+        // Verify config_dir returns the parent of config_path
+        let dir = Settings::config_dir();
+        if let Some(d) = dir {
+            assert!(d.to_string_lossy().contains("engraver"));
+            // Should not contain the filename
+            assert!(!d.to_string_lossy().contains("engraver_config.toml"));
+        }
+    }
+
+    #[test]
+    fn test_config_exists_runs() {
+        // Just verify it doesn't panic - actual result depends on environment
+        let _ = Settings::config_exists();
+    }
+
+    #[test]
+    fn test_load_invalid_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("engraver_config.toml");
+
+        // Write invalid TOML
+        std::fs::write(&config_path, "this is not valid toml {{{{").unwrap();
+
+        // Should return defaults when parsing fails
+        let settings = Settings::load_from_path(Some(config_path));
+        assert_eq!(settings, Settings::default());
+    }
+
+    #[test]
+    fn test_save_to_none_path() {
+        let settings = Settings::default();
+        let result = settings.save_to_path(None);
+        assert!(matches!(result, Err(SettingsError::NoConfigDir)));
+    }
+
+    #[test]
+    fn test_write_settings_default() {
+        let write = WriteSettings::default();
+        assert_eq!(write.block_size, "4M");
+        assert!(!write.verify);
+        assert!(!write.checkpoint);
+    }
+
+    #[test]
+    fn test_checksum_settings_default() {
+        let checksum = ChecksumSettings::default();
+        assert_eq!(checksum.algorithm, "sha256");
+        assert!(!checksum.auto_detect);
+    }
+
+    #[test]
+    fn test_benchmark_settings_default() {
+        let benchmark = BenchmarkSettings::default();
+        assert_eq!(benchmark.block_size, "4M");
+        assert_eq!(benchmark.test_size, "256M");
+        assert_eq!(benchmark.pattern, "zeros");
+        assert_eq!(benchmark.passes, 1);
+        assert!(!benchmark.json);
+    }
+
+    #[test]
+    fn test_behavior_settings_default() {
+        let behavior = BehaviorSettings::default();
+        assert!(!behavior.skip_confirmation);
+        assert!(!behavior.quiet);
+    }
+
+    #[test]
+    fn test_settings_error_display() {
+        let err = SettingsError::NoConfigDir;
+        assert!(err.to_string().contains("configuration directory"));
+
+        let io_err = SettingsError::Io {
+            path: PathBuf::from("/test/path"),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
+        };
+        assert!(io_err.to_string().contains("/test/path"));
+    }
 }

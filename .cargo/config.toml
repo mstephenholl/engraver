@@ -6,6 +6,8 @@ lint = "clippy --all-targets --all-features"
 t = "test"
 b = "build"
 r = "run -p engraver-cli --"
+cov = "llvm-cov --all-features --workspace --html"
+cov-check = "llvm-cov --all-features --workspace --fail-under-lines 75"
 
 # Cross-compilation (uncomment as needed)
 # [target.x86_64-unknown-linux-gnu]
