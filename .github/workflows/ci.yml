@@ -72,7 +72,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   check:
     name: Check
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets --all-features
+      - run: cargo check --locked --all-targets --all-features
 
   audit:
     name: Security Audit
@@ -117,7 +117,7 @@ jobs:
         with:
           key: msrv
       - name: Check MSRV compatibility
-        run: cargo check --all-targets --all-features
+        run: cargo check --locked --all-targets --all-features
 
   # ============================================================================
   # Stage 3: Fast tests (unit tests only, parallel across platforms)
@@ -140,7 +140,7 @@ jobs:
           key: ${{ matrix.os }}
       # Run library tests only (fast)
       - name: Run unit tests
-        run: cargo test --lib --all-features
+        run: cargo test --locked --lib --all-features
 
   # ============================================================================
   # Stage 4: Integration tests (CLI tests, after unit tests pass)
@@ -163,7 +163,7 @@ jobs:
           key: ${{ matrix.os }}-integration
       # Run integration tests (CLI tests)
       - name: Run integration tests
-        run: cargo test --test '*' --all-features
+        run: cargo test --locked --test '*' --all-features
 
   # ============================================================================
   # Stage 4b: Code coverage
@@ -185,9 +185,9 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run coverage
-        run: cargo llvm-cov --all-features --workspace --codecov --output-path codecov.json
+        run: cargo llvm-cov --locked --all-features --workspace --codecov --output-path codecov.json
       - name: Check coverage threshold (75%)
-        run: cargo llvm-cov --all-features --workspace --fail-under-lines 75
+        run: cargo llvm-cov --locked --all-features --workspace --fail-under-lines 75
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
@@ -215,9 +215,35 @@ jobs:
       - name: Install musl-tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build with musl
-        run: cargo build --release --target x86_64-unknown-linux-musl
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl
       - name: Run unit tests with musl
-        run: cargo test --lib --all-features --target x86_64-unknown-linux-musl
+        run: cargo test --locked --lib --all-features --target x86_64-unknown-linux-musl
+
+  # ============================================================================
+  # Stage 4d: Sanitizer Testing (memory safety)
+  # ============================================================================
+
+  sanitizers:
+    name: Sanitizers (ASAN)
+    runs-on: ubuntu-latest
+    needs: [changes, clippy, check]
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sanitizer-asan
+      - name: Run tests with AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+        run: |
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu \
+            --package engraver-platform \
+            --lib --all-features -- --test-threads=1
 
   # ============================================================================
   # Stage 3 (parallel): Documentation and other checks
@@ -232,7 +258,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --no-deps --all-features
+      - run: cargo doc --locked --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -255,7 +281,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, check, audit, deny, msrv, test-unit, test-integration, coverage, build-musl, docs, shellcheck]
+    needs: [fmt, clippy, check, audit, deny, msrv, test-unit, test-integration, coverage, build-musl, sanitizers, docs, shellcheck]
     if: always()
     steps:
       - name: Check all jobs passed
@@ -270,6 +296,7 @@ jobs:
              [[ "${{ needs.test-integration.result }}" == "failure" ]] || \
              [[ "${{ needs.coverage.result }}" == "failure" ]] || \
              [[ "${{ needs.build-musl.result }}" == "failure" ]] || \
+             [[ "${{ needs.sanitizers.result }}" == "failure" ]] || \
              [[ "${{ needs.docs.result }}" == "failure" ]] || \
              [[ "${{ needs.shellcheck.result }}" == "failure" ]]; then
             echo "One or more jobs failed"
