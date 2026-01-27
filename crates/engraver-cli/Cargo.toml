@@ -26,7 +26,7 @@ clap_complete = "4"
 clap_mangen = "0.2"
 
 # Progress bars and terminal UI
-indicatif = "0.17"
+indicatif = "0.18"
 console = "0.15"
 dialoguer = "0.11"
 
