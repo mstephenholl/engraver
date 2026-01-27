@@ -978,8 +978,9 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 /// Convert hex string to bytes
+#[allow(clippy::manual_is_multiple_of)]
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
+    if hex.len() % 2 != 0 {
         return Err(Error::InvalidConfig(
             "Hex string must have even length".to_string(),
         ));
