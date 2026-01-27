@@ -187,12 +187,14 @@ pub fn align_down(value: usize, alignment: usize) -> usize {
 }
 
 /// Check if a value is aligned to the given alignment
+// Note: Using manual check instead of `is_multiple_of()` for nightly sanitizer compatibility
+#[allow(clippy::manual_is_multiple_of)]
 #[inline]
 pub fn is_aligned(value: usize, alignment: usize) -> bool {
     if alignment == 0 {
         return true;
     }
-    value.is_multiple_of(alignment)
+    value % alignment == 0
 }
 
 /// Check if a pointer is aligned to the given alignment
