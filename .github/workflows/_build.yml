@@ -1,0 +1,64 @@
+name: Reusable Build Workflow
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: 'Rust target triple (e.g., x86_64-unknown-linux-musl)'
+        required: true
+        type: string
+      os:
+        description: 'Runner OS'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      cache-key:
+        description: 'Cache key for rust-cache'
+        required: false
+        type: string
+        default: 'build'
+      build-args:
+        description: 'Additional arguments for cargo build'
+        required: false
+        type: string
+        default: ''
+      run-tests:
+        description: 'Run unit tests after build'
+        required: false
+        type: boolean
+        default: false
+      install-musl:
+        description: 'Install musl-tools (for musl targets)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build (${{ inputs.target }})
+    runs-on: ${{ inputs.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ inputs.cache-key }}
+
+      - name: Install musl-tools
+        if: inputs.install-musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --locked --release --target ${{ inputs.target }} ${{ inputs.build-args }}
+
+      - name: Run unit tests
+        if: inputs.run-tests
+        run: cargo test --locked --lib --all-features --target ${{ inputs.target }}

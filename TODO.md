@@ -119,14 +119,19 @@ Planned features, improvements, and development roadmap for Engraver.
   - cargo-sbom in release workflow
   - Software Bill of Materials for compliance
 
-- [ ] **Parallelize integration tests**
-  - Remove sequential dependency on unit tests
+- [x] **Parallelize integration tests**
+  - Removed sequential dependency on unit tests
+  - Integration tests now run in parallel with unit tests after lint checks
 
-- [ ] **Extract reusable workflows**
-  - Create `_build.yml`, `_test.yml` for DRY CI configuration
+- [x] **Extract reusable workflows**
+  - Created `_test.yml` for cross-platform test matrix
+  - Created `_build.yml` for configurable Rust builds
+  - CI workflow now uses reusable workflows for tests and musl build
 
 - [ ] **Add performance benchmarking CI**
-  - cargo-criterion for regression detection
+  - [x] Criterion benchmarks implemented (`cargo bench -p engraver-core`)
+  - [x] Benchmarks for checksums (SHA-256, SHA-512, MD5, CRC32), comparison, block sizes
+  - [ ] Integrate into release workflow with github-action-benchmark
 
 ### Low Priority
 

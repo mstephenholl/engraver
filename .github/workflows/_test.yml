@@ -1,0 +1,39 @@
+name: Reusable Test Workflow
+
+on:
+  workflow_call:
+    inputs:
+      test-type:
+        description: 'Type of tests to run (unit or integration)'
+        required: true
+        type: string
+      test-command:
+        description: 'The cargo test command to run'
+        required: true
+        type: string
+      cache-suffix:
+        description: 'Suffix for cache key differentiation'
+        required: false
+        type: string
+        default: ''
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: ${{ inputs.test-type }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}${{ inputs.cache-suffix }}
+      - name: Run ${{ inputs.test-type }} tests
+        run: ${{ inputs.test-command }}
