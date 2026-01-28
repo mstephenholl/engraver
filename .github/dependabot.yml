@@ -23,3 +23,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+    ignore:
+      # rust-toolchain uses Rust versions as tags (stable, 1.85, nightly), not action versions
+      - dependency-name: "dtolnay/rust-toolchain"

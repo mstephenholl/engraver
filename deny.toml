@@ -17,11 +17,7 @@ db-path = "~/.cargo/advisory-db"
 # URL to the advisory database
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Ignore specific advisories (by RUSTSEC ID)
-ignore = [
-    # number_prefix is unmaintained but indicatif still depends on it
-    # No alternative available yet, waiting for indicatif to update
-    "RUSTSEC-2025-0119",
-]
+ignore = []
 
 [licenses]
 # List of allowed licenses
@@ -41,6 +37,8 @@ allow = [
     "OpenSSL",
     # webpki-roots uses this permissive data license
     "CDLA-Permissive-2.0",
+    # libbz2-rs-sys uses this permissive bzip2 license
+    "bzip2-1.0.6",
 ]
 # Confidence threshold for license detection
 confidence-threshold = 0.8

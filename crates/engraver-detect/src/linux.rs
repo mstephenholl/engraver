@@ -6,6 +6,7 @@ use super::{is_system_mount_point, DetectError, Drive, DriveType, Partition, Res
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use tracing::{debug, trace, warn};
 
 /// Mount information for a device
 #[derive(Debug, Clone)]
@@ -75,12 +76,19 @@ fn parse_block_device(
     }
 
     // Get size (in 512-byte sectors)
-    let size = read_sys_value(&format!("{sys_path}/size"))
+    let size_path = format!("{sys_path}/size");
+    let size = read_sys_value(&size_path)
+        .inspect_err(|e| warn!("Failed to read size from {size_path}: {e}"))
         .ok()
-        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|s| {
+            s.parse::<u64>()
+                .inspect_err(|e| debug!("Failed to parse size for {name}: {e}"))
+                .ok()
+        })
         .map_or(0, |sectors| sectors * 512);
 
     if size == 0 {
+        debug!("Skipping device {name}: size is 0");
         return None;
     }
 
@@ -201,7 +209,12 @@ pub(crate) fn get_partition_labels() -> HashMap<String, String> {
     let mut labels = HashMap::new();
     let label_dir = Path::new("/dev/disk/by-label");
 
-    if let Ok(entries) = fs::read_dir(label_dir) {
+    if let Ok(entries) = fs::read_dir(label_dir).inspect_err(|e| {
+        debug!(
+            "Failed to read label directory {}: {e}",
+            label_dir.display()
+        );
+    }) {
         for entry in entries.flatten() {
             let label = entry.file_name().to_string_lossy().to_string();
             // Decode URL-encoded characters in label (e.g., \x20 for space)
@@ -254,7 +267,9 @@ fn get_partitions(
     let mut partitions = Vec::new();
     let sys_path = format!("/sys/block/{device_name}");
 
-    if let Ok(entries) = fs::read_dir(&sys_path) {
+    if let Ok(entries) = fs::read_dir(&sys_path)
+        .inspect_err(|e| debug!("Failed to enumerate partitions for {device_name}: {e}"))
+    {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
 
@@ -262,9 +277,17 @@ fn get_partitions(
                 let part_path = format!("/dev/{name}");
                 let part_sys_path = format!("{sys_path}/{name}");
 
-                let size = read_sys_value(&format!("{part_sys_path}/size"))
+                let size_path = format!("{part_sys_path}/size");
+                let size = read_sys_value(&size_path)
+                    .inspect_err(|e| debug!("Failed to read partition size from {size_path}: {e}"))
                     .ok()
-                    .and_then(|s| s.parse::<u64>().ok())
+                    .and_then(|s| {
+                        s.parse::<u64>()
+                            .inspect_err(|e| {
+                                debug!("Failed to parse partition size for {name}: {e}");
+                            })
+                            .ok()
+                    })
                     .map_or(0, |sectors| sectors * 512);
 
                 // Get mount info (mount point and filesystem)
@@ -373,8 +396,12 @@ pub(crate) fn detect_usb_speed(sys_path: &str) -> Option<UsbSpeed> {
         let speed_file = current.join("speed");
         if speed_file.exists() {
             if let Ok(speed_str) = fs::read_to_string(&speed_file) {
-                if let Ok(mbps) = speed_str.trim().parse::<u32>() {
-                    return Some(UsbSpeed::from_mbps(mbps));
+                match speed_str.trim().parse::<u32>() {
+                    Ok(mbps) => return Some(UsbSpeed::from_mbps(mbps)),
+                    Err(e) => trace!(
+                        "Failed to parse USB speed from {}: {e}",
+                        speed_file.display()
+                    ),
                 }
             }
         }

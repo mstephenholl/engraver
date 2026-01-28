@@ -151,10 +151,15 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
     let size = info
         .get("TotalSize")
         .or_else(|| info.get("Size"))
-        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|s| {
+            s.parse::<u64>()
+                .inspect_err(|e| tracing::warn!("Failed to parse size for {disk_name}: {e}"))
+                .ok()
+        })
         .unwrap_or(0);
 
     if size == 0 {
+        tracing::debug!("Skipping disk {disk_name}: size is 0");
         return Ok(None);
     }
 
@@ -391,9 +396,11 @@ fn get_usb_speed_for_disk(disk_name: &str, info: &HashMap<String, String>) -> Op
     let output = Command::new("system_profiler")
         .args(["SPUSBDataType", "-detailLevel", "mini"])
         .output()
+        .inspect_err(|e| tracing::debug!("Failed to run system_profiler: {e}"))
         .ok()?;
 
     if !output.status.success() {
+        tracing::debug!("system_profiler returned non-zero exit code");
         return None;
     }
 
