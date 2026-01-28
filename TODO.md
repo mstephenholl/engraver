@@ -47,9 +47,11 @@ Planned features, improvements, and development roadmap for Engraver.
   - HTTP webhook support for progress updates
   - Integration with CI/CD pipelines and automation tools
 
-- [ ] **Automatic checksum file detection**
+- [x] **Automatic checksum file detection**
   - Auto-detect .sha256, .sha512, .md5 files alongside ISOs
-  - Automatically verify source integrity before writing
+  - `auto_detect_checksum()` function in verifier.rs
+  - CLI flag: `--auto-checksum`, config option: `auto_detect = true`
+  - Searches for `.sha256`, `.sha512`, `.md5`, `.sha256sum` files
 
 - [ ] **Partition table inspection**
   - Display partition layout of source images
@@ -155,9 +157,9 @@ Planned features, improvements, and development roadmap for Engraver.
 
 - [ ] **Better error messages for common failures**
 - [ ] **More detailed progress information** (blocks written, retries, etc.)
-- [ ] **Add warning logs for silent errors**
-  - Add `tracing::warn!()` in detect crate for recoverable errors
-  - Improve debugging for linux.rs, macos.rs error paths
+- [x] **Add warning logs for silent errors**
+  - Added `tracing::warn!()` in detect crate for recoverable errors
+  - Implemented in linux.rs, macos.rs error paths (e.g., size parsing failures)
 - [ ] **GUI implementation (engraver-gui crate)**
   - Placeholder exists, planned frameworks: iced or Tauri
 - [ ] **Windows-specific optimizations**
@@ -167,7 +169,9 @@ Planned features, improvements, and development roadmap for Engraver.
 
 ## Testing
 
-- [x] **CLI unit tests** - 83 unit tests + 82 integration tests (165 total)
+- [x] **CLI unit tests** - Comprehensive test coverage across all crates
+  - 589+ unit tests across the codebase (based on `#[test]` count)
+  - Integration tests in cli, core, detect, and platform crates
   - Added tests for list.rs, benchmark.rs, checksum.rs utility functions
 
 - [ ] **Integration tests for actual write operations**
@@ -229,7 +233,7 @@ Planned features, improvements, and development roadmap for Engraver.
 | Compression formats | 4 |
 | Checksum algorithms | 4 |
 | Fuzzing targets | 12 |
-| Test count | 279+ |
+| Test count | 589+ |
 
 ---
 
@@ -241,4 +245,4 @@ Planned features, improvements, and development roadmap for Engraver.
 | CI security checks | 2 (audit + deny) |
 | Code coverage | Tracked via Codecov (target >70%) |
 | Dependabot enabled | Yes |
-| CLI unit test coverage | 165 tests |
+| CLI unit test coverage | 589+ tests |
