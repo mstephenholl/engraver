@@ -37,6 +37,8 @@ allow = [
     "OpenSSL",
     # webpki-roots uses this permissive data license
     "CDLA-Permissive-2.0",
+    # libbz2-rs-sys uses this permissive bzip2 license
+    "bzip2-1.0.6",
 ]
 # Confidence threshold for license detection
 confidence-threshold = 0.8
