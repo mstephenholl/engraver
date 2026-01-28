@@ -16,9 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/mstephenholl/engraver/main/install.
 cargo install --path crates/engraver-cli
 ```
 
-### Pre-built Binaries
+### Pre-built Binaries (see note)
 
-Download from the [Releases](https://github.com/mstephenholl/engraver/releases) page.
+Download from the [Releases](https://github.com/mstephenholl/engraver/releases) page (Note: This feature is not currently GA).
 
 ## Basic Usage
 
