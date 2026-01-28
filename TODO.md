@@ -101,16 +101,17 @@ Planned features, improvements, and development roadmap for Engraver.
 
 ### High Priority
 
-- [ ] **Add sanitizer testing to CI**
+- [x] **Add sanitizer testing to CI**
   - ASAN/MSAN jobs for engraver-platform unsafe code
   - Catches memory safety issues
 
-- [ ] **Add supply chain security**
+- [x] **Add supply chain security**
   - Use `--locked` flag in CI builds
   - Hash verification for dependencies
 
-- [ ] **Add secret scanning**
-  - truffleHog or similar GitHub Action for credential detection
+- [x] **Add secret scanning**
+  - TruffleHog GitHub Action for credential detection
+  - Scans git history for accidentally committed secrets
 
 ### Medium Priority
 
@@ -242,7 +243,7 @@ Planned features, improvements, and development roadmap for Engraver.
 | Metric | Status |
 |--------|--------|
 | Dead code annotations | 2 (GUI only) |
-| CI security checks | 2 (audit + deny) |
+| CI security checks | 3 (audit + deny + secrets) |
 | Code coverage | Tracked via Codecov (target >70%) |
 | Dependabot enabled | Yes |
 | CLI unit test coverage | 589+ tests |
