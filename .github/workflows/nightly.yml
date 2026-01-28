@@ -104,6 +104,57 @@ jobs:
           RUSTDOCFLAGS: -W warnings
 
   # ============================================================================
+  # Fuzz Testing
+  # ============================================================================
+
+  fuzz:
+    name: Fuzz Testing
+    runs-on: ubuntu-latest
+    needs: check-nightly
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Fuzz engraver-core
+        working-directory: crates/engraver-core
+        run: |
+          for target in $(cargo fuzz list); do
+            echo "Fuzzing $target for 60 seconds..."
+            cargo fuzz run "$target" -- -max_total_time=60 || true
+          done
+
+      - name: Fuzz engraver-detect
+        working-directory: crates/engraver-detect
+        run: |
+          for target in $(cargo fuzz list); do
+            echo "Fuzzing $target for 60 seconds..."
+            cargo fuzz run "$target" -- -max_total_time=60 || true
+          done
+
+      - name: Fuzz engraver-platform
+        working-directory: crates/engraver-platform
+        run: |
+          for target in $(cargo fuzz list); do
+            echo "Fuzzing $target for 60 seconds..."
+            cargo fuzz run "$target" -- -max_total_time=60 || true
+          done
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: |
+            crates/*/fuzz/artifacts/
+          retention-days: 30
+
+  # ============================================================================
   # Beta Rust Tests (when manually triggered with include-beta)
   # ============================================================================
 
@@ -139,7 +190,7 @@ jobs:
   nightly-summary:
     name: Nightly Summary
     runs-on: ubuntu-latest
-    needs: [check-nightly, clippy-nightly, test-unit-nightly, test-integration-nightly, docs-nightly]
+    needs: [check-nightly, clippy-nightly, test-unit-nightly, test-integration-nightly, docs-nightly, fuzz]
     if: always()
     steps:
       - name: Check nightly status
@@ -153,6 +204,7 @@ jobs:
           echo "| Unit Tests | ${{ needs.test-unit-nightly.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration Tests | ${{ needs.test-integration-nightly.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docs | ${{ needs.docs-nightly.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Fuzz Testing | ${{ needs.fuzz.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # Report overall status
