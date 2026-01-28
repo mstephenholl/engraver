@@ -119,7 +119,7 @@ impl WindowsDevice {
                 ptr::null(),
                 OPEN_EXISTING,
                 flags,
-                0, // Template file handle - HANDLE is isize in windows-sys
+                std::ptr::null_mut(), // Template file handle
             )
         };
 
@@ -203,6 +203,11 @@ impl WindowsDevice {
         }
     }
 }
+
+// SAFETY: WindowsDevice contains a Windows HANDLE which is safe to send between threads.
+// The handle is an opaque pointer managed by the Windows kernel.
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsDevice {}
 
 #[cfg(target_os = "windows")]
 impl Drop for WindowsDevice {
@@ -476,14 +481,13 @@ fn unmount_windows_device(path: &str) -> Result<()> {
 /// Check if running with elevated privileges (Administrator)
 #[cfg(target_os = "windows")]
 fn is_elevated() -> bool {
-    use windows_sys::Win32::Foundation::BOOL;
     use windows_sys::Win32::Security::{
         GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     unsafe {
-        let mut token: HANDLE = 0;
+        let mut token: HANDLE = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
             return false;
         }
