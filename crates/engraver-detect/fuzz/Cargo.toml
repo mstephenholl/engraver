@@ -48,3 +48,17 @@ path = "fuzz_targets/fuzz_format_bytes.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_csv_parser"
+path = "fuzz_targets/fuzz_csv_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mount_line"
+path = "fuzz_targets/fuzz_mount_line.rs"
+test = false
+doc = false
+bench = false

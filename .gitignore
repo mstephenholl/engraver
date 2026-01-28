@@ -37,6 +37,10 @@ dist/
 *.msi
 *.AppImage
 
+# Fuzzing
+**/fuzz/target/
+**/fuzz/Cargo.lock
+
 # AI Coding Agents
 .claude/
 .cursor/

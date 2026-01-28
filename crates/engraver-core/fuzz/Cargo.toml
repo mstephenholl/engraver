@@ -10,6 +10,9 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dependencies.engraver-core]
 path = ".."
@@ -58,6 +61,34 @@ bench = false
 [[bin]]
 name = "fuzz_checksum_parse"
 path = "fuzz_targets/fuzz_checksum_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_size_parsing"
+path = "fuzz_targets/fuzz_size_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_hex_parsing"
+path = "fuzz_targets/fuzz_hex_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_settings_toml"
+path = "fuzz_targets/fuzz_settings_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_checkpoint_json"
+path = "fuzz_targets/fuzz_checkpoint_json.rs"
 test = false
 doc = false
 bench = false
