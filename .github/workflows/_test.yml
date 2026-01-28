@@ -16,6 +16,16 @@ on:
         required: false
         type: string
         default: ''
+      toolchain:
+        description: 'Rust toolchain to use (stable, beta, nightly, or specific version)'
+        required: false
+        type: string
+        default: 'stable'
+      os-matrix:
+        description: 'JSON array of OS runners'
+        required: false
+        type: string
+        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,12 +38,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.os-matrix) }}
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ inputs.toolchain }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.os }}${{ inputs.cache-suffix }}
+          key: ${{ matrix.os }}${{ inputs.cache-suffix }}-${{ inputs.toolchain }}
       - name: Run ${{ inputs.test-type }} tests
         run: ${{ inputs.test-command }}

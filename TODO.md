@@ -138,8 +138,11 @@ Planned features, improvements, and development roadmap for Engraver.
 - [ ] **Sign release artifacts**
   - Add GPG signing to release workflow
 
-- [ ] **Beta/nightly Rust CI testing**
-  - Early warning for upstream breakage
+- [x] **Beta/nightly Rust CI testing**
+  - Scheduled daily at 4:00 AM UTC via `.github/workflows/nightly.yml`
+  - Tests compilation, clippy, unit tests, integration tests, docs
+  - Manual dispatch with options for full platform matrix and beta testing
+  - Non-blocking - provides early warning without failing main CI
 
 ---
 

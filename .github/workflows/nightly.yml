@@ -1,0 +1,166 @@
+name: Nightly Rust
+
+on:
+  # Run daily at 4:00 AM UTC (after Rust nightly release)
+  schedule:
+    - cron: '0 4 * * *'
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      full-matrix:
+        description: 'Run on all platforms (not just Linux)'
+        type: boolean
+        default: false
+      include-beta:
+        description: 'Also test beta toolchain'
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Cancel in-progress runs for the same workflow
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================================
+  # Nightly Rust Compilation Check
+  # ============================================================================
+
+  check-nightly:
+    name: Check (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-check
+      - name: Check compilation
+        run: cargo check --all-targets --all-features
+
+  clippy-nightly:
+    name: Clippy (nightly)
+    runs-on: ubuntu-latest
+    needs: check-nightly
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-clippy
+      # Use -W instead of -D to warn but not fail on new lints
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -W clippy::all
+
+  # ============================================================================
+  # Nightly Rust Tests
+  # ============================================================================
+
+  test-unit-nightly:
+    name: Unit Tests (nightly)
+    needs: check-nightly
+    uses: ./.github/workflows/_test.yml
+    with:
+      test-type: Unit
+      test-command: cargo test --lib --all-features
+      toolchain: nightly
+      cache-suffix: -nightly
+      os-matrix: ${{ github.event.inputs.full-matrix == 'true' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]' }}
+
+  test-integration-nightly:
+    name: Integration Tests (nightly)
+    needs: check-nightly
+    uses: ./.github/workflows/_test.yml
+    with:
+      test-type: Integration
+      test-command: cargo test --test '*' --all-features
+      toolchain: nightly
+      cache-suffix: -integration-nightly
+      os-matrix: ${{ github.event.inputs.full-matrix == 'true' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]' }}
+
+  # ============================================================================
+  # Documentation build (catches doc-related nightly issues)
+  # ============================================================================
+
+  docs-nightly:
+    name: Docs (nightly)
+    runs-on: ubuntu-latest
+    needs: check-nightly
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-docs
+      - name: Build documentation
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -W warnings
+
+  # ============================================================================
+  # Beta Rust Tests (when manually triggered with include-beta)
+  # ============================================================================
+
+  check-beta:
+    name: Check (beta)
+    if: github.event.inputs.include-beta == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@beta
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: beta-check
+      - name: Check compilation
+        run: cargo check --all-targets --all-features
+
+  test-unit-beta:
+    name: Unit Tests (beta)
+    if: github.event.inputs.include-beta == 'true'
+    needs: check-beta
+    uses: ./.github/workflows/_test.yml
+    with:
+      test-type: Unit
+      test-command: cargo test --lib --all-features
+      toolchain: beta
+      cache-suffix: -beta
+      os-matrix: '["ubuntu-latest"]'
+
+  # ============================================================================
+  # Summary job (for status reporting)
+  # ============================================================================
+
+  nightly-summary:
+    name: Nightly Summary
+    runs-on: ubuntu-latest
+    needs: [check-nightly, clippy-nightly, test-unit-nightly, test-integration-nightly, docs-nightly]
+    if: always()
+    steps:
+      - name: Check nightly status
+        run: |
+          echo "## Nightly Rust CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | ${{ needs.check-nightly.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Clippy | ${{ needs.clippy-nightly.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.test-unit-nightly.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.test-integration-nightly.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docs | ${{ needs.docs-nightly.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Report overall status
+          if [[ "${{ needs.check-nightly.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-unit-nightly.result }}" == "failure" ]] || \
+             [[ "${{ needs.test-integration-nightly.result }}" == "failure" ]]; then
+            echo "::warning::Nightly Rust has failures - investigate potential upstream breakage"
+            echo "**Warning**: Some nightly tests failed. This may indicate upcoming breaking changes in Rust." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "All nightly tests passed successfully" >> $GITHUB_STEP_SUMMARY
+          fi
