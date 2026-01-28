@@ -28,6 +28,9 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+use std::sync::Arc;
+
 // ============================================================================
 // Source Types and Detection
 // ============================================================================
@@ -47,6 +50,15 @@ pub enum SourceType {
     Zstd,
     /// Bzip2 compressed (.bz2)
     Bzip2,
+    /// AWS S3 or S3-compatible storage (s3://)
+    #[cfg(feature = "s3")]
+    S3,
+    /// Google Cloud Storage (gs://)
+    #[cfg(feature = "gcs")]
+    Gcs,
+    /// Azure Blob Storage (azure://)
+    #[cfg(feature = "azure")]
+    Azure,
 }
 
 impl SourceType {
@@ -63,6 +75,26 @@ impl SourceType {
         matches!(self, SourceType::Remote)
     }
 
+    /// Check if this source type is cloud storage (S3, GCS, or Azure)
+    pub fn is_cloud(&self) -> bool {
+        #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+        {
+            match self {
+                #[cfg(feature = "s3")]
+                SourceType::S3 => true,
+                #[cfg(feature = "gcs")]
+                SourceType::Gcs => true,
+                #[cfg(feature = "azure")]
+                SourceType::Azure => true,
+                _ => false,
+            }
+        }
+        #[cfg(not(any(feature = "s3", feature = "gcs", feature = "azure")))]
+        {
+            false
+        }
+    }
+
     /// Get the compression extension
     pub fn extension(&self) -> Option<&'static str> {
         match self {
@@ -77,7 +109,23 @@ impl SourceType {
 
 /// Detect source type from path or URL
 pub fn detect_source_type(path: &str) -> SourceType {
-    // Check for remote URLs first
+    // Check for cloud URIs first
+    #[cfg(feature = "s3")]
+    if path.starts_with("s3://") {
+        return SourceType::S3;
+    }
+
+    #[cfg(feature = "gcs")]
+    if path.starts_with("gs://") {
+        return SourceType::Gcs;
+    }
+
+    #[cfg(feature = "azure")]
+    if path.starts_with("azure://") {
+        return SourceType::Azure;
+    }
+
+    // Check for remote URLs
     if path.starts_with("http://") || path.starts_with("https://") {
         return SourceType::Remote;
     }
@@ -510,6 +558,227 @@ impl Read for HttpSource {
 }
 
 // ============================================================================
+// Cloud Storage Source (S3/GCS/Azure)
+// ============================================================================
+
+/// Cloud storage source using object_store crate
+///
+/// Supports AWS S3, S3-compatible services (MinIO, DigitalOcean Spaces, etc.),
+/// Google Cloud Storage, and Azure Blob Storage.
+///
+/// ## S3-Compatible Services
+///
+/// For S3-compatible services, set the `AWS_ENDPOINT_URL` environment variable:
+/// - DigitalOcean Spaces: `https://nyc3.digitaloceanspaces.com`
+/// - MinIO: `http://localhost:9000`
+/// - Backblaze B2: `https://s3.us-west-000.backblazeb2.com`
+///
+/// ## Authentication
+///
+/// Credentials are automatically discovered from:
+/// - Environment variables (AWS_ACCESS_KEY_ID, GOOGLE_APPLICATION_CREDENTIALS, etc.)
+/// - Config files (~/.aws/credentials, service account JSON)
+/// - Instance metadata (IAM roles, managed identities)
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+pub struct CloudSource {
+    /// Buffered chunks from the cloud object
+    buffer: Vec<u8>,
+    /// Current position in buffer
+    buffer_pos: usize,
+    /// Runtime for async operations
+    runtime: tokio::runtime::Runtime,
+    /// The object store client
+    store: Arc<dyn object_store::ObjectStore>,
+    /// Object location/path within the store
+    location: object_store::path::Path,
+    /// Current read offset in the object
+    offset: u64,
+    /// Total object size
+    total_size: u64,
+    /// Source info
+    info: SourceInfo,
+    /// Bytes read so far (including resume offset)
+    bytes_read: u64,
+}
+
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+impl CloudSource {
+    /// Chunk size for streaming reads (4 MB to match default write block size)
+    const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
+
+    /// Open a cloud object from URI
+    pub fn open(uri: &str) -> Result<Self> {
+        Self::open_with_resume(uri, 0)
+    }
+
+    /// Open with resume from specific offset
+    ///
+    /// This uses Range headers to resume from a specific byte offset,
+    /// which is useful for resuming interrupted writes.
+    pub fn open_with_resume(uri: &str, offset: u64) -> Result<Self> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| Error::Network(format!("Failed to create tokio runtime: {}", e)))?;
+
+        let (store, location, source_type) =
+            runtime.block_on(async { Self::create_store(uri).await })?;
+
+        // Get object metadata
+        let meta = runtime
+            .block_on(async { store.head(&location).await })
+            .map_err(|e| Error::Network(format!("Failed to get object metadata: {}", e)))?;
+
+        let total_size = meta.size as u64;
+        let etag = meta.e_tag.clone();
+
+        // Validate offset
+        if offset > total_size {
+            return Err(Error::InvalidConfig(format!(
+                "Resume offset {} exceeds object size {}",
+                offset, total_size
+            )));
+        }
+
+        let info = SourceInfo {
+            path: uri.to_string(),
+            source_type,
+            compressed_size: Some(total_size),
+            size: Some(total_size),
+            seekable: false,
+            resumable: true, // Cloud storage supports Range headers
+            content_type: None,
+            etag,
+        };
+
+        Ok(Self {
+            buffer: Vec::new(),
+            buffer_pos: 0,
+            runtime,
+            store,
+            location,
+            offset,
+            total_size,
+            info,
+            bytes_read: offset,
+        })
+    }
+
+    /// Create the appropriate object store client based on URI scheme
+    async fn create_store(
+        uri: &str,
+    ) -> Result<(
+        Arc<dyn object_store::ObjectStore>,
+        object_store::path::Path,
+        SourceType,
+    )> {
+        #[cfg(feature = "s3")]
+        if uri.starts_with("s3://") {
+            let (bucket, key) = parse_s3_uri(uri)?;
+            let store = object_store::aws::AmazonS3Builder::from_env()
+                .with_bucket_name(&bucket)
+                .build()
+                .map_err(|e| Error::Network(format!("Failed to create S3 client: {}", e)))?;
+            return Ok((
+                Arc::new(store),
+                object_store::path::Path::from(key),
+                SourceType::S3,
+            ));
+        }
+
+        #[cfg(feature = "gcs")]
+        if uri.starts_with("gs://") {
+            let (bucket, object) = parse_gcs_uri(uri)?;
+            let store = object_store::gcp::GoogleCloudStorageBuilder::from_env()
+                .with_bucket_name(&bucket)
+                .build()
+                .map_err(|e| Error::Network(format!("Failed to create GCS client: {}", e)))?;
+            return Ok((
+                Arc::new(store),
+                object_store::path::Path::from(object),
+                SourceType::Gcs,
+            ));
+        }
+
+        #[cfg(feature = "azure")]
+        if uri.starts_with("azure://") {
+            let (account, container, blob) = parse_azure_uri(uri)?;
+            let store = object_store::azure::MicrosoftAzureBuilder::from_env()
+                .with_account(&account)
+                .with_container_name(&container)
+                .build()
+                .map_err(|e| Error::Network(format!("Failed to create Azure client: {}", e)))?;
+            return Ok((
+                Arc::new(store),
+                object_store::path::Path::from(blob),
+                SourceType::Azure,
+            ));
+        }
+
+        Err(Error::InvalidConfig(format!(
+            "Unsupported cloud URI scheme: {}",
+            uri
+        )))
+    }
+
+    /// Fill the internal buffer with the next chunk from cloud storage
+    fn fill_buffer(&mut self) -> std::io::Result<()> {
+        if self.offset >= self.total_size {
+            return Ok(());
+        }
+
+        let end = std::cmp::min(self.offset + Self::CHUNK_SIZE, self.total_size);
+        let range = std::ops::Range {
+            start: self.offset as usize,
+            end: end as usize,
+        };
+
+        let result = self
+            .runtime
+            .block_on(async { self.store.get_range(&self.location, range).await })
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+        self.buffer = result.to_vec();
+        self.buffer_pos = 0;
+        self.offset = end;
+        Ok(())
+    }
+
+    /// Get source info
+    pub fn info(&self) -> &SourceInfo {
+        &self.info
+    }
+
+    /// Get bytes read so far (including resume offset)
+    pub fn bytes_read(&self) -> u64 {
+        self.bytes_read
+    }
+
+    /// Check if this source supports resume
+    pub fn supports_resume(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+impl Read for CloudSource {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        // Refill buffer if empty
+        if self.buffer_pos >= self.buffer.len() {
+            self.fill_buffer()?;
+            if self.buffer.is_empty() {
+                return Ok(0); // EOF
+            }
+        }
+
+        let available = self.buffer.len() - self.buffer_pos;
+        let to_read = std::cmp::min(buf.len(), available);
+        buf[..to_read].copy_from_slice(&self.buffer[self.buffer_pos..self.buffer_pos + to_read]);
+        self.buffer_pos += to_read;
+        self.bytes_read += to_read as u64;
+        Ok(to_read)
+    }
+}
+
+// ============================================================================
 // Unified Source Interface
 // ============================================================================
 
@@ -553,6 +822,38 @@ pub enum Source {
     /// HTTP source with bzip2 compression
     #[cfg(all(feature = "remote", feature = "compression"))]
     HttpBzip2(Bzip2Source<HttpSource>),
+
+    /// Cloud storage source (S3, GCS, Azure)
+    #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+    Cloud(CloudSource),
+
+    /// Cloud source with gzip compression
+    #[cfg(all(
+        any(feature = "s3", feature = "gcs", feature = "azure"),
+        feature = "compression"
+    ))]
+    CloudGzip(GzipSource<CloudSource>),
+
+    /// Cloud source with xz compression
+    #[cfg(all(
+        any(feature = "s3", feature = "gcs", feature = "azure"),
+        feature = "compression"
+    ))]
+    CloudXz(XzSource<CloudSource>),
+
+    /// Cloud source with zstd compression
+    #[cfg(all(
+        any(feature = "s3", feature = "gcs", feature = "azure"),
+        feature = "compression"
+    ))]
+    CloudZstd(Box<ZstdSource<'static, CloudSource>>),
+
+    /// Cloud source with bzip2 compression
+    #[cfg(all(
+        any(feature = "s3", feature = "gcs", feature = "azure"),
+        feature = "compression"
+    ))]
+    CloudBzip2(Bzip2Source<CloudSource>),
 }
 
 impl Source {
@@ -638,6 +939,24 @@ impl Source {
                 Ok(Source::Http(http_source))
             }
 
+            #[cfg(feature = "s3")]
+            SourceType::S3 => {
+                let cloud_source = CloudSource::open_with_resume(path, offset)?;
+                Ok(Source::Cloud(cloud_source))
+            }
+
+            #[cfg(feature = "gcs")]
+            SourceType::Gcs => {
+                let cloud_source = CloudSource::open_with_resume(path, offset)?;
+                Ok(Source::Cloud(cloud_source))
+            }
+
+            #[cfg(feature = "azure")]
+            SourceType::Azure => {
+                let cloud_source = CloudSource::open_with_resume(path, offset)?;
+                Ok(Source::Cloud(cloud_source))
+            }
+
             #[cfg(not(feature = "compression"))]
             SourceType::Gzip | SourceType::Xz | SourceType::Zstd | SourceType::Bzip2 => {
                 if offset > 0 {
@@ -680,6 +999,28 @@ impl Source {
             Source::HttpZstd(s) => s.info(),
             #[cfg(all(feature = "remote", feature = "compression"))]
             Source::HttpBzip2(s) => s.info(),
+            #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+            Source::Cloud(s) => s.info(),
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudGzip(s) => s.info(),
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudXz(s) => s.info(),
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudZstd(s) => s.info(),
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudBzip2(s) => s.info(),
         }
     }
 
@@ -722,6 +1063,28 @@ impl Read for Source {
             Source::HttpZstd(s) => s.read(buf),
             #[cfg(all(feature = "remote", feature = "compression"))]
             Source::HttpBzip2(s) => s.read(buf),
+            #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+            Source::Cloud(s) => s.read(buf),
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudGzip(s) => s.read(buf),
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudXz(s) => s.read(buf),
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudZstd(s) => s.read(buf),
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudBzip2(s) => s.read(buf),
         }
     }
 }
@@ -729,6 +1092,55 @@ impl Read for Source {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Parse S3 URI (s3://bucket/key) into (bucket, key)
+#[cfg(feature = "s3")]
+fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
+    let without_scheme = uri
+        .strip_prefix("s3://")
+        .ok_or_else(|| Error::InvalidConfig("Invalid S3 URI format".to_string()))?;
+    let parts: Vec<&str> = without_scheme.splitn(2, '/').collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err(Error::InvalidConfig(
+            "S3 URI must be s3://bucket/key".to_string(),
+        ));
+    }
+    Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+/// Parse GCS URI (gs://bucket/object) into (bucket, object)
+#[cfg(feature = "gcs")]
+fn parse_gcs_uri(uri: &str) -> Result<(String, String)> {
+    let without_scheme = uri
+        .strip_prefix("gs://")
+        .ok_or_else(|| Error::InvalidConfig("Invalid GCS URI format".to_string()))?;
+    let parts: Vec<&str> = without_scheme.splitn(2, '/').collect();
+    if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+        return Err(Error::InvalidConfig(
+            "GCS URI must be gs://bucket/object".to_string(),
+        ));
+    }
+    Ok((parts[0].to_string(), parts[1].to_string()))
+}
+
+/// Parse Azure URI (azure://account/container/blob) into (account, container, blob)
+#[cfg(feature = "azure")]
+fn parse_azure_uri(uri: &str) -> Result<(String, String, String)> {
+    let without_scheme = uri
+        .strip_prefix("azure://")
+        .ok_or_else(|| Error::InvalidConfig("Invalid Azure URI format".to_string()))?;
+    let parts: Vec<&str> = without_scheme.splitn(3, '/').collect();
+    if parts.len() != 3 || parts.iter().any(|p| p.is_empty()) {
+        return Err(Error::InvalidConfig(
+            "Azure URI must be azure://account/container/blob".to_string(),
+        ));
+    }
+    Ok((
+        parts[0].to_string(),
+        parts[1].to_string(),
+        parts[2].to_string(),
+    ))
+}
 
 /// Open a file with buffered reading
 fn open_file_buffered(path: &str) -> Result<BufReader<File>> {
@@ -868,7 +1280,47 @@ pub fn validate_source(path: &str) -> Result<SourceInfo> {
                 ))
             }
         }
+        #[cfg(feature = "s3")]
+        SourceType::S3 => {
+            // Validate S3 URI and check object exists via HEAD request
+            validate_cloud_source(path, source_type)
+        }
+        #[cfg(feature = "gcs")]
+        SourceType::Gcs => {
+            // Validate GCS URI and check object exists via HEAD request
+            validate_cloud_source(path, source_type)
+        }
+        #[cfg(feature = "azure")]
+        SourceType::Azure => {
+            // Validate Azure URI and check object exists via HEAD request
+            validate_cloud_source(path, source_type)
+        }
     }
+}
+
+/// Validate a cloud source by checking if the object exists (via HEAD/metadata request)
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+fn validate_cloud_source(path: &str, source_type: SourceType) -> Result<SourceInfo> {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| Error::Network(format!("Failed to create tokio runtime: {}", e)))?;
+
+    let (store, location, _) = runtime.block_on(async { CloudSource::create_store(path).await })?;
+
+    // Use HEAD request (object metadata) to check existence without downloading
+    let meta = runtime
+        .block_on(async { store.head(&location).await })
+        .map_err(|e| Error::Network(format!("Object not found or inaccessible: {}", e)))?;
+
+    Ok(SourceInfo {
+        path: path.to_string(),
+        source_type,
+        compressed_size: Some(meta.size as u64),
+        size: Some(meta.size as u64),
+        seekable: false,
+        resumable: true,
+        content_type: None,
+        etag: meta.e_tag,
+    })
 }
 
 // ============================================================================
@@ -910,6 +1362,25 @@ mod tests {
         assert_eq!(SourceType::Xz.extension(), Some(".xz"));
         assert_eq!(SourceType::Zstd.extension(), Some(".zst"));
         assert_eq!(SourceType::Bzip2.extension(), Some(".bz2"));
+    }
+
+    #[test]
+    fn test_source_type_is_cloud() {
+        // Non-cloud types should return false
+        assert!(!SourceType::LocalFile.is_cloud());
+        assert!(!SourceType::Remote.is_cloud());
+        assert!(!SourceType::Gzip.is_cloud());
+        assert!(!SourceType::Xz.is_cloud());
+        assert!(!SourceType::Zstd.is_cloud());
+        assert!(!SourceType::Bzip2.is_cloud());
+
+        // Cloud types should return true (when features are enabled)
+        #[cfg(feature = "s3")]
+        assert!(SourceType::S3.is_cloud());
+        #[cfg(feature = "gcs")]
+        assert!(SourceType::Gcs.is_cloud());
+        #[cfg(feature = "azure")]
+        assert!(SourceType::Azure.is_cloud());
     }
 
     // -------------------------------------------------------------------------
@@ -970,6 +1441,115 @@ mod tests {
     fn test_detect_source_type_bzip2() {
         assert_eq!(detect_source_type("file.iso.bz2"), SourceType::Bzip2);
         assert_eq!(detect_source_type("file.iso.bzip2"), SourceType::Bzip2);
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_detect_source_type_s3() {
+        assert_eq!(detect_source_type("s3://bucket/key"), SourceType::S3);
+        assert_eq!(
+            detect_source_type("s3://my-bucket/path/to/image.iso"),
+            SourceType::S3
+        );
+        // Even if it looks like compressed, s3:// scheme takes precedence
+        assert_eq!(
+            detect_source_type("s3://bucket/image.iso.gz"),
+            SourceType::S3
+        );
+    }
+
+    #[cfg(feature = "gcs")]
+    #[test]
+    fn test_detect_source_type_gcs() {
+        assert_eq!(detect_source_type("gs://bucket/object"), SourceType::Gcs);
+        assert_eq!(
+            detect_source_type("gs://my-bucket/path/to/image.iso"),
+            SourceType::Gcs
+        );
+    }
+
+    #[cfg(feature = "azure")]
+    #[test]
+    fn test_detect_source_type_azure() {
+        assert_eq!(
+            detect_source_type("azure://account/container/blob"),
+            SourceType::Azure
+        );
+        assert_eq!(
+            detect_source_type("azure://storageaccount/images/ubuntu.iso"),
+            SourceType::Azure
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Cloud URI parsing tests
+    // -------------------------------------------------------------------------
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_parse_s3_uri_valid() {
+        let (bucket, key) = parse_s3_uri("s3://my-bucket/path/to/file.iso").unwrap();
+        assert_eq!(bucket, "my-bucket");
+        assert_eq!(key, "path/to/file.iso");
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_parse_s3_uri_simple() {
+        let (bucket, key) = parse_s3_uri("s3://bucket/key").unwrap();
+        assert_eq!(bucket, "bucket");
+        assert_eq!(key, "key");
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_parse_s3_uri_invalid() {
+        // Missing key
+        assert!(parse_s3_uri("s3://bucket/").is_err());
+        assert!(parse_s3_uri("s3://bucket").is_err());
+        // Missing bucket
+        assert!(parse_s3_uri("s3:///key").is_err());
+        // Wrong scheme
+        assert!(parse_s3_uri("gs://bucket/key").is_err());
+    }
+
+    #[cfg(feature = "gcs")]
+    #[test]
+    fn test_parse_gcs_uri_valid() {
+        let (bucket, object) = parse_gcs_uri("gs://my-bucket/path/to/file.iso").unwrap();
+        assert_eq!(bucket, "my-bucket");
+        assert_eq!(object, "path/to/file.iso");
+    }
+
+    #[cfg(feature = "gcs")]
+    #[test]
+    fn test_parse_gcs_uri_invalid() {
+        assert!(parse_gcs_uri("gs://bucket/").is_err());
+        assert!(parse_gcs_uri("gs://bucket").is_err());
+        assert!(parse_gcs_uri("s3://bucket/key").is_err());
+    }
+
+    #[cfg(feature = "azure")]
+    #[test]
+    fn test_parse_azure_uri_valid() {
+        let (account, container, blob) =
+            parse_azure_uri("azure://storageaccount/mycontainer/path/to/blob.iso").unwrap();
+        assert_eq!(account, "storageaccount");
+        assert_eq!(container, "mycontainer");
+        assert_eq!(blob, "path/to/blob.iso");
+    }
+
+    #[cfg(feature = "azure")]
+    #[test]
+    fn test_parse_azure_uri_invalid() {
+        // Missing blob
+        assert!(parse_azure_uri("azure://account/container/").is_err());
+        // Missing container
+        assert!(parse_azure_uri("azure://account//blob").is_err());
+        // Missing account
+        assert!(parse_azure_uri("azure:///container/blob").is_err());
+        // Too few parts
+        assert!(parse_azure_uri("azure://account/container").is_err());
     }
 
     // -------------------------------------------------------------------------

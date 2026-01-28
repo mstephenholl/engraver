@@ -109,6 +109,12 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         SourceType::Xz => "xz compressed",
         SourceType::Zstd => "zstd compressed",
         SourceType::Bzip2 => "bzip2 compressed",
+        #[cfg(feature = "s3")]
+        SourceType::S3 => "S3 object",
+        #[cfg(feature = "gcs")]
+        SourceType::Gcs => "GCS object",
+        #[cfg(feature = "azure")]
+        SourceType::Azure => "Azure blob",
     };
 
     if let Some(size) = source_size {

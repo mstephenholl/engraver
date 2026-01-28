@@ -51,6 +51,11 @@ cargo-husky = { workspace = true }
 
 [features]
 default = []
+# Cloud storage support (forwarded to engraver-core)
+s3 = ["engraver-core/s3"]
+gcs = ["engraver-core/gcs"]
+azure = ["engraver-core/azure"]
+cloud = ["s3", "gcs", "azure"]
 
 [lints.rust]
 unsafe_code = "warn"

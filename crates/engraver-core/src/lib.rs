@@ -60,6 +60,8 @@ pub use resume::{
 pub use settings::{
     BehaviorSettings, BenchmarkSettings, ChecksumSettings, Settings, SettingsError, WriteSettings,
 };
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+pub use source::CloudSource;
 pub use source::{
     detect_source_type, get_source_size, validate_source, Source, SourceInfo, SourceType,
 };
