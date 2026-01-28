@@ -216,6 +216,7 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
         if result1 == 0 && result2 == 0 && block_count > 0 && block_size > 0 {
             return Ok(block_count * block_size as u64);
         }
+        tracing::debug!("DKIOCGETBLOCKCOUNT/SIZE ioctl failed for {path}, falling back to seek");
     }
 
     // Fallback: seek to end
@@ -253,6 +254,7 @@ fn get_device_block_size(path: &str) -> Result<u32> {
         if result == 0 && block_size > 0 {
             return Ok(block_size);
         }
+        tracing::debug!("DKIOCGETBLOCKSIZE ioctl failed for {path}, defaulting to 512");
     }
 
     // Default to 512

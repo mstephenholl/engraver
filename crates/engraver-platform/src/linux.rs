@@ -304,6 +304,7 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
         if result == 0 && size > 0 {
             return Ok(size);
         }
+        tracing::debug!("BLKGETSIZE64 ioctl failed for {path}, falling back to lseek");
     }
 
     // Fallback: seek to end
@@ -349,6 +350,7 @@ fn get_device_block_size(path: &str) -> Result<u32> {
         if result == 0 && block_size > 0 {
             return Ok(block_size as u32);
         }
+        tracing::debug!("BLKSSZGET ioctl failed for {path}, defaulting to 512");
     }
 
     // Default to 512
