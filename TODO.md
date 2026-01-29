@@ -162,8 +162,18 @@ Planned features, improvements, and development roadmap for Engraver.
 
 ## Improvements
 
-- [ ] **Better error messages for common failures**
-- [ ] **More detailed progress information** (blocks written, retries, etc.)
+- [x] **Better error messages for common failures**
+  - User-friendly error formatting with actionable suggestions
+  - Platform-specific hints for Unix (errno) and Windows error codes
+  - Detailed suggestions for common issues: permission denied, device busy,
+    partial writes, verification failures, network errors, etc.
+- [x] **More detailed progress information** (blocks written, retries, etc.)
+  - Progress bar shows: speed, current block/total blocks, ETA
+  - Retry count displayed when retries occur during write
+  - Block size and total blocks shown before write starts
+  - Completion summary includes blocks written, time, speed, and retry count
+  - Checkpoint messages show bytes and blocks written
+  - Verification progress shows block info and speed
 - [x] **Add warning logs for silent errors**
   - Added `tracing::warn!()` in detect crate for recoverable errors
   - Implemented in linux.rs, macos.rs error paths (e.g., size parsing failures)

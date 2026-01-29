@@ -454,7 +454,17 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     }
 
     // Step 7: Open source and target device
+    let total_blocks = source_size
+        .map(|s| s.div_ceil(block_size as u64))
+        .unwrap_or(0);
     println_if!(silent, "\n{}", style("Writing image...").bold());
+    println_if!(
+        silent,
+        "  {} Block size: {}, Total blocks: {}",
+        style("ℹ").blue(),
+        format_size(block_size as u64),
+        total_blocks
+    );
 
     let mut source =
         Source::open_with_offset(&args.source, resume_offset).context("Failed to open source")?;
@@ -520,11 +530,22 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     let writer = writer.on_progress(move |progress| {
         pb_clone.set_position(progress.bytes_written);
-        pb_clone.set_message(format!(
-            "{}/s, ETA: {}",
+
+        // Build detailed progress message
+        let mut msg = format!(
+            "{}/s | Block {}/{} | ETA: {}",
             format_size(progress.speed_bps),
+            progress.current_block,
+            progress.total_blocks,
             progress.eta_display()
-        ));
+        );
+
+        // Show retry count if any retries have occurred
+        if progress.retry_count > 0 {
+            msg.push_str(&format!(" | {} retries", progress.retry_count));
+        }
+
+        pb_clone.set_message(msg);
 
         // Track progress for checkpointing (checkpoint saved in main thread)
         last_checkpoint_clone.store(progress.bytes_written, Ordering::Relaxed);
@@ -562,24 +583,40 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                 0.0
             };
 
+            // Calculate blocks written
+            let blocks_written = total_written.div_ceil(block_size as u64);
+
+            // Build retry info if any retries occurred
+            let retry_info = if result.retry_count > 0 {
+                format!(", {} retries", result.retry_count)
+            } else {
+                String::new()
+            };
+
             if resume_offset > 0 {
+                let resumed_blocks = resumed_bytes.div_ceil(block_size as u64);
                 println_if!(
                     silent,
-                    "  {} Wrote {} (resumed from {}) in {:.1}s ({}/s)",
+                    "  {} Wrote {} ({} blocks, resumed from {} / {} blocks) in {:.1}s ({}/s){}",
                     style("✓").green(),
                     format_size(total_written),
+                    blocks_written,
                     format_size(resumed_bytes),
+                    resumed_blocks,
                     elapsed.as_secs_f64(),
-                    format_size(speed as u64)
+                    format_size(speed as u64),
+                    retry_info
                 );
             } else {
                 println_if!(
                     silent,
-                    "  {} Wrote {} in {:.1}s ({}/s)",
+                    "  {} Wrote {} ({} blocks) in {:.1}s ({}/s){}",
                     style("✓").green(),
                     format_size(total_written),
+                    blocks_written,
                     elapsed.as_secs_f64(),
-                    format_size(speed as u64)
+                    format_size(speed as u64),
+                    retry_info
                 );
             }
             true
@@ -595,11 +632,12 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                 } else {
                     println_if!(
                         silent,
-                        "\n{} Checkpoint saved at {} bytes",
+                        "\n{} Checkpoint saved: {} ({} blocks written)",
                         style("ℹ").blue(),
-                        bytes_written
+                        format_size(bytes_written),
+                        blocks_written
                     );
-                    println_if!(silent, "  Run with --resume to continue");
+                    println_if!(silent, "  Run with --resume to continue from this point");
                 }
             }
             println_if!(silent, "\n{}", style("Write cancelled by user.").yellow());
@@ -615,14 +653,16 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                     tracing::warn!("Failed to save checkpoint: {}", save_err);
                 } else {
                     eprintln!(
-                        "{} Checkpoint saved at {} bytes",
+                        "{} Checkpoint saved: {} ({} blocks written)",
                         style("ℹ").blue(),
-                        bytes_written
+                        format_size(bytes_written),
+                        blocks_written
                     );
-                    eprintln!("  Run with --resume to continue");
+                    eprintln!("  Run with --resume to continue from this point");
                 }
             }
-            bail!("Write failed: {}", e);
+            // Provide user-friendly error with suggestions
+            bail!("{}", format_write_error(e));
         }
     };
 
@@ -664,8 +704,21 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
+            let verify_block_size = block_size;
             let mut verifier = Verifier::with_config(config).on_progress(move |p| {
                 pb_clone.set_position(p.bytes_processed);
+                let blocks = p.bytes_processed.div_ceil(verify_block_size as u64);
+                let total = p
+                    .total_bytes
+                    .map(|t| t.div_ceil(verify_block_size as u64))
+                    .unwrap_or(0);
+                pb_clone.set_message(format!(
+                    "{}/s | Block {}/{} | ETA: {}",
+                    p.speed_display(),
+                    blocks,
+                    total,
+                    p.eta_display()
+                ));
             });
 
             let verify_result = verifier.compare(&mut source_file, &mut *target, total_size);
@@ -674,18 +727,35 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
             match verify_result {
                 Ok(result) if result.success => {
+                    let blocks_verified = result.bytes_verified.div_ceil(block_size as u64);
                     println_if!(
                         silent,
-                        "  {} Verification passed ({} verified)",
+                        "  {} Verification passed: {} ({} blocks) in {:.1}s ({}/s)",
                         style("✓").green(),
-                        format_size(result.bytes_verified)
+                        format_size(result.bytes_verified),
+                        blocks_verified,
+                        result.elapsed.as_secs_f64(),
+                        format_size(result.speed_bps)
                     );
                 }
                 Ok(result) => {
                     bail!(
-                        "Verification failed! {} mismatch(es) found. First mismatch at offset {}",
+                        "Verification failed! {} mismatch(es) found.\n\
+                         First mismatch at offset {} (block {})\n\
+                         \n\
+                         This indicates the written data doesn't match the source.\n\
+                         \n\
+                         Possible causes:\n\
+                         • Faulty USB drive or SD card\n\
+                         • Poor quality or counterfeit storage device\n\
+                         • USB connection issues\n\
+                         \n\
+                         Suggestions:\n\
+                         • Try writing again to a different device\n\
+                         • Use a different USB port (preferably USB 3.0)",
                         result.mismatches,
-                        result.first_mismatch_offset.unwrap_or(0)
+                        result.first_mismatch_offset.unwrap_or(0),
+                        result.first_mismatch_offset.unwrap_or(0) / block_size as u64
                     );
                 }
                 Err(e) => {
@@ -707,8 +777,19 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
+            let checksum_block_size = block_size;
+            let checksum_total = total_size;
             let mut verifier = Verifier::with_config(config).on_progress(move |p| {
                 pb_clone.set_position(p.bytes_processed);
+                let blocks = p.bytes_processed.div_ceil(checksum_block_size as u64);
+                let total_blocks = checksum_total.div_ceil(checksum_block_size as u64);
+                pb_clone.set_message(format!(
+                    "{}/s | Block {}/{} | ETA: {}",
+                    p.speed_display(),
+                    blocks,
+                    total_blocks,
+                    p.eta_display()
+                ));
             });
 
             let written_checksum = verifier
@@ -722,12 +803,23 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             let mut source_for_checksum =
                 Source::open(&args.source).context("Failed to reopen source")?;
 
+            let source_total = source_size.unwrap_or(0);
             let pb = create_progress_bar(source_size, "Checksumming source", silent);
 
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
+            let source_block_size = block_size;
             let mut verifier = Verifier::with_config(config).on_progress(move |p| {
                 pb_clone.set_position(p.bytes_processed);
+                let blocks = p.bytes_processed.div_ceil(source_block_size as u64);
+                let total_blocks = source_total.div_ceil(source_block_size as u64);
+                pb_clone.set_message(format!(
+                    "{}/s | Block {}/{} | ETA: {}",
+                    p.speed_display(),
+                    blocks,
+                    total_blocks,
+                    p.eta_display()
+                ));
             });
 
             let source_checksum = verifier
@@ -743,13 +835,26 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             if written_checksum.matches(&source_checksum) {
                 println_if!(
                     silent,
-                    "  {} Checksum verification passed",
+                    "  {} Checksum verification passed (SHA-256)",
                     style("✓").green()
                 );
-                println_if!(silent, "    SHA-256: {}", written_checksum.to_hex());
+                println_if!(silent, "    {}", written_checksum.to_hex());
             } else {
                 bail!(
-                    "Checksum mismatch!\n  Source:  {}\n  Written: {}",
+                    "Checksum mismatch!\n\
+                     Source:  {}\n\
+                     Written: {}\n\
+                     \n\
+                     The written data doesn't match the source.\n\
+                     \n\
+                     Possible causes:\n\
+                     • Faulty USB drive or SD card\n\
+                     • Data corruption during write\n\
+                     • Source file changed during operation\n\
+                     \n\
+                     Suggestions:\n\
+                     • Try writing again\n\
+                     • Use a different device",
                     source_checksum.to_hex(),
                     written_checksum.to_hex()
                 );
@@ -860,6 +965,451 @@ fn format_size(bytes: u64) -> String {
         format!("{:.2} KB", bytes as f64 / KB as f64)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+/// Format a write error with user-friendly suggestions
+fn format_write_error(error: &engraver_core::Error) -> String {
+    use engraver_core::Error;
+
+    match error {
+        Error::Io(io_err) => format_io_error(io_err),
+        Error::PermissionDenied(msg) => {
+            #[cfg(unix)]
+            {
+                format!(
+                    "Permission denied: {}\n\
+                     \n\
+                     Suggestions:\n\
+                     • Run with elevated privileges: sudo engraver write ...\n\
+                     • Check that you have write access to the device\n\
+                     • Ensure the device is not mounted read-only",
+                    msg
+                )
+            }
+            #[cfg(windows)]
+            {
+                format!(
+                    "Permission denied: {}\n\
+                     \n\
+                     Suggestions:\n\
+                     • Run as Administrator (right-click and select 'Run as administrator')\n\
+                     • Check that no other program is using the device\n\
+                     • Try closing any file explorer windows showing the drive",
+                    msg
+                )
+            }
+        }
+        Error::DeviceBusy(msg) => {
+            format!(
+                "Device is busy: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Close any applications using the device\n\
+                 • Unmount all partitions on the device\n\
+                 • On Linux: lsof {} | grep -v COMMAND\n\
+                 • On macOS: lsof | grep <device>\n\
+                 • Try running with --force to skip safety checks (use with caution)",
+                msg, msg
+            )
+        }
+        Error::PartialWrite { expected, actual } => {
+            format!(
+                "Partial write: expected {} bytes, wrote {} bytes\n\
+                 \n\
+                 This usually indicates:\n\
+                 • Device write errors (try a different USB port)\n\
+                 • Device is failing or of poor quality\n\
+                 • USB connection issues (try a shorter cable)\n\
+                 \n\
+                 Suggestions:\n\
+                 • Run with --resume to retry from the last checkpoint\n\
+                 • Try a smaller block size: --block-size 1M\n\
+                 • Check dmesg/system logs for device errors",
+                expected, actual
+            )
+        }
+        Error::DeviceNotFound(path) => {
+            format!(
+                "Device not found: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check that the device is connected\n\
+                 • Run 'engraver list' to see available devices\n\
+                 • Verify the device path is correct\n\
+                 • On Linux, device paths are typically /dev/sdX or /dev/nvmeXnY\n\
+                 • On macOS, device paths are typically /dev/diskN",
+                path
+            )
+        }
+        Error::SizeMismatch {
+            source_size,
+            target_size,
+        } => {
+            format!(
+                "Size mismatch: source is {} bytes, target device is {} bytes\n\
+                 \n\
+                 The target device is smaller than the source image.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Use a larger USB drive or SD card\n\
+                 • Verify you selected the correct source image\n\
+                 • Check if the image is compressed and needs more space",
+                source_size, target_size
+            )
+        }
+        Error::VerificationFailed {
+            offset,
+            expected,
+            actual,
+        } => {
+            format!(
+                "Verification failed at offset {}: expected {}, got {}\n\
+                 \n\
+                 The written data does not match the source.\n\
+                 \n\
+                 Possible causes:\n\
+                 • Faulty USB drive or SD card\n\
+                 • Poor quality or counterfeit storage device\n\
+                 • USB connection issues\n\
+                 \n\
+                 Suggestions:\n\
+                 • Try writing again to a different device\n\
+                 • Use a different USB port (preferably USB 3.0)\n\
+                 • Test the device with 'engraver benchmark <device>'",
+                offset, expected, actual
+            )
+        }
+        Error::Network(msg) => {
+            format!(
+                "Network error: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check your internet connection\n\
+                 • Verify the URL is accessible in a browser\n\
+                 • If using a proxy, ensure it's configured correctly\n\
+                 • Try downloading the file locally first, then write it",
+                msg
+            )
+        }
+        Error::Decompression(msg) => {
+            format!(
+                "Decompression error: {}\n\
+                 \n\
+                 The compressed file may be corrupted.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Verify the file checksum matches the expected value\n\
+                 • Re-download the file if it's from the internet\n\
+                 • Try decompressing manually to verify the file\n\
+                 • Ensure you have enough disk space for decompression",
+                msg
+            )
+        }
+        Error::Cancelled => "Operation cancelled".to_string(),
+        _ => format!("Write failed: {}", error),
+    }
+}
+
+/// Format an IO error with user-friendly suggestions
+fn format_io_error(io_err: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+
+    let kind = io_err.kind();
+    let base_msg = io_err.to_string();
+
+    match kind {
+        ErrorKind::PermissionDenied => {
+            #[cfg(unix)]
+            {
+                format!(
+                    "Permission denied: {}\n\
+                     \n\
+                     Suggestions:\n\
+                     • Run with sudo: sudo engraver write ...\n\
+                     • Check device permissions with: ls -la <device>\n\
+                     • Ensure you're in the 'disk' group (Linux)",
+                    base_msg
+                )
+            }
+            #[cfg(windows)]
+            {
+                format!(
+                    "Permission denied: {}\n\
+                     \n\
+                     Suggestions:\n\
+                     • Run as Administrator\n\
+                     • Close any programs using the device\n\
+                     • Check if the device is write-protected",
+                    base_msg
+                )
+            }
+        }
+        ErrorKind::NotFound => {
+            format!(
+                "Device not found: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check that the device is connected\n\
+                 • Run 'engraver list' to see available devices\n\
+                 • The device may have been disconnected during the operation",
+                base_msg
+            )
+        }
+        ErrorKind::InvalidInput => {
+            format!(
+                "Invalid input: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check the block size is valid (4K-64M)\n\
+                 • Verify the source file path is correct",
+                base_msg
+            )
+        }
+        ErrorKind::WriteZero => {
+            format!(
+                "Write returned zero bytes: {}\n\
+                 \n\
+                 The device stopped accepting data.\n\
+                 \n\
+                 Possible causes:\n\
+                 • Device is full\n\
+                 • Device was disconnected\n\
+                 • Device is failing\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check the device connection\n\
+                 • Try a different USB port\n\
+                 • Test the device with 'engraver benchmark <device>'",
+                base_msg
+            )
+        }
+        ErrorKind::Interrupted => {
+            format!(
+                "Operation interrupted: {}\n\
+                 \n\
+                 The write was interrupted by a signal.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Run with --resume to continue from the last checkpoint",
+                base_msg
+            )
+        }
+        ErrorKind::TimedOut => {
+            format!(
+                "Operation timed out: {}\n\
+                 \n\
+                 The device is not responding.\n\
+                 \n\
+                 Possible causes:\n\
+                 • Device is very slow or unresponsive\n\
+                 • USB connection issues\n\
+                 • Device may be failing\n\
+                 \n\
+                 Suggestions:\n\
+                 • Try a different USB port (USB 3.0 if available)\n\
+                 • Use a shorter or better quality USB cable\n\
+                 • Test the device with 'engraver benchmark <device>'",
+                base_msg
+            )
+        }
+        _ => {
+            // Check for specific OS error codes
+            #[cfg(unix)]
+            if let Some(os_err) = io_err.raw_os_error() {
+                return format_unix_error(os_err, &base_msg);
+            }
+
+            #[cfg(windows)]
+            if let Some(os_err) = io_err.raw_os_error() {
+                return format_windows_error(os_err, &base_msg);
+            }
+
+            format!(
+                "IO error: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check the device is still connected\n\
+                 • Run with --resume to continue from the last checkpoint\n\
+                 • Check system logs for more details",
+                base_msg
+            )
+        }
+    }
+}
+
+/// Format Unix-specific error codes
+#[cfg(unix)]
+fn format_unix_error(errno: i32, base_msg: &str) -> String {
+    match errno {
+        5 => {
+            // EIO - Input/output error
+            format!(
+                "I/O error: {}\n\
+                 \n\
+                 A hardware I/O error occurred.\n\
+                 \n\
+                 Possible causes:\n\
+                 • Bad sectors on the device\n\
+                 • Device is failing\n\
+                 • USB connection issues\n\
+                 \n\
+                 Suggestions:\n\
+                 • Try a different USB port\n\
+                 • Use a different device\n\
+                 • Check dmesg for detailed error messages:\n\
+                   dmesg | tail -50",
+                base_msg
+            )
+        }
+        16 => {
+            // EBUSY - Device or resource busy
+            format!(
+                "Device busy: {}\n\
+                 \n\
+                 Another process is using the device.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Unmount all partitions: umount /dev/sdX*\n\
+                 • Check what's using it: lsof /dev/sdX\n\
+                 • Kill processes using the device\n\
+                 • Try running with --force",
+                base_msg
+            )
+        }
+        19 => {
+            // ENODEV - No such device
+            format!(
+                "Device disconnected: {}\n\
+                 \n\
+                 The device is no longer available.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check that the device is still connected\n\
+                 • Try reconnecting the device\n\
+                 • Use a different USB port",
+                base_msg
+            )
+        }
+        28 => {
+            // ENOSPC - No space left on device
+            format!(
+                "No space left on device: {}\n\
+                 \n\
+                 The device is full or too small for the image.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Use a larger device\n\
+                 • Verify the image size matches the device capacity\n\
+                 • Check for hidden partitions using: fdisk -l",
+                base_msg
+            )
+        }
+        30 => {
+            // EROFS - Read-only file system
+            format!(
+                "Read-only device: {}\n\
+                 \n\
+                 The device is mounted read-only or write-protected.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check if the device has a physical write-protect switch\n\
+                 • Unmount and remount with write permissions\n\
+                 • Some SD cards have a lock slider on the side",
+                base_msg
+            )
+        }
+        _ => {
+            format!(
+                "System error (errno {}): {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check dmesg for detailed error messages:\n\
+                   dmesg | tail -50\n\
+                 • Run with --resume to continue from the last checkpoint",
+                errno, base_msg
+            )
+        }
+    }
+}
+
+/// Format Windows-specific error codes
+#[cfg(windows)]
+fn format_windows_error(code: i32, base_msg: &str) -> String {
+    match code {
+        5 => {
+            // ERROR_ACCESS_DENIED
+            format!(
+                "Access denied: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Run as Administrator\n\
+                 • Close any programs accessing the device\n\
+                 • Check if another backup or sync program is running",
+                base_msg
+            )
+        }
+        21 => {
+            // ERROR_NOT_READY
+            format!(
+                "Device not ready: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Wait for the device to initialize\n\
+                 • Try reconnecting the device\n\
+                 • Check Device Manager for issues",
+                base_msg
+            )
+        }
+        32 => {
+            // ERROR_SHARING_VIOLATION
+            format!(
+                "Sharing violation: {}\n\
+                 \n\
+                 Another program is using the device.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Close File Explorer windows showing the drive\n\
+                 • Close any antivirus scanning the device\n\
+                 • Use Resource Monitor to find the program",
+                base_msg
+            )
+        }
+        112 => {
+            // ERROR_DISK_FULL
+            format!(
+                "Disk full: {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Use a larger device\n\
+                 • Verify the image size fits on the device",
+                base_msg
+            )
+        }
+        1117 => {
+            // ERROR_IO_DEVICE
+            format!(
+                "I/O device error: {}\n\
+                 \n\
+                 A hardware error occurred.\n\
+                 \n\
+                 Suggestions:\n\
+                 • Try a different USB port\n\
+                 • Use a different device\n\
+                 • Check Event Viewer for details",
+                base_msg
+            )
+        }
+        _ => {
+            format!(
+                "Windows error (code {}): {}\n\
+                 \n\
+                 Suggestions:\n\
+                 • Check Event Viewer for details\n\
+                 • Run with --resume to continue from the last checkpoint",
+                code, base_msg
+            )
+        }
     }
 }
 
