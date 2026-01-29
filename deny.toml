@@ -20,21 +20,16 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = []
 
 [licenses]
-# List of allowed licenses
+# List of allowed licenses (only include licenses actually used by dependencies)
 allow = [
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
-    "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
     "Zlib",
-    "MPL-2.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
-    "CC0-1.0",
     "BSL-1.0",
-    "OpenSSL",
     # webpki-roots uses this permissive data license
     "CDLA-Permissive-2.0",
     # libbz2-rs-sys uses this permissive bzip2 license
@@ -58,8 +53,14 @@ wildcards = "allow"  # Allow workspace path dependencies
 deny = []
 # List of crates to allow
 allow = []
-# Skip specific versions (for transitive dependencies)
-skip = []
+# Skip specific versions (for transitive dependencies that have multiple versions)
+# These are caused by different parts of the dependency tree requiring different versions
+skip = [
+    # ring requires 0.2.x, newer crates use 0.3.x
+    { crate = "getrandom@0.2", reason = "ring dependency uses older version" },
+    # Various crates in transition between windows-sys versions
+    { crate = "windows-sys@0.60", reason = "transitive dependency version mismatch" },
+]
 # Skip checking tree for these crates
 skip-tree = []
 

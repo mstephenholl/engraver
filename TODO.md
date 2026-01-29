@@ -57,7 +57,7 @@ Planned features, improvements, and development roadmap for Engraver.
   - Display partition layout of source images
   - Show what will be written before confirmation
 
-- [ ] **Cloud storage support (S3/GCS/Azure Blob)**
+- [x] **Cloud storage support (S3/GCS/Azure Blob)**
   - Download ISOs directly from cloud storage buckets
   - Support for presigned URLs and credential-based authentication
   - Resume support via Range headers (same as HTTP)
@@ -192,7 +192,7 @@ Planned features, improvements, and development roadmap for Engraver.
 - [ ] **Compression decompression tests** with real compressed images
 
 - [x] **Expand fuzz targets**
-  - Additional coverage of edge cases (currently 12 targets)
+  - Added additional coverage of edge cases (currently 20 targets)
 
 ---
 
@@ -212,44 +212,3 @@ Planned features, improvements, and development roadmap for Engraver.
 
 ---
 
-## Code Quality Assessment
-
-### Strengths
-
-- No panicking `unwrap()` calls in production code
-- Excellent error handling with custom error types (`thiserror`)
-- Proper constant definitions throughout
-- Safe command execution (no shell injection vectors)
-- Well-justified unsafe code with documentation
-- Reasonable performance patterns
-
-### Minor Improvements
-
-- [ ] Consider `String::with_capacity()` in label decoding (minor optimization)
-
----
-
-## Codebase Statistics
-
-| Metric | Value |
-|--------|-------|
-| Total Rust files | 44 |
-| Lines of code (src) | ~13,200 |
-| Main crates | 5 |
-| Platforms supported | 3 |
-| Compression formats | 4 |
-| Checksum algorithms | 4 |
-| Fuzzing targets | 12 |
-| Test count | 589+ |
-
----
-
-## Progress Metrics
-
-| Metric | Status |
-|--------|--------|
-| Dead code annotations | 2 (GUI only) |
-| CI security checks | 3 (audit + deny + secrets) |
-| Code coverage | Tracked via Codecov (target >70%) |
-| Dependabot enabled | Yes |
-| CLI unit test coverage | 589+ tests |

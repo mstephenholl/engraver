@@ -19,6 +19,18 @@ cargo clippy --all-targets --all-features -- -D warnings || {
     exit 1
 }
 
+# Cargo deny (license, security advisories, dependency bans)
+echo "Running cargo deny..."
+if command -v cargo-deny &> /dev/null; then
+    cargo deny check || {
+        echo ""
+        echo "Cargo deny check failed. Fix the issues above."
+        exit 1
+    }
+else
+    echo "  cargo-deny not installed, skipping. Install with: cargo install cargo-deny"
+fi
+
 # Unit tests (library tests only for speed)
 echo "Running tests..."
 cargo test --lib || {
