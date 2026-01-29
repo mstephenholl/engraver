@@ -114,6 +114,10 @@ enum Commands {
         /// Automatically detect and verify checksum from .sha256, .sha512, .md5 files
         #[arg(long)]
         auto_checksum: bool,
+
+        /// Show partition layout of source image before writing
+        #[arg(long, short = 'p')]
+        show_partitions: bool,
     },
 
     /// Verify a drive against a source image
@@ -291,6 +295,7 @@ fn run() -> Result<()> {
             resume,
             checkpoint,
             auto_checksum,
+            show_partitions,
         } => {
             // Apply settings as defaults when CLI options are not explicitly set
             let effective_block_size =
@@ -318,6 +323,7 @@ fn run() -> Result<()> {
                 resume,
                 checkpoint: effective_checkpoint,
                 auto_checksum: effective_auto_checksum,
+                show_partitions,
             })
         }
         Commands::Verify {

@@ -10,8 +10,9 @@ keywords = ["disk", "imaging", "iso", "usb", "flash"]
 categories = ["command-line-utilities", "filesystem"]
 
 [features]
-default = ["compression", "remote", "checksum"]
+default = ["compression", "remote", "checksum", "partition-info"]
 compression = ["flate2", "xz2", "zstd", "bzip2"]
+partition-info = ["bootsector"]
 remote = ["reqwest", "url"]
 checksum = ["sha2", "md-5", "crc32fast"]
 # Cloud storage providers (S3-compatible, GCS, Azure)
@@ -47,6 +48,9 @@ crc32fast = { version = "1", optional = true }
 # Supports S3, GCS, Azure, and S3-compatible services (MinIO, DigitalOcean Spaces, etc.)
 object_store = { version = "0.11", optional = true, default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+
+# Partition table parsing (optional)
+bootsector = { version = "0.2", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

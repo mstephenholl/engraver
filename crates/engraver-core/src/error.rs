@@ -86,6 +86,10 @@ pub enum Error {
     /// Unknown error
     #[error("Unknown error: {0}")]
     Unknown(String),
+
+    /// Partition table parsing error
+    #[error("Failed to parse partition table: {0}")]
+    PartitionParseError(String),
 }
 
 /// Result type alias using the Engraver error type

@@ -39,6 +39,8 @@
 pub mod benchmark;
 pub mod config;
 pub mod error;
+#[cfg(feature = "partition-info")]
+pub mod partition;
 pub mod resume;
 pub mod settings;
 pub mod source;
@@ -53,6 +55,11 @@ pub use benchmark::{
 };
 pub use config::Config;
 pub use error::{Error, Result};
+#[cfg(feature = "partition-info")]
+pub use partition::{
+    inspect_from_buffer, inspect_partitions, read_partition_header, PartitionInfo,
+    PartitionTableInfo, PartitionTableType, PARTITION_HEADER_SIZE,
+};
 pub use resume::{
     default_checkpoint_dir, validate_checkpoint, CheckpointManager, CheckpointValidation,
     WriteCheckpoint, CHECKPOINT_VERSION,

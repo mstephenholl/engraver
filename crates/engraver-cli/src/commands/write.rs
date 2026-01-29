@@ -22,6 +22,8 @@ use engraver_core::{
     ChecksumAlgorithm, Source, SourceType, Verifier, VerifyConfig, WriteCheckpoint, WriteConfig,
     Writer,
 };
+#[cfg(feature = "partition-info")]
+use engraver_core::{inspect_from_buffer, read_partition_header, PartitionTableType};
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
@@ -41,6 +43,7 @@ pub struct WriteArgs {
     pub resume: bool,
     pub checkpoint: bool,
     pub auto_checksum: bool,
+    pub show_partitions: bool,
 }
 
 /// Conditionally print based on silent mode
@@ -228,6 +231,11 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             style("⚠").yellow(),
             target_drive.mount_points.join(", ")
         );
+    }
+
+    // Step 2.5: Show partition information if requested
+    if args.show_partitions {
+        display_source_partitions(&args.source, silent)?;
     }
 
     // Step 3: Confirmation (skip_confirm is already true when silent)
@@ -1459,6 +1467,147 @@ fn create_write_progress_bar(total: u64, silent: bool) -> ProgressBar {
     pb
 }
 
+/// Display partition information for the source image
+#[cfg(feature = "partition-info")]
+fn display_source_partitions(source_path: &str, silent: bool) -> Result<()> {
+    use engraver_core::partition::{format_offset, format_size as part_format_size};
+
+    println_if!(silent, "\n{}", style("Source Partitions:").bold());
+
+    // Read partition header from source
+    let buffer = match read_partition_header(source_path) {
+        Ok(buf) => buf,
+        Err(e) => {
+            println_if!(
+                silent,
+                "  {} Could not read partition table: {}",
+                style("ℹ").blue(),
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    // Parse partition table
+    let info = match inspect_from_buffer(&buffer) {
+        Ok(info) => info,
+        Err(e) => {
+            println_if!(
+                silent,
+                "  {} Could not parse partition table: {}",
+                style("ℹ").blue(),
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    // Display based on partition table type
+    match info.table_type {
+        PartitionTableType::None => {
+            println_if!(
+                silent,
+                "  {} No partition table detected (may be ISO 9660 or raw filesystem)",
+                style("ℹ").blue()
+            );
+        }
+        table_type => {
+            // Print table header
+            println_if!(
+                silent,
+                "┌─────────────────────────────────────────────────────────────────┐"
+            );
+            println_if!(
+                silent,
+                "│ {} Partition Table{}│",
+                table_type,
+                " ".repeat(53 - table_type.to_string().len())
+            );
+
+            if let Some(ref disk_id) = info.disk_id {
+                let id_str = format!("Disk ID: {}", disk_id);
+                let padding = 64usize.saturating_sub(id_str.len());
+                println_if!(silent, "│ {}{}│", id_str, " ".repeat(padding));
+            }
+
+            println_if!(
+                silent,
+                "├───────┬──────────────┬──────────────┬───────────────────────────┤"
+            );
+            println_if!(
+                silent,
+                "│  #    │ Start        │ Size         │ Type / Name               │"
+            );
+            println_if!(
+                silent,
+                "├───────┼──────────────┼──────────────┼───────────────────────────┤"
+            );
+
+            // Print each partition
+            for part in &info.partitions {
+                let boot_marker = if part.bootable { "*" } else { " " };
+                let start = format_offset(part.start_offset);
+                let size = part_format_size(part.size);
+
+                // Combine type and name for display
+                let type_name = if let Some(ref name) = part.name {
+                    if name.is_empty() {
+                        part.partition_type.clone()
+                    } else {
+                        format!("{} ({})", part.partition_type, name)
+                    }
+                } else {
+                    part.partition_type.clone()
+                };
+
+                // Truncate if too long
+                let type_name_display = if type_name.len() > 25 {
+                    format!("{}...", &type_name[..22])
+                } else {
+                    type_name
+                };
+
+                println_if!(
+                    silent,
+                    "│ {:>2} {} │ {:>12} │ {:>12} │ {:25} │",
+                    part.number,
+                    boot_marker,
+                    start,
+                    size,
+                    type_name_display
+                );
+            }
+
+            println_if!(
+                silent,
+                "└───────┴──────────────┴──────────────┴───────────────────────────┘"
+            );
+
+            // Show bootable marker legend if any partitions are bootable
+            if info.partitions.iter().any(|p| p.bootable) {
+                println_if!(
+                    silent,
+                    "  {} = bootable/active partition",
+                    style("*").bold()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Stub for when partition-info feature is disabled
+#[cfg(not(feature = "partition-info"))]
+fn display_source_partitions(_source_path: &str, silent: bool) -> Result<()> {
+    println_if!(
+        silent,
+        "  {} Partition inspection not available (compiled without partition-info feature)",
+        style("ℹ").blue()
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1733,6 +1882,7 @@ mod tests {
             resume: false,
             checkpoint: true,
             auto_checksum: false,
+            show_partitions: false,
         };
 
         assert_eq!(args.source, "ubuntu.iso");
@@ -1744,5 +1894,6 @@ mod tests {
         assert!(!args.force);
         assert!(!args.cancel_flag.load(Ordering::Relaxed));
         assert!(!args.auto_checksum);
+        assert!(!args.show_partitions);
     }
 }

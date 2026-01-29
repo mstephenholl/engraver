@@ -53,9 +53,12 @@ Planned features, improvements, and development roadmap for Engraver.
   - CLI flag: `--auto-checksum`, config option: `auto_detect = true`
   - Searches for `.sha256`, `.sha512`, `.md5`, `.sha256sum` files
 
-- [ ] **Partition table inspection**
-  - Display partition layout of source images
-  - Show what will be written before confirmation
+- [x] **Partition table inspection**
+  - Display partition layout of source images before writing
+  - CLI flag: `--show-partitions` / `-p`
+  - Supports MBR and GPT partition tables
+  - Uses bootsector crate for parsing
+  - Works with compressed sources (decompresses first 64KB)
 
 - [x] **Cloud storage support (S3/GCS/Azure Blob)**
   - Download ISOs directly from cloud storage buckets

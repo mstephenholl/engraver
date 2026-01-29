@@ -50,7 +50,9 @@ tempfile = "3"
 cargo-husky = { workspace = true }
 
 [features]
-default = []
+default = ["partition-info"]
+# Partition table inspection
+partition-info = ["engraver-core/partition-info"]
 # Cloud storage support (forwarded to engraver-core)
 s3 = ["engraver-core/s3"]
 gcs = ["engraver-core/gcs"]
