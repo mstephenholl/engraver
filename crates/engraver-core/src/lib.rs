@@ -58,13 +58,16 @@ pub use resume::{
     WriteCheckpoint, CHECKPOINT_VERSION,
 };
 pub use settings::{
-    BehaviorSettings, BenchmarkSettings, ChecksumSettings, Settings, SettingsError, WriteSettings,
+    BehaviorSettings, BenchmarkSettings, ChecksumSettings, NetworkSettings, Settings,
+    SettingsError, WriteSettings, DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_RETRY_ATTEMPTS,
+    DEFAULT_RETRY_DELAY_MS, DEFAULT_VALIDATION_TIMEOUT_SECS,
+};
+pub use source::{
+    detect_source_type, get_source_size, validate_source, validate_source_with_settings, Source,
+    SourceInfo, SourceType, DEFAULT_READ_BUFFER_SIZE,
 };
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
-pub use source::CloudSource;
-pub use source::{
-    detect_source_type, get_source_size, validate_source, Source, SourceInfo, SourceType,
-};
+pub use source::{CloudSource, DEFAULT_CLOUD_CHUNK_SIZE};
 pub use verifier::{
     auto_detect_checksum, find_checksum_for_file, parse_checksum_file, verify_write, Checksum,
     ChecksumAlgorithm, ChecksumEntry, DetectedChecksum, VerificationOperation,

@@ -156,7 +156,9 @@ fn show_config(config_path: Option<PathBuf>, json: bool, silent: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use engraver_core::{BehaviorSettings, BenchmarkSettings, ChecksumSettings, WriteSettings};
+    use engraver_core::{
+        BehaviorSettings, BenchmarkSettings, ChecksumSettings, NetworkSettings, WriteSettings,
+    };
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -168,6 +170,9 @@ mod tests {
                 block_size: "2M".to_string(),
                 verify: true,
                 checkpoint: true,
+                retry_attempts: 3,
+                retry_delay_ms: 100,
+                read_buffer_size: "64K".to_string(),
             },
             checksum: ChecksumSettings {
                 algorithm: "sha512".to_string(),
@@ -178,6 +183,7 @@ mod tests {
                 quiet: false,
             },
             benchmark: BenchmarkSettings::default(),
+            network: NetworkSettings::default(),
         };
         (settings, config_path)
     }

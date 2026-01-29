@@ -10,6 +10,9 @@
 //! [write]
 //! block_size = "4M"
 //! verify = true
+//! retry_attempts = 3
+//! retry_delay_ms = 100
+//! read_buffer_size = "64K"
 //!
 //! [checksum]
 //! algorithm = "sha256"
@@ -24,6 +27,11 @@
 //! pattern = "zeros"
 //! passes = 1
 //! json = false
+//!
+//! [network]
+//! http_timeout_secs = 30
+//! validation_timeout_secs = 10
+//! cloud_chunk_size = "4M"
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -37,6 +45,18 @@ const APP_NAME: &str = "engraver";
 
 /// Default block size string
 const DEFAULT_BLOCK_SIZE_STR: &str = "4M";
+
+/// Default retry attempts
+pub const DEFAULT_RETRY_ATTEMPTS: u32 = 3;
+
+/// Default retry delay in milliseconds
+pub const DEFAULT_RETRY_DELAY_MS: u64 = 100;
+
+/// Default read buffer size string
+const DEFAULT_READ_BUFFER_SIZE_STR: &str = "64K";
+
+/// Default cloud chunk size string
+const DEFAULT_CLOUD_CHUNK_SIZE_STR: &str = "4M";
 
 /// User settings loaded from configuration file
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -53,6 +73,9 @@ pub struct Settings {
 
     /// Benchmark settings
     pub benchmark: BenchmarkSettings,
+
+    /// Network settings
+    pub network: NetworkSettings,
 }
 
 /// Settings for write operations
@@ -67,6 +90,15 @@ pub struct WriteSettings {
 
     /// Whether to enable checkpointing by default
     pub checkpoint: bool,
+
+    /// Number of retry attempts on write errors
+    pub retry_attempts: u32,
+
+    /// Delay between retries in milliseconds
+    pub retry_delay_ms: u64,
+
+    /// Buffer size for reading files (e.g., "64K", "128K")
+    pub read_buffer_size: String,
 }
 
 /// Settings for checksum operations
@@ -111,6 +143,36 @@ pub struct BenchmarkSettings {
     pub json: bool,
 }
 
+/// Settings for network operations (HTTP, cloud storage)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct NetworkSettings {
+    /// Timeout for HTTP requests in seconds
+    pub http_timeout_secs: u64,
+
+    /// Timeout for URL validation (HEAD requests) in seconds
+    pub validation_timeout_secs: u64,
+
+    /// Chunk size for cloud storage streaming reads (e.g., "4M", "8M")
+    pub cloud_chunk_size: String,
+}
+
+/// Default HTTP timeout in seconds
+pub const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 30;
+
+/// Default validation timeout in seconds
+pub const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 10;
+
+impl Default for NetworkSettings {
+    fn default() -> Self {
+        Self {
+            http_timeout_secs: DEFAULT_HTTP_TIMEOUT_SECS,
+            validation_timeout_secs: DEFAULT_VALIDATION_TIMEOUT_SECS,
+            cloud_chunk_size: DEFAULT_CLOUD_CHUNK_SIZE_STR.to_string(),
+        }
+    }
+}
+
 impl Default for BenchmarkSettings {
     fn default() -> Self {
         Self {
@@ -129,6 +191,9 @@ impl Default for WriteSettings {
             block_size: DEFAULT_BLOCK_SIZE_STR.to_string(),
             verify: false,
             checkpoint: false,
+            retry_attempts: DEFAULT_RETRY_ATTEMPTS,
+            retry_delay_ms: DEFAULT_RETRY_DELAY_MS,
+            read_buffer_size: DEFAULT_READ_BUFFER_SIZE_STR.to_string(),
         }
     }
 }
@@ -267,6 +332,9 @@ mod tests {
         assert_eq!(settings.write.block_size, "4M");
         assert!(!settings.write.verify);
         assert!(!settings.write.checkpoint);
+        assert_eq!(settings.write.retry_attempts, 3);
+        assert_eq!(settings.write.retry_delay_ms, 100);
+        assert_eq!(settings.write.read_buffer_size, "64K");
         assert_eq!(settings.checksum.algorithm, "sha256");
         assert!(!settings.checksum.auto_detect);
         assert!(!settings.behavior.skip_confirmation);
@@ -277,6 +345,8 @@ mod tests {
         assert_eq!(settings.benchmark.pattern, "zeros");
         assert_eq!(settings.benchmark.passes, 1);
         assert!(!settings.benchmark.json);
+        // Network defaults
+        assert_eq!(settings.network.cloud_chunk_size, "4M");
     }
 
     #[test]
@@ -289,6 +359,9 @@ mod tests {
                 block_size: "1M".to_string(),
                 verify: true,
                 checkpoint: true,
+                retry_attempts: 5,
+                retry_delay_ms: 200,
+                read_buffer_size: "128K".to_string(),
             },
             checksum: ChecksumSettings {
                 algorithm: "sha512".to_string(),
@@ -304,6 +377,11 @@ mod tests {
                 pattern: "random".to_string(),
                 passes: 3,
                 json: true,
+            },
+            network: NetworkSettings {
+                http_timeout_secs: 45,
+                validation_timeout_secs: 20,
+                cloud_chunk_size: "8M".to_string(),
             },
         };
 
@@ -418,6 +496,9 @@ verify = true
         assert_eq!(write.block_size, "4M");
         assert!(!write.verify);
         assert!(!write.checkpoint);
+        assert_eq!(write.retry_attempts, 3);
+        assert_eq!(write.retry_delay_ms, 100);
+        assert_eq!(write.read_buffer_size, "64K");
     }
 
     #[test]
@@ -454,5 +535,106 @@ verify = true
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
         };
         assert!(io_err.to_string().contains("/test/path"));
+    }
+
+    #[test]
+    fn test_network_settings_default() {
+        let network = NetworkSettings::default();
+        assert_eq!(network.http_timeout_secs, 30);
+        assert_eq!(network.validation_timeout_secs, 10);
+        assert_eq!(network.cloud_chunk_size, "4M");
+    }
+
+    #[test]
+    fn test_network_settings_in_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("engraver_config.toml");
+
+        // Write config with custom network settings
+        let config = r#"
+[network]
+http_timeout_secs = 60
+validation_timeout_secs = 15
+"#;
+        std::fs::write(&config_path, config).unwrap();
+
+        let settings = Settings::load_from_path(Some(config_path));
+        assert_eq!(settings.network.http_timeout_secs, 60);
+        assert_eq!(settings.network.validation_timeout_secs, 15);
+    }
+
+    #[test]
+    fn test_network_settings_partial_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("engraver_config.toml");
+
+        // Write config with only http_timeout_secs
+        let config = r#"
+[network]
+http_timeout_secs = 120
+"#;
+        std::fs::write(&config_path, config).unwrap();
+
+        let settings = Settings::load_from_path(Some(config_path));
+        assert_eq!(settings.network.http_timeout_secs, 120);
+        // validation_timeout_secs should use default
+        assert_eq!(settings.network.validation_timeout_secs, 10);
+    }
+
+    #[test]
+    fn test_default_config_includes_network() {
+        let config_str = Settings::default_config_string();
+        assert!(config_str.contains("[network]"));
+        assert!(config_str.contains("http_timeout_secs"));
+        assert!(config_str.contains("validation_timeout_secs"));
+        assert!(config_str.contains("cloud_chunk_size"));
+    }
+
+    #[test]
+    fn test_write_settings_in_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("engraver_config.toml");
+
+        // Write config with custom write settings
+        let config = r#"
+[write]
+retry_attempts = 5
+retry_delay_ms = 250
+read_buffer_size = "128K"
+"#;
+        std::fs::write(&config_path, config).unwrap();
+
+        let settings = Settings::load_from_path(Some(config_path));
+        assert_eq!(settings.write.retry_attempts, 5);
+        assert_eq!(settings.write.retry_delay_ms, 250);
+        assert_eq!(settings.write.read_buffer_size, "128K");
+        // Other values should use defaults
+        assert_eq!(settings.write.block_size, "4M");
+    }
+
+    #[test]
+    fn test_cloud_chunk_size_in_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("engraver_config.toml");
+
+        // Write config with custom cloud chunk size
+        let config = r#"
+[network]
+cloud_chunk_size = "8M"
+"#;
+        std::fs::write(&config_path, config).unwrap();
+
+        let settings = Settings::load_from_path(Some(config_path));
+        assert_eq!(settings.network.cloud_chunk_size, "8M");
+        // Other values should use defaults
+        assert_eq!(settings.network.http_timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_default_config_includes_write_settings() {
+        let config_str = Settings::default_config_string();
+        assert!(config_str.contains("retry_attempts"));
+        assert!(config_str.contains("retry_delay_ms"));
+        assert!(config_str.contains("read_buffer_size"));
     }
 }

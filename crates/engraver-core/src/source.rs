@@ -23,6 +23,9 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::settings::{NetworkSettings, WriteSettings};
+#[cfg(feature = "remote")]
+use crate::settings::{DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_VALIDATION_TIMEOUT_SECS};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -30,6 +33,22 @@ use std::path::Path;
 
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 use std::sync::Arc;
+
+/// Default read buffer size in bytes (64 KB)
+pub const DEFAULT_READ_BUFFER_SIZE: usize = 64 * 1024;
+
+/// Default cloud chunk size in bytes (4 MB)
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+pub const DEFAULT_CLOUD_CHUNK_SIZE: u64 = 4 * 1024 * 1024;
+
+/// Parse a size string (e.g., "64K", "4M") to bytes
+///
+/// Returns the default value if parsing fails.
+fn parse_size_with_default(s: &str, default: usize) -> usize {
+    crate::benchmark::parse_size(s)
+        .map(|v| v as usize)
+        .unwrap_or(default)
+}
 
 // ============================================================================
 // Source Types and Detection
@@ -259,8 +278,19 @@ pub struct LocalFileSource {
 }
 
 impl LocalFileSource {
-    /// Open a local file
+    /// Open a local file with default buffer size
     pub fn open(path: &str) -> Result<Self> {
+        Self::open_with_settings(path, None)
+    }
+
+    /// Open a local file with custom settings
+    ///
+    /// If `settings` is `None`, default buffer size is used.
+    pub fn open_with_settings(path: &str, settings: Option<&WriteSettings>) -> Result<Self> {
+        let buffer_size = settings
+            .map(|s| parse_size_with_default(&s.read_buffer_size, DEFAULT_READ_BUFFER_SIZE))
+            .unwrap_or(DEFAULT_READ_BUFFER_SIZE);
+
         let file_path = Path::new(path);
 
         if !file_path.exists() {
@@ -281,7 +311,7 @@ impl LocalFileSource {
         let info = SourceInfo::local(path, size);
 
         Ok(Self {
-            file: BufReader::with_capacity(64 * 1024, file),
+            file: BufReader::with_capacity(buffer_size, file),
             info,
         })
     }
@@ -443,11 +473,26 @@ pub struct HttpSource {
 impl HttpSource {
     /// Open an HTTP/HTTPS URL
     pub fn open(url: &str) -> Result<Self> {
-        Self::open_with_resume(url, 0)
+        Self::open_with_settings(url, 0, None)
     }
 
     /// Open an HTTP/HTTPS URL with resume from a specific offset
     pub fn open_with_resume(url: &str, offset: u64) -> Result<Self> {
+        Self::open_with_settings(url, offset, None)
+    }
+
+    /// Open an HTTP/HTTPS URL with custom network settings
+    ///
+    /// If `settings` is `None`, default timeout values are used.
+    pub fn open_with_settings(
+        url: &str,
+        offset: u64,
+        settings: Option<&NetworkSettings>,
+    ) -> Result<Self> {
+        let timeout_secs = settings
+            .map(|s| s.http_timeout_secs)
+            .unwrap_or(DEFAULT_HTTP_TIMEOUT_SECS);
+
         // Validate URL
         let parsed_url = url::Url::parse(url)
             .map_err(|e| Error::Network(format!("Invalid URL '{}': {}", url, e)))?;
@@ -462,7 +507,7 @@ impl HttpSource {
         // Build request
         let client = reqwest::blocking::Client::builder()
             .user_agent(concat!("engraver/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(timeout_secs))
             .build()
             .map_err(|e| Error::Network(format!("Failed to create HTTP client: {}", e)))?;
 
@@ -474,9 +519,18 @@ impl HttpSource {
         }
 
         // Send request
-        let response = request
-            .send()
-            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+        let response = request.send().map_err(|e| {
+            if e.is_timeout() {
+                Error::Network(format!(
+                    "HTTP request timed out after {} seconds: {}",
+                    timeout_secs, e
+                ))
+            } else if e.is_connect() {
+                Error::Network(format!("Failed to connect to server: {}", e))
+            } else {
+                Error::Network(format!("HTTP request failed: {}", e))
+            }
+        })?;
 
         // Check status
         let status = response.status();
@@ -599,16 +653,15 @@ pub struct CloudSource {
     info: SourceInfo,
     /// Bytes read so far (including resume offset)
     bytes_read: u64,
+    /// Chunk size for streaming reads
+    chunk_size: u64,
 }
 
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 impl CloudSource {
-    /// Chunk size for streaming reads (4 MB to match default write block size)
-    const CHUNK_SIZE: u64 = 4 * 1024 * 1024;
-
-    /// Open a cloud object from URI
+    /// Open a cloud object from URI with default settings
     pub fn open(uri: &str) -> Result<Self> {
-        Self::open_with_resume(uri, 0)
+        Self::open_with_settings(uri, 0, None)
     }
 
     /// Open with resume from specific offset
@@ -616,6 +669,24 @@ impl CloudSource {
     /// This uses Range headers to resume from a specific byte offset,
     /// which is useful for resuming interrupted writes.
     pub fn open_with_resume(uri: &str, offset: u64) -> Result<Self> {
+        Self::open_with_settings(uri, offset, None)
+    }
+
+    /// Open with resume and custom network settings
+    ///
+    /// If `settings` is `None`, default chunk size is used.
+    pub fn open_with_settings(
+        uri: &str,
+        offset: u64,
+        settings: Option<&NetworkSettings>,
+    ) -> Result<Self> {
+        let chunk_size = settings
+            .map(|s| {
+                crate::benchmark::parse_size(&s.cloud_chunk_size)
+                    .unwrap_or(DEFAULT_CLOUD_CHUNK_SIZE)
+            })
+            .unwrap_or(DEFAULT_CLOUD_CHUNK_SIZE);
+
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| Error::Network(format!("Failed to create tokio runtime: {}", e)))?;
 
@@ -659,6 +730,7 @@ impl CloudSource {
             total_size,
             info,
             bytes_read: offset,
+            chunk_size,
         })
     }
 
@@ -725,7 +797,7 @@ impl CloudSource {
             return Ok(());
         }
 
-        let end = std::cmp::min(self.offset + Self::CHUNK_SIZE, self.total_size);
+        let end = std::cmp::min(self.offset + self.chunk_size, self.total_size);
         let range = std::ops::Range {
             start: self.offset as usize,
             end: end as usize,
@@ -1144,6 +1216,11 @@ fn parse_azure_uri(uri: &str) -> Result<(String, String, String)> {
 
 /// Open a file with buffered reading
 fn open_file_buffered(path: &str) -> Result<BufReader<File>> {
+    open_file_buffered_with_size(path, DEFAULT_READ_BUFFER_SIZE)
+}
+
+/// Open a file with buffered reading and custom buffer size
+fn open_file_buffered_with_size(path: &str, buffer_size: usize) -> Result<BufReader<File>> {
     let file = File::open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::SourceNotFound(path.to_string())
@@ -1154,7 +1231,7 @@ fn open_file_buffered(path: &str) -> Result<BufReader<File>> {
         }
     })?;
 
-    Ok(BufReader::with_capacity(64 * 1024, file))
+    Ok(BufReader::with_capacity(buffer_size, file))
 }
 
 /// Get the size of a source without opening it for reading
@@ -1196,7 +1273,20 @@ pub fn get_source_size(path: &str) -> Result<Option<u64>> {
 }
 
 /// Validate a source path or URL
+///
+/// Uses default network settings. For custom timeouts, use [`validate_source_with_settings`].
 pub fn validate_source(path: &str) -> Result<SourceInfo> {
+    validate_source_with_settings(path, None)
+}
+
+/// Validate a source path or URL with custom network settings
+///
+/// If `settings` is `None`, default timeout values are used.
+#[allow(unused_variables)] // settings only used with remote feature
+pub fn validate_source_with_settings(
+    path: &str,
+    settings: Option<&NetworkSettings>,
+) -> Result<SourceInfo> {
     let source_type = detect_source_type(path);
 
     match source_type {
@@ -1225,19 +1315,31 @@ pub fn validate_source(path: &str) -> Result<SourceInfo> {
         SourceType::Remote => {
             #[cfg(feature = "remote")]
             {
+                let timeout_secs = settings
+                    .map(|s| s.validation_timeout_secs)
+                    .unwrap_or(DEFAULT_VALIDATION_TIMEOUT_SECS);
+
                 // Validate URL format
                 url::Url::parse(path).map_err(|e| Error::Network(format!("Invalid URL: {}", e)))?;
 
                 // Do a HEAD request to check availability
                 let client = reqwest::blocking::Client::builder()
-                    .timeout(std::time::Duration::from_secs(10))
+                    .timeout(std::time::Duration::from_secs(timeout_secs))
                     .build()
                     .map_err(|e| Error::Network(format!("Failed to create client: {}", e)))?;
 
-                let response = client
-                    .head(path)
-                    .send()
-                    .map_err(|e| Error::Network(format!("Failed to reach URL: {}", e)))?;
+                let response = client.head(path).send().map_err(|e| {
+                    if e.is_timeout() {
+                        Error::Network(format!(
+                            "URL validation timed out after {} seconds: {}",
+                            timeout_secs, e
+                        ))
+                    } else if e.is_connect() {
+                        Error::Network(format!("Failed to connect to URL: {}", e))
+                    } else {
+                        Error::Network(format!("Failed to reach URL: {}", e))
+                    }
+                })?;
 
                 if !response.status().is_success() {
                     return Err(Error::Network(format!(

@@ -7,6 +7,7 @@
 //! - Sync/flush management
 
 use crate::error::{Error, Result};
+use crate::settings::{DEFAULT_RETRY_ATTEMPTS, DEFAULT_RETRY_DELAY_MS};
 use crate::verifier::ChecksumAlgorithm;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,9 +69,6 @@ pub const MIN_BLOCK_SIZE: usize = 4 * 1024;
 
 /// Maximum block size (64 MB)
 pub const MAX_BLOCK_SIZE: usize = 64 * 1024 * 1024;
-
-/// Default number of retry attempts
-pub const DEFAULT_RETRY_ATTEMPTS: u32 = 3;
 
 /// Write progress information
 #[derive(Debug, Clone)]
@@ -181,7 +179,7 @@ impl Default for WriteConfig {
             sync_each_block: false,
             sync_on_complete: true,
             retry_attempts: DEFAULT_RETRY_ATTEMPTS,
-            retry_delay: Duration::from_millis(100),
+            retry_delay: Duration::from_millis(DEFAULT_RETRY_DELAY_MS),
             verify: false,
             checksum_algorithm: None,
         }

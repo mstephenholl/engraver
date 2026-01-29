@@ -111,6 +111,11 @@ impl WindowsDevice {
         }
 
         // Open the device
+        // SAFETY: CreateFileW is called with a valid null-terminated wide string path.
+        // All pointer arguments are valid: wide_path is alive for the call duration,
+        // null pointers are used where no value is needed. The returned HANDLE is
+        // validated before use (checked against INVALID_HANDLE_VALUE below).
+        #[allow(unsafe_code)]
         let handle = unsafe {
             CreateFileW(
                 wide_path.as_ptr(),
@@ -157,6 +162,10 @@ impl WindowsDevice {
     pub fn lock(&self) -> Result<()> {
         let mut bytes_returned: u32 = 0;
 
+        // SAFETY: DeviceIoControl is called with a valid HANDLE obtained from successful open().
+        // FSCTL_LOCK_VOLUME requires no input/output buffers (null pointers are valid).
+        // bytes_returned is a valid mutable reference to u32.
+        #[allow(unsafe_code)]
         let result = unsafe {
             DeviceIoControl(
                 self.handle,
@@ -183,6 +192,10 @@ impl WindowsDevice {
     pub fn unlock(&self) -> Result<()> {
         let mut bytes_returned: u32 = 0;
 
+        // SAFETY: DeviceIoControl is called with a valid HANDLE obtained from successful open().
+        // FSCTL_UNLOCK_VOLUME requires no input/output buffers (null pointers are valid).
+        // bytes_returned is a valid mutable reference to u32.
+        #[allow(unsafe_code)]
         let result = unsafe {
             DeviceIoControl(
                 self.handle,
@@ -240,6 +253,9 @@ impl RawDevice for WindowsDevice {
     fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<usize> {
         // Seek to offset
         let mut new_pos: i64 = 0;
+        // SAFETY: SetFilePointerEx is called with a valid HANDLE. new_pos is a valid
+        // mutable reference to i64. The offset cast to i64 is safe for valid file offsets.
+        #[allow(unsafe_code)]
         let result =
             unsafe { SetFilePointerEx(self.handle, offset as i64, &mut new_pos, FILE_BEGIN) };
 
@@ -249,6 +265,10 @@ impl RawDevice for WindowsDevice {
 
         // Write data
         let mut bytes_written: u32 = 0;
+        // SAFETY: WriteFile is called with a valid HANDLE. data.as_ptr() points to valid
+        // memory for the slice's lifetime (borrowed for this call). data.len() as u32 is
+        // safe for reasonable buffer sizes. bytes_written is a valid mutable reference.
+        #[allow(unsafe_code)]
         let result = unsafe {
             WriteFile(
                 self.handle,
