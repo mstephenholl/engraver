@@ -2,8 +2,9 @@
 //!
 //! Run with: cargo bench -p engraver-core
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use engraver_core::verifier::{ChecksumAlgorithm, Verifier};
+use std::hint::black_box;
 use std::io::Cursor;
 
 /// Generate test data of the specified size
