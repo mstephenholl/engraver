@@ -454,6 +454,90 @@ auto_detect = true
 }
 
 // ============================================================================
+// Show Partitions Flag Tests
+// ============================================================================
+
+#[test]
+fn test_write_help_shows_partitions_flag() {
+    // The --show-partitions/-p flag should appear in write help
+    engraver()
+        .args(["write", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--show-partitions").or(predicate::str::contains("-p")));
+}
+
+#[test]
+fn test_write_show_partitions_flag_accepted() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.iso");
+    fs::write(&test_file, "test content").unwrap();
+
+    // --show-partitions flag should be accepted (will fail for privilege reasons)
+    engraver()
+        .args([
+            "write",
+            test_file.to_str().unwrap(),
+            "/dev/nonexistent",
+            "--show-partitions",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("privileges required")
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("not found")),
+        );
+}
+
+#[test]
+fn test_write_show_partitions_short_flag_accepted() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.img");
+    fs::write(&test_file, "test content").unwrap();
+
+    // -p short flag should be accepted (will fail for privilege reasons)
+    engraver()
+        .args([
+            "write",
+            test_file.to_str().unwrap(),
+            "/dev/nonexistent",
+            "-p",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("privileges required")
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("not found")),
+        );
+}
+
+#[test]
+fn test_write_show_partitions_combined_with_verify() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.iso");
+    fs::write(&test_file, "test content").unwrap();
+
+    // --show-partitions can be combined with --verify
+    engraver()
+        .args([
+            "write",
+            test_file.to_str().unwrap(),
+            "/dev/nonexistent",
+            "--show-partitions",
+            "--verify",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("privileges required")
+                .or(predicate::str::contains("Administrator"))
+                .or(predicate::str::contains("not found")),
+        );
+}
+
+// ============================================================================
 // Verify Command Error Tests
 // ============================================================================
 

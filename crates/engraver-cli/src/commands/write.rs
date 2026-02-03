@@ -1896,4 +1896,71 @@ mod tests {
         assert!(!args.auto_checksum);
         assert!(!args.show_partitions);
     }
+
+    #[test]
+    fn test_write_args_with_show_partitions() {
+        let args = WriteArgs {
+            source: "debian.img".to_string(),
+            target: "/dev/sdc".to_string(),
+            verify: false,
+            skip_confirm: true,
+            block_size: "1M".to_string(),
+            checksum: None,
+            checksum_algo: "sha256".to_string(),
+            force: false,
+            no_unmount: true,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+            silent: true,
+            resume: false,
+            checkpoint: false,
+            auto_checksum: true,
+            show_partitions: true,
+        };
+
+        assert_eq!(args.source, "debian.img");
+        assert_eq!(args.target, "/dev/sdc");
+        assert!(!args.verify);
+        assert!(args.skip_confirm);
+        assert_eq!(args.block_size, "1M");
+        assert!(args.checksum.is_none());
+        assert!(!args.force);
+        assert!(args.no_unmount);
+        assert!(args.silent);
+        assert!(!args.resume);
+        assert!(!args.checkpoint);
+        assert!(args.auto_checksum);
+        assert!(args.show_partitions);
+    }
+
+    #[test]
+    fn test_write_args_all_flags_enabled() {
+        let args = WriteArgs {
+            source: "image.iso".to_string(),
+            target: "/dev/sdd".to_string(),
+            verify: true,
+            skip_confirm: true,
+            block_size: "8M".to_string(),
+            checksum: Some("deadbeef".to_string()),
+            checksum_algo: "md5".to_string(),
+            force: true,
+            no_unmount: true,
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+            silent: true,
+            resume: true,
+            checkpoint: true,
+            auto_checksum: true,
+            show_partitions: true,
+        };
+
+        assert!(args.verify);
+        assert!(args.skip_confirm);
+        assert!(args.force);
+        assert!(args.no_unmount);
+        assert!(args.cancel_flag.load(Ordering::Relaxed));
+        assert!(args.silent);
+        assert!(args.resume);
+        assert!(args.checkpoint);
+        assert!(args.auto_checksum);
+        assert!(args.show_partitions);
+    }
 }
