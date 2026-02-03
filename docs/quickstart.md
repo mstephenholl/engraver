@@ -156,5 +156,5 @@ Engraver protects you from accidents:
 ## Next Steps
 
 - See [README.md](../README.md) for full documentation
-- Check [CONTRIBUTING.md](../CONTRIBUTING.md) to contribute
+- Check [CONTRIBUTING.md](CONTRIBUTING.md) to contribute
 - Read [architecture/overview.md](architecture/overview.md) for technical details

@@ -1,16 +1,17 @@
 # Engraver CLI
 
-A safe, fast command-line tool for creating bootable USB drives.
+A safe, fast command-line tool for creating bootable USB drives, SD cards, and NVMe drives.
 
 ## Features
 
 - **Safe by default**: Refuses to write to system drives
-- **Multiple sources**: Local files, URLs, compressed archives
-- **Verification**: Optional post-write verification
+- **Multiple sources**: Local files, URLs, compressed archives, cloud storage
+- **Verification**: Optional post-write verification with multiple checksum algorithms
 - **Progress display**: Real-time progress with speed and ETA
+- **Resumable**: Checkpoint-based resume for interrupted writes
 - **Cross-platform**: Linux, macOS, Windows support
 - **Direct I/O**: Bypasses page cache for optimal write performance
-- **Platform-native**: Uses platform-specific APIs for device access
+- **USB speed detection**: Warns if USB 3.0 device runs at USB 2.0 speed
 
 ## Installation
 
@@ -24,6 +25,19 @@ Or build from source:
 cd crates/engraver-cli
 cargo build --release
 ```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `list` | Display available drives |
+| `write` | Write image to drive |
+| `verify` | Verify drive against image |
+| `checksum` | Calculate file checksum |
+| `benchmark` | Test drive write speed |
+| `config` | Manage configuration |
+| `completions` | Generate shell completions |
+| `mangen` | Generate man pages |
 
 ## Usage
 
@@ -58,6 +72,16 @@ engraver write https://releases.ubuntu.com/24.04/ubuntu.iso /dev/sdb
 # Custom block size
 engraver write ubuntu.iso /dev/sdb --block-size 1M
 
+# Show partition layout before writing
+engraver write ubuntu.iso /dev/sdb --show-partitions
+engraver write ubuntu.iso /dev/sdb -p
+
+# Enable checkpointing for resume support
+engraver write ubuntu.iso /dev/sdb --checkpoint
+
+# Resume an interrupted write
+engraver write ubuntu.iso /dev/sdb --resume
+
 # Verify checksum before writing
 engraver write ubuntu.iso /dev/sdb --checksum abc123... --checksum-algo sha256
 
@@ -82,7 +106,45 @@ engraver checksum ubuntu.iso --algorithm md5
 
 # SHA-512
 engraver checksum ubuntu.iso --algorithm sha512
+
+# CRC32
+engraver checksum ubuntu.iso --algorithm crc32
 ```
+
+### Benchmark Drive Performance
+
+```bash
+# Basic benchmark (256 MB test, 4 MB blocks)
+engraver benchmark /dev/sdb
+
+# Custom test size and pattern
+engraver benchmark /dev/sdb --size 1G --pattern random
+
+# Test multiple block sizes to find optimal performance
+engraver benchmark /dev/sdb --test-block-sizes "4K,64K,1M,4M,16M"
+
+# Multiple passes
+engraver benchmark /dev/sdb --passes 3
+
+# JSON output for scripting
+engraver benchmark /dev/sdb --json
+
+# Skip confirmation
+engraver benchmark /dev/sdb -y
+```
+
+**Benchmark options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--size` | Amount of data to write | `256M` |
+| `--block-size` | Block size for writes | `4M` |
+| `--pattern` | Data pattern: `zeros`, `random`, `sequential` | `zeros` |
+| `--passes` | Number of benchmark passes | `1` |
+| `--test-block-sizes` | Test multiple block sizes (comma-separated) | - |
+| `--json` | Output results as JSON | false |
+
+**Warning:** Benchmarking is a destructive operation that will overwrite data on the target device.
 
 ### Manage Configuration
 
@@ -98,6 +160,22 @@ engraver config --path
 
 # Create a default config file
 engraver config --init
+```
+
+### Generate Shell Completions
+
+```bash
+engraver completions bash
+engraver completions zsh
+engraver completions fish
+engraver completions powershell
+engraver completions elvish
+```
+
+### Generate Man Pages
+
+```bash
+engraver mangen --out-dir ./man
 ```
 
 ## Configuration File
@@ -148,8 +226,8 @@ The CLI uses the `engraver-platform` crate for platform-specific device access:
 
 ```
 engraver (CLI)
-├── engraver-core      (writer, verifier, source handling)
-├── engraver-detect    (drive detection, safety checks)
+├── engraver-core      (writer, verifier, source handling, benchmark, resume)
+├── engraver-detect    (drive detection, safety checks, USB speed)
 └── engraver-platform  (raw device I/O, unmounting, sync)
 ```
 
@@ -166,6 +244,7 @@ Engraver includes multiple safety features to prevent accidental data loss:
 2. **Confirmation prompt**: Requires explicit confirmation before writing
 3. **Mount point display**: Shows what will be unmounted
 4. **Size validation**: Checks that source fits on target
+5. **USB speed warnings**: Alerts if USB 3.0 device runs at USB 2.0 speed
 
 To bypass safety checks (DANGEROUS!):
 ```bash
@@ -248,14 +327,16 @@ man engraver-write
 man engraver-verify
 man engraver-list
 man engraver-checksum
+man engraver-benchmark
 ```
 
 Generated man pages:
 - `engraver.1` - Main command overview
 - `engraver-write.1` - Write command documentation
-- `engraver-verify.1` - Verify command documentation  
+- `engraver-verify.1` - Verify command documentation
 - `engraver-list.1` - List command documentation
 - `engraver-checksum.1` - Checksum command documentation
+- `engraver-benchmark.1` - Benchmark command documentation
 
 ## Examples
 
@@ -275,6 +356,16 @@ engraver write ~/Downloads/ubuntu.iso /dev/sdb --verify
 # Engraver automatically detects and decompresses
 engraver write raspbian.img.xz /dev/sdb
 engraver write archlinux.iso.gz /dev/sdb
+```
+
+### Resume Interrupted Write
+
+```bash
+# Start with checkpointing
+engraver write large-image.iso /dev/sdb --checkpoint
+
+# If interrupted (Ctrl+C), resume later
+engraver write large-image.iso /dev/sdb --resume
 ```
 
 ### Verify Existing Write

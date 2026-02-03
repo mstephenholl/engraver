@@ -2,7 +2,7 @@
 
 Planned features, improvements, and development roadmap for Engraver.
 
-**Last updated**: 2026-01-27
+**Last updated**: 2026-02-02
 
 ---
 
@@ -27,7 +27,7 @@ Planned features, improvements, and development roadmap for Engraver.
   - Color-coded progress bar (red→yellow→green→blue)
 
 - [x] **Configuration file support**
-  - `~/.config/engraver/config.toml` for default settings
+  - `~/.config/engraver/engraver_config.toml` for default settings
   - `engraver config --init` to create, `engraver config` to view
   - `--config-file` flag for custom config path
 
@@ -97,7 +97,7 @@ Planned features, improvements, and development roadmap for Engraver.
 
 - [x] **Dependabot configuration** - `.github/dependabot.yml` created
 - [x] **cargo-audit in CI** - Security vulnerability scanning active
-- [x] **Repository URLs fixed** - Updated from `yourusername` to `mstephenholl`
+
 - [x] **Code coverage with Codecov** - tarpaulin + codecov.io integration
 - [x] **MSRV validation job** - Testing against Rust 1.85
 - [x] **cargo-deny for license compliance** - `deny.toml` created with license allowlist
@@ -213,15 +213,19 @@ Planned features, improvements, and development roadmap for Engraver.
 
 - [x] **Contributing guide** (CONTRIBUTING.md)
 - [x] **Architecture documentation** (docs/architecture/overview.md)
+- [x] **CLI Cargo.toml description updated**
+  - Added "SD cards, NVMe" to description
+- [x] **CLI README benchmark documentation**
+  - Added benchmark command with all options
+  - Added `engraver-benchmark.1` to man page list
+- [x] **Core README expanded**
+  - Documented all modules: source, verifier, benchmark, resume, partition, settings
+  - Added feature flags table
+- [x] **Detect README updated**
+  - Added USB speed detection documentation
 
 - [ ] **Man page improvements**
 - [ ] **More examples in README**
-- [ ] **Fix shell completion documentation**
-  - Reconcile README.md and CLI/README.md install paths
-- [ ] **Add benchmark to man page list**
-  - Update CLI/README.md to include `engraver-benchmark.1`
-- [ ] **Update CLI Cargo.toml description**
-  - Add "SD cards, NVMe" to description
 
 ---
 
