@@ -18,7 +18,7 @@ homepage = "https://github.com/mstephenholl/engraver"
 description = "Fast, safe CLI tool for creating bootable USB drives, SD cards, and NVMe drives from ISO images"
 keywords = ["usb", "bootable", "iso", "flash", "imaging"]
 categories = ["command-line-utilities", "filesystem"]
-rust-version = "1.85"
+rust-version = "1.86"
 
 [workspace.dependencies]
 # Core functionality
