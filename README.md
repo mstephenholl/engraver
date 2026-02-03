@@ -94,6 +94,9 @@ engraver write ubuntu.iso /dev/sdb --resume
 # Auto-detect and verify checksum from .sha256/.sha512/.md5 files
 engraver write ubuntu.iso /dev/sdb --auto-checksum
 
+# Show partition layout before writing
+engraver write ubuntu.iso /dev/sdb --show-partitions
+
 # Benchmark drive write speed
 engraver benchmark /dev/sdb
 
@@ -213,6 +216,9 @@ engraver config --init
 block_size = "4M"
 verify = true
 checkpoint = false
+retry_attempts = 3
+retry_delay_ms = 100
+read_buffer_size = "64K"
 
 [checksum]
 algorithm = "sha256"
@@ -228,6 +234,11 @@ test_size = "256M"
 pattern = "zeros"
 passes = 1
 json = false
+
+[network]
+http_timeout_secs = 30
+validation_timeout_secs = 10
+cloud_chunk_size = "4M"
 ```
 
 ### Configuration Options
@@ -237,6 +248,9 @@ json = false
 | `[write]` | `block_size` | Default block size for writes | `"4M"` |
 | `[write]` | `verify` | Always verify writes | `false` |
 | `[write]` | `checkpoint` | Enable checkpointing by default | `false` |
+| `[write]` | `retry_attempts` | Number of retry attempts on transient errors | `3` |
+| `[write]` | `retry_delay_ms` | Delay between retries in milliseconds | `100` |
+| `[write]` | `read_buffer_size` | Buffer size for reading source data | `"64K"` |
 | `[checksum]` | `algorithm` | Default checksum algorithm | `"sha256"` |
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
 | `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
@@ -246,6 +260,9 @@ json = false
 | `[benchmark]` | `pattern` | Default data pattern (`zeros`, `random`, `sequential`) | `"zeros"` |
 | `[benchmark]` | `passes` | Default number of benchmark passes | `1` |
 | `[benchmark]` | `json` | Output benchmark results in JSON format | `false` |
+| `[network]` | `http_timeout_secs` | HTTP request timeout | `30` |
+| `[network]` | `validation_timeout_secs` | URL validation timeout | `10` |
+| `[network]` | `cloud_chunk_size` | Chunk size for cloud storage downloads | `"4M"` |
 
 Command-line flags always override configuration file settings.
 
