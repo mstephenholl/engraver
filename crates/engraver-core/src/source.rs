@@ -32,6 +32,8 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+use object_store::ObjectStoreExt;
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 use std::sync::Arc;
 
 /// Default read buffer size in bytes (64 KB)
@@ -698,7 +700,7 @@ impl CloudSource {
             .block_on(async { store.head(&location).await })
             .map_err(|e| Error::Network(format!("Failed to get object metadata: {}", e)))?;
 
-        let total_size = meta.size as u64;
+        let total_size = meta.size;
         let etag = meta.e_tag.clone();
 
         // Validate offset
@@ -799,8 +801,8 @@ impl CloudSource {
 
         let end = std::cmp::min(self.offset + self.chunk_size, self.total_size);
         let range = std::ops::Range {
-            start: self.offset as usize,
-            end: end as usize,
+            start: self.offset,
+            end,
         };
 
         let result = self
@@ -1416,8 +1418,8 @@ fn validate_cloud_source(path: &str, source_type: SourceType) -> Result<SourceIn
     Ok(SourceInfo {
         path: path.to_string(),
         source_type,
-        compressed_size: Some(meta.size as u64),
-        size: Some(meta.size as u64),
+        compressed_size: Some(meta.size),
+        size: Some(meta.size),
         seekable: false,
         resumable: true,
         content_type: None,

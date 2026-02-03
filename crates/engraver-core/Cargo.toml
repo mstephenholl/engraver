@@ -46,7 +46,7 @@ crc32fast = { version = "1", optional = true }
 
 # Cloud storage (optional) - unified interface via object_store
 # Supports S3, GCS, Azure, and S3-compatible services (MinIO, DigitalOcean Spaces, etc.)
-object_store = { version = "0.11", optional = true, default-features = false }
+object_store = { version = "0.13", optional = true, default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 
 # Partition table parsing (optional)
