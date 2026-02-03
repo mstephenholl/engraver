@@ -145,4 +145,27 @@ mod tests {
         assert!(msg.contains("1024"));
         assert!(msg.contains("512"));
     }
+
+    #[test]
+    fn test_partition_parse_error() {
+        let err = Error::PartitionParseError("Invalid MBR signature".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("partition table"));
+        assert!(msg.contains("Invalid MBR signature"));
+    }
+
+    #[test]
+    fn test_partition_parse_error_gpt() {
+        let err = Error::PartitionParseError("GPT header checksum mismatch".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to parse partition table"));
+        assert!(msg.contains("GPT header checksum mismatch"));
+    }
+
+    #[test]
+    fn test_partition_parse_error_empty() {
+        let err = Error::PartitionParseError(String::new());
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to parse partition table"));
+    }
 }
