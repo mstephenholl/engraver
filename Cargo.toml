@@ -38,7 +38,7 @@ console = "0.16"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+toml = "1.0"
 
 # HTTP for remote sources
 reqwest = { version = "0.12", features = ["stream", "rustls-tls"], default-features = false }
