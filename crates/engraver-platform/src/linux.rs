@@ -264,13 +264,44 @@ impl RawDevice for LinuxDevice {
 
 impl Read for LinuxDevice {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.file.read(buf)
+        if self.info.direct_io && !is_aligned(buf.len(), self.info.block_size as usize) {
+            let block_size = self.info.block_size as usize;
+            if let Some(ref mut aligned_buf) = self.aligned_buffer {
+                let aligned_len = align_up(buf.len(), block_size);
+                let aligned_slice = aligned_buf.as_aligned_slice_mut(aligned_len);
+                let bytes_read = self.file.read(&mut aligned_slice[..aligned_len])?;
+                let copy_len = bytes_read.min(buf.len());
+                buf[..copy_len].copy_from_slice(&aligned_slice[..copy_len]);
+                Ok(copy_len)
+            } else {
+                self.file.read(buf)
+            }
+        } else {
+            self.file.read(buf)
+        }
     }
 }
 
 impl Write for LinuxDevice {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.file.write(buf)
+        if self.info.direct_io && !is_aligned(buf.len(), self.info.block_size as usize) {
+            let block_size = self.info.block_size as usize;
+            if let Some(ref mut aligned_buf) = self.aligned_buffer {
+                let aligned_len = align_up(buf.len(), block_size);
+                let aligned_slice = aligned_buf.as_aligned_slice_mut(aligned_len);
+                aligned_slice[..buf.len()].copy_from_slice(buf);
+                for byte in &mut aligned_slice[buf.len()..aligned_len] {
+                    *byte = 0;
+                }
+                self.file
+                    .write(&aligned_slice[..aligned_len])
+                    .map(|_| buf.len())
+            } else {
+                self.file.write(buf)
+            }
+        } else {
+            self.file.write(buf)
+        }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
