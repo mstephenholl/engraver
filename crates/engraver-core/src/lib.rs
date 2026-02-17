@@ -13,7 +13,8 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use engraver_core::{Writer, WriteConfig};
 //! use std::fs::File;
 //!
@@ -30,6 +31,8 @@
 //!
 //! let result = writer.write(source, target, source_size)?;
 //! println!("Wrote {} bytes in {:?}", result.bytes_written, result.elapsed);
+//! # Ok(())
+//! # }
 //! ```
 
 #![warn(missing_docs)]

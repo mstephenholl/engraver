@@ -6,18 +6,24 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use engraver_core::resume::{WriteCheckpoint, CheckpointManager};
+//! use engraver_core::{WriteConfig, SourceInfo};
 //!
 //! // Start a new write with checkpointing
 //! let manager = CheckpointManager::new("/path/to/checkpoints")?;
-//! let checkpoint = manager.create_checkpoint(&source_info, target_path, block_size)?;
+//! let source_info = SourceInfo::local("/path/to/image.iso", 1024 * 1024);
+//! let config = WriteConfig::new();
+//! let mut checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 32_000_000_000, &config);
 //!
 //! // ... write blocks, periodically calling:
-//! manager.save_checkpoint(&checkpoint)?;
+//! manager.save(&checkpoint)?;
 //!
 //! // On successful completion:
-//! manager.remove_checkpoint(&checkpoint)?;
+//! manager.remove(&checkpoint)?;
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::{Error, Result, SourceInfo, SourceType, WriteConfig};
