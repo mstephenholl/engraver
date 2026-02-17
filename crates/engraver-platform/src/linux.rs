@@ -264,7 +264,10 @@ impl RawDevice for LinuxDevice {
 
 impl Read for LinuxDevice {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.info.direct_io && !is_aligned(buf.len(), self.info.block_size as usize) {
+        if self.info.direct_io
+            && (!is_aligned(buf.len(), self.info.block_size as usize)
+                || !is_aligned(buf.as_ptr() as usize, self.info.block_size as usize))
+        {
             let block_size = self.info.block_size as usize;
             if let Some(ref mut aligned_buf) = self.aligned_buffer {
                 let aligned_len = align_up(buf.len(), block_size);
@@ -284,7 +287,10 @@ impl Read for LinuxDevice {
 
 impl Write for LinuxDevice {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.info.direct_io && !is_aligned(buf.len(), self.info.block_size as usize) {
+        if self.info.direct_io
+            && (!is_aligned(buf.len(), self.info.block_size as usize)
+                || !is_aligned(buf.as_ptr() as usize, self.info.block_size as usize))
+        {
             let block_size = self.info.block_size as usize;
             if let Some(ref mut aligned_buf) = self.aligned_buffer {
                 let aligned_len = align_up(buf.len(), block_size);
