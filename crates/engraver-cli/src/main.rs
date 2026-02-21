@@ -172,6 +172,28 @@ enum Commands {
         json: bool,
     },
 
+    /// Erase a drive by zero-filling the entire device
+    Erase {
+        /// Target device (e.g., /dev/sdb, /dev/disk2, \\.\PhysicalDrive1)
+        target: String,
+
+        /// Skip confirmation prompt (use with caution!)
+        #[arg(short = 'y', long)]
+        yes: bool,
+
+        /// Block size for writing (e.g., 4M, 1M, 512K). Default from config or 4M
+        #[arg(short, long)]
+        block_size: Option<String>,
+
+        /// Force erase even on system drives (DANGEROUS!)
+        #[arg(long, hide = true)]
+        force: bool,
+
+        /// Do not unmount partitions before erasing
+        #[arg(long)]
+        no_unmount: bool,
+    },
+
     /// Benchmark write speed of a drive (DESTRUCTIVE)
     Benchmark {
         /// Target device (e.g., /dev/sdb, \\.\PhysicalDrive1)
@@ -324,6 +346,27 @@ fn run() -> Result<()> {
                 checkpoint: effective_checkpoint,
                 auto_checksum: effective_auto_checksum,
                 show_partitions,
+            })
+        }
+        Commands::Erase {
+            target,
+            yes,
+            block_size,
+            force,
+            no_unmount,
+        } => {
+            let effective_block_size =
+                block_size.unwrap_or_else(|| settings.write.block_size.clone());
+            let effective_skip_confirm = yes || silent || settings.behavior.skip_confirmation;
+
+            commands::erase::execute(commands::erase::EraseArgs {
+                target,
+                skip_confirm: effective_skip_confirm,
+                block_size: effective_block_size,
+                force,
+                no_unmount,
+                cancel_flag: running,
+                silent,
             })
         }
         Commands::Verify {

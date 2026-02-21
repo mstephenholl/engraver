@@ -3,6 +3,7 @@
 pub mod benchmark;
 pub mod checksum;
 pub mod config;
+pub mod erase;
 pub mod list;
 pub mod verify;
 pub mod write;
