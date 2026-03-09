@@ -284,26 +284,169 @@ fn test_open_nonexistent_file() {
 // Platform-specific tests (marked as ignored)
 // ============================================================================
 
+/// Returns the device path from ENGRAVER_TEST_DEVICE, or skips the test.
+///
+/// Set this env var to a real external device path before running:
+///   ENGRAVER_TEST_DEVICE=/dev/disk4 cargo test -p engraver-platform -- --ignored
+fn test_device_path() -> Option<String> {
+    std::env::var("ENGRAVER_TEST_DEVICE").ok()
+}
+
 #[test]
-#[ignore] // Run with: cargo test -- --ignored test_unmount_device
+#[ignore = "requires real device: ENGRAVER_TEST_DEVICE=/dev/diskN cargo test -- --ignored"]
 fn test_unmount_device() {
-    // This test requires an actual mounted device
-    // Run manually after inserting a USB drive
+    let Some(device) = test_device_path() else {
+        eprintln!("Skipped: set ENGRAVER_TEST_DEVICE");
+        return;
+    };
+
+    // Unmounting a device with no mounted volumes should succeed gracefully
+    let result = unmount_device(&device);
+    assert!(
+        result.is_ok(),
+        "unmount_device({device}) should succeed (even with no volumes): {result:?}"
+    );
+
+    // Calling unmount again should also be idempotent
+    let result2 = unmount_device(&device);
+    assert!(
+        result2.is_ok(),
+        "Second unmount should also succeed: {result2:?}"
+    );
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires real device: ENGRAVER_TEST_DEVICE=/dev/diskN cargo test -- --ignored"]
 fn test_open_real_device() {
-    // This test requires root/admin and a real device
-    // Example paths:
-    // - Linux: /dev/sdb
-    // - macOS: /dev/disk2
-    // - Windows: \\.\PhysicalDrive1
+    let Some(device) = test_device_path() else {
+        eprintln!("Skipped: set ENGRAVER_TEST_DEVICE");
+        return;
+    };
+
+    // On macOS, raw device nodes (/dev/rdiskN) require root even for reads.
+    // Open read-only without direct I/O first (least restrictive).
+    let options = OpenOptions::new().read(true).write(false).direct_io(false);
+    let mut dev = match open_device(&device, options) {
+        Ok(d) => d,
+        Err(PlatformError::PermissionDenied(_)) => {
+            eprintln!("Skipping test_open_real_device: need sudo");
+            return;
+        }
+        Err(e) => panic!("Unexpected error opening device read-only: {e}"),
+    };
+
+    // Copy info values to avoid holding an immutable borrow across read_at
+    let dev_path = dev.info().path.clone();
+    let dev_size = dev.info().size;
+    let dev_block_size = dev.info().block_size;
+
+    // Path should be populated (may be converted to /dev/rdiskN on macOS)
+    assert!(!dev_path.is_empty(), "Device path should not be empty");
+
+    // Size should be non-zero and reasonable (at least 1 MB)
+    assert!(
+        dev_size >= 1024 * 1024,
+        "Device size should be at least 1 MB, got {}",
+        dev_size
+    );
+
+    // Block size should be a power of two, typically 512 or 4096
+    assert!(
+        dev_block_size.is_power_of_two(),
+        "Block size should be power of two, got {}",
+        dev_block_size
+    );
+
+    // Read the first block to verify read access works
+    let block_size = dev_block_size as usize;
+    let mut buffer = vec![0u8; block_size];
+    let read = dev.read_at(0, &mut buffer).unwrap();
+    assert_eq!(
+        read, block_size,
+        "Should read a full block ({block_size} bytes)"
+    );
+
+    // Open read-write (may need additional privileges)
+    let options = OpenOptions::new().read(true).write(true).direct_io(false);
+    let mut dev_rw = match open_device(&device, options) {
+        Ok(d) => d,
+        Err(PlatformError::PermissionDenied(_)) => {
+            eprintln!("Skipping read-write portion: need sudo with write access");
+            return;
+        }
+        Err(e) => panic!("Unexpected error opening device read-write: {e}"),
+    };
+
+    // Read-write device should report same size
+    assert_eq!(
+        dev_rw.info().size,
+        dev_size,
+        "Read-write open should report same device size"
+    );
+
+    // Read first block via read-write handle
+    let mut buffer2 = vec![0u8; block_size];
+    let read2 = dev_rw.read_at(0, &mut buffer2).unwrap();
+    assert_eq!(read2, block_size);
+
+    // Data read should be identical regardless of open mode
+    assert_eq!(
+        buffer, buffer2,
+        "Read-only and read-write should read same data"
+    );
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires real device: ENGRAVER_TEST_DEVICE=/dev/diskN cargo test -- --ignored"]
 fn test_direct_io_on_device() {
-    // Direct I/O typically requires block devices, not regular files
-    // This test needs a real device
+    let Some(device) = test_device_path() else {
+        eprintln!("Skipped: set ENGRAVER_TEST_DEVICE");
+        return;
+    };
+
+    // Open with direct I/O enabled (F_NOCACHE on macOS, O_DIRECT on Linux)
+    let options = OpenOptions::new()
+        .read(true)
+        .write(false)
+        .direct_io(true)
+        .block_size(4096);
+
+    let mut dev = match open_device(&device, options) {
+        Ok(d) => d,
+        Err(PlatformError::PermissionDenied(_)) => {
+            eprintln!("Skipping: need sudo for direct I/O test");
+            return;
+        }
+        Err(e) => panic!("Failed to open device with direct I/O: {e}"),
+    };
+
+    let info = dev.info();
+    assert!(info.direct_io, "Device should report direct_io=true");
+
+    // Read aligned blocks at various offsets
+    let block_size = info.block_size as usize;
+    let offsets: Vec<u64> = vec![0, block_size as u64, block_size as u64 * 2, 4096, 8192];
+
+    for offset in offsets {
+        let mut buffer = vec![0u8; block_size];
+        let read = dev.read_at(offset, &mut buffer);
+        assert!(
+            read.is_ok(),
+            "Direct I/O read at offset {offset} should succeed: {read:?}"
+        );
+        assert_eq!(
+            read.unwrap(),
+            block_size,
+            "Should read full block at offset {offset}"
+        );
+    }
+
+    // Read a larger region (multiple blocks)
+    let multi_block = block_size * 4;
+    let mut large_buffer = vec![0u8; multi_block];
+    let read = dev.read_at(0, &mut large_buffer).unwrap();
+    assert_eq!(read, multi_block, "Should read {multi_block} bytes");
+
+    // Sync should work
+    assert!(dev.sync().is_ok(), "sync() should succeed on real device");
 }
