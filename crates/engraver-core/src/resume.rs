@@ -1057,4 +1057,178 @@ mod tests {
         // Should end with engraver/checkpoints
         assert!(path.ends_with("checkpoints"));
     }
+
+    // -------------------------------------------------------------------------
+    // WriteCheckpoint edge case tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_checkpoint_percentage_no_source_size() {
+        let config = create_test_config();
+        let source_info = SourceInfo {
+            path: "/path/to/stream".to_string(),
+            source_type: SourceType::Remote,
+            size: None, // unknown size
+            compressed_size: None,
+            seekable: false,
+            resumable: true,
+            content_type: None,
+            etag: None,
+        };
+        let mut checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+        checkpoint.bytes_written = 500;
+
+        // With no source size, percentage should be 0.0
+        assert_eq!(checkpoint.percentage(), 0.0);
+    }
+
+    #[test]
+    fn test_checkpoint_percentage_zero_source_size() {
+        let config = create_test_config();
+        let source_info = SourceInfo {
+            path: "/path/to/empty".to_string(),
+            source_type: SourceType::LocalFile,
+            size: Some(0),
+            compressed_size: None,
+            seekable: true,
+            resumable: false,
+            content_type: None,
+            etag: None,
+        };
+        let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+
+        assert_eq!(checkpoint.percentage(), 0.0);
+    }
+
+    #[test]
+    fn test_checkpoint_total_blocks_calculation() {
+        let config = create_test_config(); // 4 MB blocks
+        let source_info = SourceInfo {
+            path: "/path/to/image.iso".to_string(),
+            source_type: SourceType::LocalFile,
+            size: Some(10 * 1024 * 1024), // 10 MB
+            compressed_size: None,
+            seekable: true,
+            resumable: false,
+            content_type: None,
+            etag: None,
+        };
+        let checkpoint =
+            WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024 * 1024, &config);
+
+        // 10 MB / 4 MB = 3 blocks (ceiling division)
+        assert_eq!(checkpoint.total_blocks, Some(3));
+    }
+
+    #[test]
+    fn test_checkpoint_total_blocks_exact_division() {
+        let config = create_test_config(); // 4 MB blocks
+        let source_info = SourceInfo {
+            path: "/path/to/image.iso".to_string(),
+            source_type: SourceType::LocalFile,
+            size: Some(8 * 1024 * 1024), // 8 MB
+            compressed_size: None,
+            seekable: true,
+            resumable: false,
+            content_type: None,
+            etag: None,
+        };
+        let checkpoint =
+            WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024 * 1024, &config);
+
+        assert_eq!(checkpoint.total_blocks, Some(2));
+    }
+
+    #[test]
+    fn test_checkpoint_filename_different_for_different_targets() {
+        let source_info = create_test_source_info();
+        let config = create_test_config();
+
+        let cp1 = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+        let cp2 = WriteCheckpoint::new(&source_info, "/dev/sdc", 1024 * 1024, &config);
+
+        assert_ne!(cp1.filename(), cp2.filename());
+    }
+
+    #[test]
+    fn test_validate_checkpoint_both_sizes_none() {
+        let config = create_test_config();
+        let source_info = SourceInfo {
+            path: "/path/to/image.iso".to_string(),
+            source_type: SourceType::LocalFile,
+            size: None,
+            compressed_size: None,
+            seekable: true,
+            resumable: false,
+            content_type: None,
+            etag: None,
+        };
+        let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+
+        // Should be valid when both sizes are None (can't compare)
+        let result = validate_checkpoint(&checkpoint, &source_info, 1024 * 1024);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn test_checkpoint_manager_creates_missing_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let nested_path = temp_dir.path().join("deeply").join("nested").join("dir");
+
+        // Directory doesn't exist yet
+        assert!(!nested_path.exists());
+
+        let manager = CheckpointManager::new(&nested_path).unwrap();
+
+        // Should have been created
+        assert!(nested_path.exists());
+
+        // Should work normally
+        let checkpoints = manager.list_checkpoints().unwrap();
+        assert!(checkpoints.is_empty());
+    }
+
+    #[test]
+    fn test_checkpoint_manager_remove_nonexistent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let manager = CheckpointManager::new(temp_dir.path()).unwrap();
+
+        let source_info = create_test_source_info();
+        let config = create_test_config();
+        let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+
+        // Removing a checkpoint that was never saved should succeed silently
+        manager.remove(&checkpoint).unwrap();
+    }
+
+    #[test]
+    fn test_simple_hash_empty_string() {
+        let hash1 = simple_hash("");
+        let hash2 = simple_hash("");
+        assert_eq!(hash1, hash2);
+        // Should produce the FNV offset basis since no bytes are processed
+        // but after XOR with nothing it stays the same
+    }
+
+    #[test]
+    fn test_simple_hash_different_lengths() {
+        let hash1 = simple_hash("a");
+        let hash2 = simple_hash("ab");
+        let hash3 = simple_hash("abc");
+        // All should be different
+        assert_ne!(hash1, hash2);
+        assert_ne!(hash2, hash3);
+        assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_write_config_checkpoint_verify_field() {
+        let config = WriteConfig::new().verify(true);
+        let cp_config = WriteConfigCheckpoint::from(&config);
+        assert!(cp_config.verify);
+
+        let config = WriteConfig::new().verify(false);
+        let cp_config = WriteConfigCheckpoint::from(&config);
+        assert!(!cp_config.verify);
+    }
 }

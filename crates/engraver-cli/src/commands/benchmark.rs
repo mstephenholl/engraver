@@ -1015,12 +1015,12 @@ mod tests {
 
     #[test]
     fn test_find_target_drive_short_form() {
-        let drives = vec![create_test_drive("/dev/sdb", false)];
+        let _drives = [create_test_drive("/dev/sdb", false)];
 
         // On Linux, should normalize "sdb" to "/dev/sdb"
         #[cfg(target_os = "linux")]
         {
-            let result = find_target_drive(&drives, "sdb");
+            let result = find_target_drive(&_drives, "sdb");
             assert!(result.is_ok());
         }
     }

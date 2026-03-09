@@ -392,6 +392,70 @@ mod tests {
         assert!(matches!(platform_err, PlatformError::Io(_)));
     }
 
+    #[test]
+    fn test_error_display_all_variants() {
+        let err = PlatformError::UnmountFailed("still in use".to_string());
+        assert!(err.to_string().contains("Unmount failed"));
+        assert!(err.to_string().contains("still in use"));
+
+        let err = PlatformError::NotSupported("feature X".to_string());
+        assert!(err.to_string().contains("Not supported"));
+
+        let err = PlatformError::CommandFailed("exit code 1".to_string());
+        assert!(err.to_string().contains("Command failed"));
+
+        let err = PlatformError::AlignmentError("buffer not 4K aligned".to_string());
+        assert!(err.to_string().contains("Alignment error"));
+        assert!(err.to_string().contains("buffer not 4K aligned"));
+    }
+
+    // -------------------------------------------------------------------------
+    // is_ptr_aligned tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_is_ptr_aligned_null() {
+        let ptr: *const u8 = std::ptr::null();
+        assert!(is_ptr_aligned(ptr, 512));
+        assert!(is_ptr_aligned(ptr, 4096));
+    }
+
+    #[test]
+    fn test_is_ptr_aligned_with_buffer() {
+        // Allocate aligned memory
+        let data = vec![0u8; 8192];
+        let ptr = data.as_ptr();
+        let addr = ptr as usize;
+
+        // The vec allocation is typically aligned to at least 8 bytes
+        assert!(is_ptr_aligned(ptr, 1));
+
+        // Check alignment based on actual pointer address
+        if addr.is_multiple_of(4096) {
+            assert!(is_ptr_aligned(ptr, 4096));
+        } else {
+            assert!(!is_ptr_aligned(ptr, 4096));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Alignment round-trip tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_align_up_then_down_is_idempotent_when_aligned() {
+        let aligned = align_up(1000, 512); // 1024
+        assert_eq!(align_down(aligned, 512), aligned);
+        assert!(is_aligned(aligned, 512));
+    }
+
+    #[test]
+    fn test_align_down_then_up_preserves_aligned() {
+        let value = 4096;
+        assert_eq!(align_down(value, 4096), value);
+        assert_eq!(align_up(value, 4096), value);
+    }
+
     // -------------------------------------------------------------------------
     // DeviceInfo tests
     // -------------------------------------------------------------------------
@@ -409,5 +473,42 @@ mod tests {
         assert_eq!(info.size, 32 * 1024 * 1024 * 1024);
         assert_eq!(info.block_size, 512);
         assert!(info.direct_io);
+    }
+
+    #[test]
+    fn test_device_info_clone() {
+        let info = DeviceInfo {
+            path: "/dev/sdb".to_string(),
+            size: 1024,
+            block_size: 4096,
+            direct_io: false,
+        };
+        let cloned = info.clone();
+        assert_eq!(cloned.path, info.path);
+        assert_eq!(cloned.size, info.size);
+        assert_eq!(cloned.block_size, info.block_size);
+        assert_eq!(cloned.direct_io, info.direct_io);
+    }
+
+    // -------------------------------------------------------------------------
+    // OpenOptions additional tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_open_options_read_only() {
+        let opts = OpenOptions::new().read(true).write(false).direct_io(false);
+
+        assert!(opts.read);
+        assert!(!opts.write);
+        assert!(!opts.direct_io);
+    }
+
+    #[test]
+    fn test_open_options_with_custom_block_size() {
+        let opts = OpenOptions::new().block_size(512);
+        assert_eq!(opts.block_size, 512);
+
+        let opts = OpenOptions::new().block_size(4096);
+        assert_eq!(opts.block_size, 4096);
     }
 }

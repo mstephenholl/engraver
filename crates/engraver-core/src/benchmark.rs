@@ -887,4 +887,309 @@ mod tests {
         };
         assert_eq!(progress.percentage(), 100);
     }
+
+    #[test]
+    fn test_progress_percentage_zero_total() {
+        let progress = BenchmarkProgress {
+            bytes_written: 0,
+            total_bytes: 0,
+            current_pass: 1,
+            total_passes: 1,
+            current_speed_bps: 0,
+            elapsed: Duration::ZERO,
+        };
+        assert_eq!(progress.percentage(), 0);
+    }
+
+    #[test]
+    fn test_progress_speed_display() {
+        let progress = BenchmarkProgress {
+            bytes_written: 50,
+            total_bytes: 100,
+            current_pass: 1,
+            total_passes: 1,
+            current_speed_bps: 50 * 1024 * 1024,
+            elapsed: Duration::from_secs(1),
+        };
+        assert_eq!(progress.speed_display(), "50.0 MB/s");
+    }
+
+    // -------------------------------------------------------------------------
+    // BenchmarkConfig additional tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_benchmark_config_default() {
+        let config = BenchmarkConfig::default();
+        assert_eq!(config.test_size, 256 * 1024 * 1024);
+        assert_eq!(config.block_size, 4 * 1024 * 1024);
+        assert_eq!(config.pattern, DataPattern::Zeros);
+        assert_eq!(config.passes, 1);
+    }
+
+    #[test]
+    fn test_benchmark_config_new() {
+        let config = BenchmarkConfig::new(128 * 1024 * 1024, 1024 * 1024);
+        assert_eq!(config.test_size, 128 * 1024 * 1024);
+        assert_eq!(config.block_size, 1024 * 1024);
+        assert_eq!(config.pattern, DataPattern::Zeros); // default
+        assert_eq!(config.passes, 1); // default
+    }
+
+    #[test]
+    fn test_benchmark_config_effective_test_size_no_scale() {
+        // Small block size relative to test size - no scaling needed
+        let config = BenchmarkConfig::new(256 * 1024 * 1024, 4 * 1024);
+        assert_eq!(config.effective_test_size(), 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_effective_test_size_for_block_sizes_empty() {
+        let effective =
+            BenchmarkConfig::effective_test_size_for_block_sizes(256 * 1024 * 1024, &[]);
+        assert_eq!(effective, 256 * 1024 * 1024);
+    }
+
+    // -------------------------------------------------------------------------
+    // BenchmarkRunner multi-pass test
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_benchmark_runner_multi_pass() {
+        let config = BenchmarkConfig {
+            test_size: 64 * 1024,
+            block_size: 4 * 1024,
+            pattern: DataPattern::Zeros,
+            passes: 3,
+        };
+
+        let runner = BenchmarkRunner::new(config);
+        let buffer = vec![0u8; 128 * 1024];
+        let cursor = Cursor::new(buffer);
+
+        let result = runner
+            .run(cursor, "/dev/test", None::<fn(&BenchmarkProgress)>)
+            .unwrap();
+
+        assert_eq!(result.passes.len(), 3);
+        for (i, pass) in result.passes.iter().enumerate() {
+            assert_eq!(pass.pass_number, (i + 1) as u32);
+            assert_eq!(pass.bytes_written, 64 * 1024);
+        }
+        assert_eq!(result.summary.total_bytes_written, 3 * 64 * 1024);
+    }
+
+    #[test]
+    fn test_benchmark_runner_cancellation() {
+        let config = BenchmarkConfig {
+            test_size: 1024 * 1024, // 1 MB
+            block_size: 4 * 1024,
+            pattern: DataPattern::Zeros,
+            passes: 1,
+        };
+
+        let runner = BenchmarkRunner::new(config);
+        let cancel = runner.cancel_handle();
+
+        // Cancel immediately
+        cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let buffer = vec![0u8; 2 * 1024 * 1024];
+        let cursor = Cursor::new(buffer);
+
+        let result = runner.run(cursor, "/dev/test", None::<fn(&BenchmarkProgress)>);
+        assert!(matches!(result, Err(BenchmarkError::Cancelled)));
+    }
+
+    #[test]
+    fn test_benchmark_runner_with_progress() {
+        let config = BenchmarkConfig {
+            test_size: 64 * 1024,
+            block_size: 4 * 1024,
+            pattern: DataPattern::Zeros,
+            passes: 1,
+        };
+
+        let runner = BenchmarkRunner::new(config);
+        let buffer = vec![0u8; 128 * 1024];
+        let cursor = Cursor::new(buffer);
+
+        let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let progress_clone = progress_count.clone();
+
+        let result = runner
+            .run(
+                cursor,
+                "/dev/test",
+                Some(move |_p: &BenchmarkProgress| {
+                    progress_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(result.passes[0].bytes_written, 64 * 1024);
+        // Should have 16 callbacks (64KB / 4KB blocks)
+        assert_eq!(progress_count.load(std::sync::atomic::Ordering::SeqCst), 16);
+    }
+
+    // -------------------------------------------------------------------------
+    // DataPattern tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_data_pattern_default() {
+        assert_eq!(DataPattern::default(), DataPattern::Zeros);
+    }
+
+    #[test]
+    fn test_data_pattern_from_str_zero_alias() {
+        assert_eq!(DataPattern::from_str("zero").unwrap(), DataPattern::Zeros);
+    }
+
+    // -------------------------------------------------------------------------
+    // BenchmarkDataSource tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_data_source_zeros() {
+        let source = BenchmarkDataSource::new(DataPattern::Zeros, 1024);
+        let block = source.get_block();
+        assert_eq!(block.len(), 1024);
+        assert!(block.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_data_source_sequential() {
+        let source = BenchmarkDataSource::new(DataPattern::Sequential, 512);
+        let block = source.get_block();
+        assert_eq!(block.len(), 512);
+        for (i, &b) in block.iter().enumerate() {
+            assert_eq!(b, (i % 256) as u8);
+        }
+    }
+
+    #[test]
+    fn test_data_source_random_not_all_zeros() {
+        let source = BenchmarkDataSource::new(DataPattern::Random, 1024);
+        let block = source.get_block();
+        assert_eq!(block.len(), 1024);
+        // Random data should not be all zeros
+        assert!(block.iter().any(|&b| b != 0));
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_size additional tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_size_empty_string() {
+        assert!(parse_size("").is_err());
+    }
+
+    #[test]
+    fn test_parse_size_bytes_suffix() {
+        assert_eq!(parse_size("4096B").unwrap(), 4096);
+        assert_eq!(parse_size("4096").unwrap(), 4096);
+    }
+
+    #[test]
+    fn test_parse_size_gb() {
+        assert_eq!(parse_size("1G").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_size("1GB").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_size_invalid_suffix() {
+        assert!(parse_size("4T").is_err());
+        assert!(parse_size("4X").is_err());
+    }
+
+    #[test]
+    fn test_parse_size_not_a_number() {
+        assert!(parse_size("abcK").is_err());
+    }
+
+    #[test]
+    fn test_parse_block_sizes_too_small() {
+        assert!(parse_block_sizes("1K").is_err());
+        assert!(parse_block_sizes("2K").is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // format_size tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_format_size_zero() {
+        assert_eq!(format_size(0), "0 B");
+    }
+
+    #[test]
+    fn test_format_size_boundaries() {
+        assert_eq!(format_size(1023), "1023 B");
+        assert_eq!(format_size(1024), "1 KB");
+        assert_eq!(format_size(1024 * 1024), "1 MB");
+        assert_eq!(format_size(1024 * 1024 * 1024), "1 GB");
+    }
+
+    // -------------------------------------------------------------------------
+    // BenchmarkError display tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_benchmark_error_display() {
+        let err = BenchmarkError::NotPowerOfTwo("100 MB".to_string());
+        assert!(err.to_string().contains("power of 2"));
+
+        let err = BenchmarkError::BlockSizeTooLarge("128 MB".to_string());
+        assert!(err.to_string().contains("exceeds maximum"));
+
+        let err = BenchmarkError::BlockSizeTooSmall("1 KB".to_string());
+        assert!(err.to_string().contains("below minimum"));
+
+        let err = BenchmarkError::MutuallyExclusiveOptions;
+        assert!(err.to_string().contains("Cannot use both"));
+
+        let err = BenchmarkError::InvalidSizeFormat("xyz".to_string());
+        assert!(err.to_string().contains("Invalid size format"));
+
+        let err = BenchmarkError::Cancelled;
+        assert_eq!(err.to_string(), "Benchmark cancelled");
+    }
+
+    // -------------------------------------------------------------------------
+    // Multi-block-size runner tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_run_multi_block_sizes() {
+        let config = BenchmarkConfig {
+            test_size: 64 * 1024, // 64 KB, power of 2
+            block_size: 4 * 1024,
+            pattern: DataPattern::Zeros,
+            passes: 1,
+        };
+
+        // Both block sizes fit: max is 8K, so min test size = 8K*10 = 80K
+        // 80K is NOT power of 2, so use small block sizes that keep test_size valid
+        let block_sizes = vec![4 * 1024]; // single block size to avoid scaling issues
+        let buffer = vec![0u8; 1024 * 1024];
+        let cursor = Cursor::new(buffer);
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let results = BenchmarkRunner::run_multi_block_sizes(
+            config,
+            &block_sizes,
+            cursor,
+            "/dev/test",
+            None::<fn(&BenchmarkProgress, usize, usize)>,
+            cancel,
+        )
+        .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].block_size, 4 * 1024);
+        assert!(!results[0].speed_display.is_empty());
+        assert!(!results[0].block_size_display.is_empty());
+    }
 }

@@ -1319,4 +1319,143 @@ mod tests {
         let config = WriteConfig::new().checksum_algorithm(None);
         assert_eq!(config.checksum_algorithm, None);
     }
+
+    // -------------------------------------------------------------------------
+    // WriteConfig additional tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_config_retry_delay() {
+        let config = WriteConfig::new().retry_delay(Duration::from_millis(500));
+        assert_eq!(config.retry_delay, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_write_config_default_retry_delay() {
+        let config = WriteConfig::default();
+        assert_eq!(
+            config.retry_delay,
+            Duration::from_millis(DEFAULT_RETRY_DELAY_MS)
+        );
+    }
+
+    #[test]
+    fn test_write_config_clone() {
+        let config = WriteConfig::new()
+            .block_size(8192)
+            .verify(true)
+            .sync_each_block(true);
+        let cloned = config.clone();
+        assert_eq!(cloned.block_size, 8192);
+        assert!(cloned.verify);
+        assert!(cloned.sync_each_block);
+    }
+
+    // -------------------------------------------------------------------------
+    // WriteResult additional tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_result_not_verified() {
+        let result = WriteResult {
+            bytes_written: 1024,
+            elapsed: Duration::from_secs(1),
+            average_speed: 1024,
+            retry_count: 0,
+            verified: None,
+            source_checksum: None,
+            target_checksum: None,
+            verification_elapsed: None,
+        };
+
+        assert!(result.verified.is_none());
+        assert!(result.source_checksum.is_none());
+        assert!(result.target_checksum.is_none());
+        assert!(result.verification_elapsed.is_none());
+        assert_eq!(result.speed_display(), "1.0 KB/s");
+    }
+
+    #[test]
+    fn test_write_result_verified_with_checksums() {
+        let result = WriteResult {
+            bytes_written: 4096,
+            elapsed: Duration::from_secs(1),
+            average_speed: 4096,
+            retry_count: 2,
+            verified: Some(true),
+            source_checksum: Some("abc123".to_string()),
+            target_checksum: Some("abc123".to_string()),
+            verification_elapsed: Some(Duration::from_millis(500)),
+        };
+
+        assert_eq!(result.verified, Some(true));
+        assert_eq!(result.source_checksum, result.target_checksum);
+        assert_eq!(result.retry_count, 2);
+        assert_eq!(
+            result.verification_elapsed,
+            Some(Duration::from_millis(500))
+        );
+    }
+
+    #[test]
+    fn test_write_result_verification_failed() {
+        let result = WriteResult {
+            bytes_written: 4096,
+            elapsed: Duration::from_secs(1),
+            average_speed: 4096,
+            retry_count: 0,
+            verified: Some(false),
+            source_checksum: Some("aaa".to_string()),
+            target_checksum: Some("bbb".to_string()),
+            verification_elapsed: Some(Duration::from_millis(200)),
+        };
+
+        assert_eq!(result.verified, Some(false));
+        assert_ne!(result.source_checksum, result.target_checksum);
+    }
+
+    // -------------------------------------------------------------------------
+    // Writer default trait test
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_writer_default() {
+        let writer = Writer::default();
+        assert_eq!(writer.config.block_size, DEFAULT_BLOCK_SIZE);
+    }
+
+    // -------------------------------------------------------------------------
+    // Writer unaligned data test
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_writer_source_smaller_than_block_size() {
+        // Source is smaller than one block
+        let source_data = vec![0x42u8; 100];
+        let source = Cursor::new(source_data.clone());
+        let mut target = Cursor::new(vec![0u8; 100]);
+
+        let config = WriteConfig::new().block_size(MIN_BLOCK_SIZE); // 4096 >> 100
+        let mut writer = Writer::with_config(config);
+
+        let result = writer.write(source, &mut target, 100).unwrap();
+
+        assert_eq!(result.bytes_written, 100);
+        assert_eq!(target.into_inner(), source_data);
+    }
+
+    // -------------------------------------------------------------------------
+    // calculate_eta edge cases
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_calculate_eta_more_written_than_total() {
+        // Edge case: bytes_written > total_bytes
+        assert_eq!(calculate_eta(1500, 1000, 100), None);
+    }
+
+    #[test]
+    fn test_calculate_eta_just_started() {
+        assert_eq!(calculate_eta(1, 1_000_000, 1000), Some(999));
+    }
 }

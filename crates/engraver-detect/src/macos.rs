@@ -7,11 +7,15 @@ use std::collections::HashMap;
 use std::process::Command;
 
 /// List all drives on macOS
+///
+/// # Errors
+///
+/// Returns an error if `diskutil` fails to execute or produces unparseable output.
 pub fn list_drives() -> Result<Vec<Drive>> {
     let output = Command::new("diskutil")
         .args(["list", "-plist"])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("diskutil list failed: {}", e)))?;
+        .map_err(|e| DetectError::CommandFailed(format!("diskutil list failed: {e}")))?;
 
     if !output.status.success() {
         return Err(DetectError::CommandFailed(format!(
@@ -28,10 +32,9 @@ pub fn list_drives() -> Result<Vec<Drive>> {
     for disk_name in disk_names {
         match get_disk_info(&disk_name) {
             Ok(Some(drive)) => drives.push(drive),
-            Ok(None) => continue,
+            Ok(None) => {}
             Err(e) => {
                 tracing::debug!("Failed to get info for {}: {}", disk_name, e);
-                continue;
             }
         }
     }
@@ -124,22 +127,26 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
     let output = Command::new("diskutil")
         .args(["info", "-plist", disk_name])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("diskutil info failed: {}", e)))?;
+        .map_err(|e| DetectError::CommandFailed(format!("diskutil info failed: {e}")))?;
 
     if !output.status.success() {
         return Ok(None);
     }
 
     let plist_str = String::from_utf8_lossy(&output.stdout);
-    let info = parse_disk_info(&plist_str)?;
+    let info = parse_disk_info(&plist_str);
 
     // Skip virtual/synthesized disks
-    if info.get("VirtualOrPhysical").map(|s| s.as_str()) == Some("Virtual") {
+    if info
+        .get("VirtualOrPhysical")
+        .map(std::string::String::as_str)
+        == Some("Virtual")
+    {
         return Ok(None);
     }
 
     // Skip APFS containers
-    if info.get("APFSContainerReference").is_some() && !info.contains_key("DeviceNode") {
+    if info.contains_key("APFSContainerReference") && !info.contains_key("DeviceNode") {
         return Ok(None);
     }
 
@@ -163,13 +170,10 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
         return Ok(None);
     }
 
-    let removable = info
-        .get("RemovableMedia")
-        .map(|s| s == "true")
-        .unwrap_or(false)
-        || info.get("Ejectable").map(|s| s == "true").unwrap_or(false);
+    let removable = info.get("RemovableMedia").is_some_and(|s| s == "true")
+        || info.get("Ejectable").is_some_and(|s| s == "true");
 
-    let internal = info.get("Internal").map(|s| s == "true").unwrap_or(true);
+    let internal = info.get("Internal").is_none_or(|s| s == "true");
 
     let vendor = info.get("MediaName").cloned();
     let model = info.get("IORegistryEntryName").cloned();
@@ -196,7 +200,7 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
         .or_else(|| model.clone())
         .unwrap_or_else(|| disk_name.to_string());
 
-    let raw_path = format!("/dev/r{}", disk_name);
+    let raw_path = format!("/dev/r{disk_name}");
 
     Ok(Some(Drive {
         path: device_node,
@@ -217,7 +221,7 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
 }
 
 /// Parse disk info plist into a key-value map
-pub(crate) fn parse_disk_info(plist: &str) -> Result<HashMap<String, String>> {
+pub(crate) fn parse_disk_info(plist: &str) -> HashMap<String, String> {
     let mut info = HashMap::new();
     let mut current_key: Option<String> = None;
 
@@ -253,7 +257,7 @@ pub(crate) fn parse_disk_info(plist: &str) -> Result<HashMap<String, String>> {
         }
     }
 
-    Ok(info)
+    info
 }
 
 /// Get partitions for a disk
@@ -261,18 +265,18 @@ fn get_disk_partitions(disk_name: &str) -> Result<Vec<Partition>> {
     let output = Command::new("diskutil")
         .args(["list", "-plist", disk_name])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("diskutil list failed: {}", e)))?;
+        .map_err(|e| DetectError::CommandFailed(format!("diskutil list failed: {e}")))?;
 
     if !output.status.success() {
         return Ok(Vec::new());
     }
 
     let plist_str = String::from_utf8_lossy(&output.stdout);
-    parse_partitions(&plist_str, disk_name)
+    Ok(parse_partitions(&plist_str, disk_name))
 }
 
 /// Parse partitions from diskutil list output
-pub(crate) fn parse_partitions(plist: &str, disk_name: &str) -> Result<Vec<Partition>> {
+pub(crate) fn parse_partitions(plist: &str, disk_name: &str) -> Vec<Partition> {
     let mut partitions = Vec::new();
 
     let mut in_partitions = false;
@@ -311,7 +315,7 @@ pub(crate) fn parse_partitions(plist: &str, disk_name: &str) -> Result<Vec<Parti
                     let mount_point = current_partition.get("MountPoint").cloned();
 
                     partitions.push(Partition {
-                        path: format!("/dev/{}", dev_id),
+                        path: format!("/dev/{dev_id}"),
                         label: current_partition.get("VolumeName").cloned(),
                         filesystem: current_partition.get("Content").cloned(),
                         size,
@@ -350,20 +354,20 @@ pub(crate) fn parse_partitions(plist: &str, disk_name: &str) -> Result<Vec<Parti
         }
     }
 
-    Ok(partitions)
+    partitions
 }
 
 /// Detect drive type from disk info
 pub(crate) fn detect_drive_type(info: &HashMap<String, String>) -> DriveType {
-    let protocol = info.get("DeviceProtocol").map(|s| s.as_str());
-    let bus = info.get("BusProtocol").map(|s| s.as_str());
+    let protocol = info.get("DeviceProtocol").map(std::string::String::as_str);
+    let bus = info.get("BusProtocol").map(std::string::String::as_str);
     let media_name = info.get("MediaName").map(|s| s.to_lowercase());
 
     match protocol.or(bus) {
         Some("USB") => return DriveType::Usb,
-        Some("NVMe") | Some("PCI-Express") => return DriveType::Nvme,
-        Some("SATA") | Some("SAS") => return DriveType::Sata,
-        Some("Secure Digital") | Some("SD") => return DriveType::SdCard,
+        Some("NVMe" | "PCI-Express") => return DriveType::Nvme,
+        Some("SATA" | "SAS") => return DriveType::Sata,
+        Some("Secure Digital" | "SD") => return DriveType::SdCard,
         _ => {}
     }
 
@@ -376,7 +380,7 @@ pub(crate) fn detect_drive_type(info: &HashMap<String, String>) -> DriveType {
     DriveType::Other
 }
 
-/// Get USB speed for a device by querying system_profiler
+/// Get USB speed for a device by querying `system_profiler`
 ///
 /// Parses `system_profiler SPUSBDataType` output to find the speed
 /// of the USB device matching the given disk name.
@@ -385,7 +389,7 @@ fn get_usb_speed_for_disk(disk_name: &str, info: &HashMap<String, String>) -> Op
     let protocol = info
         .get("DeviceProtocol")
         .or_else(|| info.get("BusProtocol"));
-    if protocol.map(|s| s.as_str()) != Some("USB") {
+    if protocol.map(std::string::String::as_str) != Some("USB") {
         return None;
     }
 
@@ -408,7 +412,7 @@ fn get_usb_speed_for_disk(disk_name: &str, info: &HashMap<String, String>) -> Op
     parse_usb_speed_from_profiler(&output_str, disk_name, media_name.as_deref())
 }
 
-/// Parse USB speed from system_profiler output
+/// Parse USB speed from `system_profiler` output
 ///
 /// The output format is hierarchical text like:
 /// ```text
@@ -467,13 +471,13 @@ fn parse_speed_string(speed_str: &str) -> Option<UsbSpeed> {
     // Parse "Up to X Gb/s" or "Up to X Mb/s"
     if lower.contains("gb/s") || lower.contains("gbps") {
         // Extract the number
-        let num_str: String = lower.chars().filter(|c| c.is_ascii_digit()).collect();
+        let num_str: String = lower.chars().filter(char::is_ascii_digit).collect();
         if let Ok(gbps) = num_str.parse::<u32>() {
             let mbps = gbps * 1000;
             return Some(UsbSpeed::from_mbps(mbps));
         }
     } else if lower.contains("mb/s") || lower.contains("mbps") {
-        let num_str: String = lower.chars().filter(|c| c.is_ascii_digit()).collect();
+        let num_str: String = lower.chars().filter(char::is_ascii_digit).collect();
         if let Ok(mbps) = num_str.parse::<u32>() {
             return Some(UsbSpeed::from_mbps(mbps));
         }
@@ -503,11 +507,7 @@ fn check_if_system_drive(
     mount_points: &[String],
     internal: bool,
 ) -> (bool, Option<String>) {
-    if info
-        .get("SystemImage")
-        .map(|s| s == "true")
-        .unwrap_or(false)
-    {
+    if info.get("SystemImage").is_some_and(|s| s == "true") {
         return (true, Some("System image volume".to_string()));
     }
 
@@ -517,15 +517,12 @@ fn check_if_system_drive(
 
     for mp in mount_points {
         if is_system_mount_point(mp) {
-            return (true, Some(format!("Contains system mount point: {}", mp)));
+            return (true, Some(format!("Contains system mount point: {mp}")));
         }
     }
 
-    let removable = info
-        .get("RemovableMedia")
-        .map(|s| s == "true")
-        .unwrap_or(false);
-    let ejectable = info.get("Ejectable").map(|s| s == "true").unwrap_or(false);
+    let removable = info.get("RemovableMedia").is_some_and(|s| s == "true");
+    let ejectable = info.get("Ejectable").is_some_and(|s| s == "true");
 
     if internal && !removable && !ejectable {
         return (true, Some("Internal non-removable drive".to_string()));
@@ -635,7 +632,7 @@ mod tests {
 </plist>
         "#;
 
-        let info = parse_disk_info(plist).unwrap();
+        let info = parse_disk_info(plist);
         assert_eq!(info.get("DeviceNode"), Some(&"/dev/disk2".to_string()));
         assert_eq!(info.get("TotalSize"), Some(&"32000000000".to_string()));
         assert_eq!(info.get("RemovableMedia"), Some(&"true".to_string()));
@@ -645,16 +642,16 @@ mod tests {
 
     #[test]
     fn test_parse_disk_info_false_values() {
-        let plist = r#"
+        let plist = r"
 <dict>
     <key>Ejectable</key>
     <false/>
     <key>Removable</key>
     <false/>
 </dict>
-        "#;
+        ";
 
-        let info = parse_disk_info(plist).unwrap();
+        let info = parse_disk_info(plist);
         assert_eq!(info.get("Ejectable"), Some(&"false".to_string()));
         assert_eq!(info.get("Removable"), Some(&"false".to_string()));
     }
@@ -669,20 +666,20 @@ mod tests {
 </plist>
         "#;
 
-        let info = parse_disk_info(plist).unwrap();
+        let info = parse_disk_info(plist);
         assert!(info.is_empty());
     }
 
     #[test]
     fn test_parse_disk_info_special_characters() {
-        let plist = r#"
+        let plist = r"
 <dict>
     <key>VolumeName</key>
     <string>My USB & Drive</string>
 </dict>
-        "#;
+        ";
 
-        let info = parse_disk_info(plist).unwrap();
+        let info = parse_disk_info(plist);
         assert_eq!(info.get("VolumeName"), Some(&"My USB & Drive".to_string()));
     }
 
@@ -770,7 +767,7 @@ mod tests {
 </plist>
         "#;
 
-        let partitions = parse_partitions(plist, "disk2").unwrap();
+        let partitions = parse_partitions(plist, "disk2");
         assert_eq!(partitions.len(), 1);
         assert_eq!(partitions[0].path, "/dev/disk2s1");
         assert_eq!(partitions[0].label, Some("UBUNTU".to_string()));
@@ -789,7 +786,7 @@ mod tests {
 </plist>
         "#;
 
-        let partitions = parse_partitions(plist, "disk2").unwrap();
+        let partitions = parse_partitions(plist, "disk2");
         assert!(partitions.is_empty());
     }
 
@@ -798,7 +795,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    #[ignore] // Run with: cargo test -- --ignored
+    #[ignore = "requires real hardware; run with: cargo test -- --ignored"]
     fn test_list_drives_real() {
         let drives = list_drives();
         assert!(drives.is_ok(), "Should be able to list drives");
@@ -848,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_parse_usb_speed_from_profiler() {
-        let output = r#"
+        let output = r"
 USB:
 
     USB 3.1 Bus:
@@ -871,7 +868,7 @@ USB:
     USB 2.0 Bus:
 
       Host Controller Driver: AppleUSBEHCI
-"#;
+";
 
         // Should find SanDisk at SuperSpeed
         let speed = parse_usb_speed_from_profiler(output, "disk2", Some("SanDisk Ultra"));

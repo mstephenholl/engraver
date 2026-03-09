@@ -168,4 +168,93 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("Failed to parse partition table"));
     }
+
+    #[test]
+    fn test_error_display_device_not_found() {
+        let err = Error::DeviceNotFound("/dev/sdz".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Target device not found"));
+        assert!(msg.contains("/dev/sdz"));
+    }
+
+    #[test]
+    fn test_error_display_system_drive_protection() {
+        let err = Error::SystemDriveProtection("/dev/sda".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Refusing to write to system drive"));
+        assert!(msg.contains("/dev/sda"));
+    }
+
+    #[test]
+    fn test_error_display_network() {
+        let err = Error::Network("connection timeout".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Network error"));
+        assert!(msg.contains("connection timeout"));
+    }
+
+    #[test]
+    fn test_error_display_decompression() {
+        let err = Error::Decompression("invalid gzip header".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Decompression error"));
+        assert!(msg.contains("invalid gzip header"));
+    }
+
+    #[test]
+    fn test_error_display_permission_denied() {
+        let err = Error::PermissionDenied("need sudo".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Permission denied"));
+        assert!(msg.contains("need sudo"));
+    }
+
+    #[test]
+    fn test_error_display_invalid_config() {
+        let err = Error::InvalidConfig("block size must be positive".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid configuration"));
+    }
+
+    #[test]
+    fn test_error_display_device_busy() {
+        let err = Error::DeviceBusy("/dev/sdb".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Device busy"));
+        assert!(msg.contains("/dev/sdb"));
+    }
+
+    #[test]
+    fn test_error_display_unknown() {
+        let err = Error::Unknown("something unexpected".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("Unknown error"));
+        assert!(msg.contains("something unexpected"));
+    }
+
+    #[test]
+    fn test_error_display_checksum_mismatch() {
+        let err = Error::ChecksumMismatch {
+            expected: "abc123".to_string(),
+            actual: "def456".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Checksum mismatch"));
+        assert!(msg.contains("abc123"));
+        assert!(msg.contains("def456"));
+    }
+
+    #[test]
+    fn test_error_debug_format() {
+        let err = Error::Cancelled;
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("Cancelled"));
+
+        let err = Error::PartialWrite {
+            expected: 100,
+            actual: 50,
+        };
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("PartialWrite"));
+    }
 }

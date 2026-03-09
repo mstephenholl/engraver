@@ -757,4 +757,151 @@ mod tests {
         let err = DetectError::UnsupportedPlatform;
         assert_eq!(err.to_string(), "Platform not supported");
     }
+
+    #[test]
+    fn test_error_display_command_failed() {
+        let err = DetectError::CommandFailed("diskutil list failed".to_string());
+        assert!(err.to_string().contains("Command failed"));
+        assert!(err.to_string().contains("diskutil list failed"));
+    }
+
+    #[test]
+    fn test_error_display_parse_error() {
+        let err = DetectError::ParseError("invalid JSON".to_string());
+        assert!(err.to_string().contains("Parse error"));
+    }
+
+    #[test]
+    fn test_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "device gone");
+        let detect_err: DetectError = io_err.into();
+        assert!(matches!(detect_err, DetectError::Io(_)));
+        assert!(detect_err.to_string().contains("I/O error"));
+    }
+
+    // -------------------------------------------------------------------------
+    // UsbSpeed tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_usb_speed_from_mbps() {
+        assert_eq!(UsbSpeed::from_mbps(1), UsbSpeed::Low);
+        assert_eq!(UsbSpeed::from_mbps(2), UsbSpeed::Low);
+        assert_eq!(UsbSpeed::from_mbps(12), UsbSpeed::Full);
+        assert_eq!(UsbSpeed::from_mbps(480), UsbSpeed::High);
+        assert_eq!(UsbSpeed::from_mbps(5000), UsbSpeed::SuperSpeed);
+        assert_eq!(UsbSpeed::from_mbps(10000), UsbSpeed::SuperSpeedPlus);
+        assert_eq!(UsbSpeed::from_mbps(20000), UsbSpeed::SuperSpeedPlus20);
+    }
+
+    #[test]
+    fn test_usb_speed_from_mbps_boundaries() {
+        // Low/Full boundary
+        assert_eq!(UsbSpeed::from_mbps(2), UsbSpeed::Low);
+        assert_eq!(UsbSpeed::from_mbps(3), UsbSpeed::Full);
+        // Full/High boundary
+        assert_eq!(UsbSpeed::from_mbps(15), UsbSpeed::Full);
+        assert_eq!(UsbSpeed::from_mbps(16), UsbSpeed::High);
+        // High/SuperSpeed boundary
+        assert_eq!(UsbSpeed::from_mbps(500), UsbSpeed::High);
+        assert_eq!(UsbSpeed::from_mbps(501), UsbSpeed::SuperSpeed);
+        // SuperSpeed/SuperSpeedPlus boundary
+        assert_eq!(UsbSpeed::from_mbps(5500), UsbSpeed::SuperSpeed);
+        assert_eq!(UsbSpeed::from_mbps(5501), UsbSpeed::SuperSpeedPlus);
+        // SuperSpeedPlus/SuperSpeedPlus20 boundary
+        assert_eq!(UsbSpeed::from_mbps(11000), UsbSpeed::SuperSpeedPlus);
+        assert_eq!(UsbSpeed::from_mbps(11001), UsbSpeed::SuperSpeedPlus20);
+    }
+
+    #[test]
+    fn test_usb_speed_max_speed_mb_s() {
+        assert_eq!(UsbSpeed::Low.max_speed_mb_s(), 0);
+        assert_eq!(UsbSpeed::Unknown.max_speed_mb_s(), 0);
+        assert_eq!(UsbSpeed::Full.max_speed_mb_s(), 1);
+        assert_eq!(UsbSpeed::High.max_speed_mb_s(), 60);
+        assert_eq!(UsbSpeed::SuperSpeed.max_speed_mb_s(), 625);
+        assert_eq!(UsbSpeed::SuperSpeedPlus.max_speed_mb_s(), 1250);
+        assert_eq!(UsbSpeed::SuperSpeedPlus20.max_speed_mb_s(), 2500);
+    }
+
+    #[test]
+    fn test_usb_speed_is_slow() {
+        assert!(UsbSpeed::Low.is_slow());
+        assert!(UsbSpeed::Full.is_slow());
+        assert!(UsbSpeed::High.is_slow());
+        assert!(!UsbSpeed::SuperSpeed.is_slow());
+        assert!(!UsbSpeed::SuperSpeedPlus.is_slow());
+        assert!(!UsbSpeed::SuperSpeedPlus20.is_slow());
+        assert!(!UsbSpeed::Unknown.is_slow());
+    }
+
+    #[test]
+    fn test_usb_speed_display() {
+        assert_eq!(UsbSpeed::Low.to_string(), "USB 1.x (1.5 Mbps)");
+        assert_eq!(UsbSpeed::Full.to_string(), "USB 1.x (12 Mbps)");
+        assert_eq!(UsbSpeed::High.to_string(), "USB 2.0 (480 Mbps)");
+        assert_eq!(UsbSpeed::SuperSpeed.to_string(), "USB 3.0 (5 Gbps)");
+        assert_eq!(UsbSpeed::SuperSpeedPlus.to_string(), "USB 3.1 (10 Gbps)");
+        assert_eq!(UsbSpeed::SuperSpeedPlus20.to_string(), "USB 3.2 (20 Gbps)");
+        assert_eq!(UsbSpeed::Unknown.to_string(), "Unknown");
+    }
+
+    #[test]
+    fn test_usb_speed_default() {
+        assert_eq!(UsbSpeed::default(), UsbSpeed::Unknown);
+    }
+
+    #[test]
+    fn test_usb_speed_serialization() {
+        let speed = UsbSpeed::SuperSpeed;
+        let json = serde_json::to_string(&speed).unwrap();
+        let deserialized: UsbSpeed = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, UsbSpeed::SuperSpeed);
+    }
+
+    // -------------------------------------------------------------------------
+    // Drive additional tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_drive_with_mount_point() {
+        let drive = Drive::new("/dev/sdb")
+            .with_mount_point("/mnt/usb")
+            .with_mount_point("/media/user/data");
+
+        assert_eq!(drive.mount_points.len(), 2);
+        assert_eq!(drive.mount_points[0], "/mnt/usb");
+        assert_eq!(drive.mount_points[1], "/media/user/data");
+    }
+
+    #[test]
+    fn test_drive_with_system_reason() {
+        let drive =
+            Drive::new("/dev/sda").with_system(true, Some("Contains root filesystem".to_string()));
+
+        assert!(drive.is_system);
+        assert_eq!(
+            drive.system_reason,
+            Some("Contains root filesystem".to_string())
+        );
+        assert!(!drive.is_safe_target());
+    }
+
+    #[test]
+    fn test_drive_display_name_empty_vendor() {
+        let drive = Drive {
+            vendor: Some(String::new()),
+            model: Some("Ultra Fit".to_string()),
+            name: "Fallback".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(drive.display_name(), "Ultra Fit");
+    }
+
+    #[test]
+    fn test_drive_new_sets_raw_path() {
+        let drive = Drive::new("/dev/sdb");
+        assert_eq!(drive.path, "/dev/sdb");
+        assert_eq!(drive.raw_path, "/dev/sdb");
+    }
 }

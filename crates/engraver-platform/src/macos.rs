@@ -36,7 +36,10 @@ impl PlatformOps for MacOSPlatform {
 
     fn has_elevated_privileges() -> bool {
         // Check if running as root
-        unsafe { libc::geteuid() == 0 }
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::geteuid() == 0
+        }
     }
 
     fn get_block_size(path: &str) -> Result<u32> {
@@ -126,6 +129,7 @@ impl RawDevice for MacOSDevice {
 
     fn sync(&self) -> Result<()> {
         let fd = self.file.as_raw_fd();
+        #[allow(unsafe_code)]
         let result = unsafe { libc::fsync(fd) };
         if result == 0 {
             Ok(())
@@ -186,6 +190,7 @@ fn set_nocache(file: &File) -> Result<()> {
     // F_NOCACHE = 48 on macOS
     const F_NOCACHE: libc::c_int = 48;
 
+    #[allow(unsafe_code)]
     let result = unsafe { libc::fcntl(fd, F_NOCACHE, 1) };
 
     if result == -1 {
@@ -210,7 +215,9 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
         let mut block_count: u64 = 0;
         let mut block_size: u32 = 0;
 
+        #[allow(unsafe_code)]
         let result1 = unsafe { libc::ioctl(fd, DKIOCGETBLOCKCOUNT, &mut block_count) };
+        #[allow(unsafe_code)]
         let result2 = unsafe { libc::ioctl(fd, DKIOCGETBLOCKSIZE, &mut block_size) };
 
         if result1 == 0 && result2 == 0 && block_count > 0 && block_size > 0 {
@@ -224,10 +231,10 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
     let size = file.try_clone()?.seek(SeekFrom::End(0))?;
 
     if size == 0 {
-        Err(PlatformError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to get size of {}", path),
-        )))
+        Err(PlatformError::Io(std::io::Error::other(format!(
+            "Failed to get size of {}",
+            path
+        ))))
     } else {
         Ok(size)
     }
@@ -249,6 +256,7 @@ fn get_device_block_size(path: &str) -> Result<u32> {
         const DKIOCGETBLOCKSIZE: libc::c_ulong = 0x40046418;
 
         let mut block_size: u32 = 0;
+        #[allow(unsafe_code)]
         let result = unsafe { libc::ioctl(fd, DKIOCGETBLOCKSIZE, &mut block_size) };
 
         if result == 0 && block_size > 0 {

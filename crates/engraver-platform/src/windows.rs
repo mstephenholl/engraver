@@ -220,6 +220,7 @@ impl WindowsDevice {
 // SAFETY: WindowsDevice contains a Windows HANDLE which is safe to send between threads.
 // The handle is an opaque pointer managed by the Windows kernel.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
 unsafe impl Send for WindowsDevice {}
 
 #[cfg(target_os = "windows")]
@@ -228,6 +229,7 @@ impl Drop for WindowsDevice {
         // Try to unlock (ignore errors)
         let _ = self.unlock();
 
+        #[allow(unsafe_code)]
         unsafe {
             CloseHandle(self.handle);
         }
@@ -241,6 +243,7 @@ impl RawDevice for WindowsDevice {
     }
 
     fn sync(&self) -> Result<()> {
+        #[allow(unsafe_code)]
         let result = unsafe { FlushFileBuffers(self.handle) };
 
         if result == 0 {
@@ -289,6 +292,7 @@ impl RawDevice for WindowsDevice {
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize> {
         // Seek to offset
         let mut new_pos: i64 = 0;
+        #[allow(unsafe_code)]
         let result =
             unsafe { SetFilePointerEx(self.handle, offset as i64, &mut new_pos, FILE_BEGIN) };
 
@@ -298,6 +302,7 @@ impl RawDevice for WindowsDevice {
 
         // Read data
         let mut bytes_read: u32 = 0;
+        #[allow(unsafe_code)]
         let result = unsafe {
             ReadFile(
                 self.handle,
@@ -320,6 +325,7 @@ impl RawDevice for WindowsDevice {
 impl Read for WindowsDevice {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut bytes_read: u32 = 0;
+        #[allow(unsafe_code)]
         let result = unsafe {
             ReadFile(
                 self.handle,
@@ -342,6 +348,7 @@ impl Read for WindowsDevice {
 impl Write for WindowsDevice {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut bytes_written: u32 = 0;
+        #[allow(unsafe_code)]
         let result = unsafe {
             WriteFile(
                 self.handle,
@@ -360,6 +367,7 @@ impl Write for WindowsDevice {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
+        #[allow(unsafe_code)]
         let result = unsafe { FlushFileBuffers(self.handle) };
 
         if result == 0 {
@@ -380,6 +388,7 @@ impl Seek for WindowsDevice {
         };
 
         let mut new_pos: i64 = 0;
+        #[allow(unsafe_code)]
         let result = unsafe { SetFilePointerEx(self.handle, offset, &mut new_pos, method) };
 
         if result == 0 {
@@ -412,9 +421,11 @@ fn normalize_windows_path(path: &str) -> String {
 fn get_device_size(handle: HANDLE, _path: &str) -> Result<u64> {
     use windows_sys::Win32::System::Ioctl::{GET_LENGTH_INFORMATION, IOCTL_DISK_GET_LENGTH_INFO};
 
+    #[allow(unsafe_code)]
     let mut length_info: GET_LENGTH_INFORMATION = unsafe { std::mem::zeroed() };
     let mut bytes_returned: u32 = 0;
 
+    #[allow(unsafe_code)]
     let result = unsafe {
         DeviceIoControl(
             handle,
@@ -433,6 +444,7 @@ fn get_device_size(handle: HANDLE, _path: &str) -> Result<u64> {
     } else {
         // Fallback: try GetFileSizeEx
         let mut size: i64 = 0;
+        #[allow(unsafe_code)]
         let result = unsafe { GetFileSizeEx(handle, &mut size) };
 
         if result != 0 && size > 0 {
@@ -506,6 +518,7 @@ fn is_elevated() -> bool {
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
+    #[allow(unsafe_code)]
     unsafe {
         let mut token: HANDLE = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
