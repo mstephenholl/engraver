@@ -35,6 +35,7 @@ cargo build --release
 | `verify` | Verify drive against image |
 | `checksum` | Calculate file checksum |
 | `benchmark` | Test drive write speed |
+| `erase` | Erase a drive by zero-filling |
 | `config` | Manage configuration |
 | `completions` | Generate shell completions |
 | `mangen` | Generate man pages |
@@ -145,6 +146,21 @@ engraver benchmark /dev/sdb -y
 | `--json` | Output results as JSON | false |
 
 **Warning:** Benchmarking is a destructive operation that will overwrite data on the target device.
+
+### Erase a Drive
+
+```bash
+# Zero-fill a drive
+engraver erase /dev/sdb
+
+# Skip confirmation
+engraver erase /dev/sdb -y
+
+# Custom block size
+engraver erase /dev/sdb --block-size 1M
+```
+
+**Warning:** This is a destructive operation that will overwrite all data on the target device.
 
 ### Manage Configuration
 
@@ -337,6 +353,8 @@ Generated man pages:
 - `engraver-list.1` - List command documentation
 - `engraver-checksum.1` - Checksum command documentation
 - `engraver-benchmark.1` - Benchmark command documentation
+- `engraver-erase.1` - Erase command documentation
+- `engraver-config.1` - Config command documentation
 
 ## Examples
 

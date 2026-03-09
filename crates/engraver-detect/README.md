@@ -42,9 +42,9 @@ assert!(target.is_safe_target());
 The crate detects USB connection speeds and can warn if a USB 3.0 device is connected at USB 2.0 speed:
 
 ```rust
-use engraver_detect::{list_drives, UsbSpeed};
+use engraver_detect::{list_all_drives, UsbSpeed};
 
-let drives = list_drives()?;
+let drives = list_all_drives()?;
 for drive in drives {
     if let Some(speed) = &drive.usb_speed {
         match speed {
@@ -65,7 +65,8 @@ Available USB speed variants:
 - `Full` - USB 1.1 (12 Mbps)
 - `High` - USB 2.0 (480 Mbps)
 - `SuperSpeed` - USB 3.0 (5 Gbps)
-- `SuperSpeedPlus` - USB 3.1/3.2 (10+ Gbps)
+- `SuperSpeedPlus` - USB 3.1/3.2 (10 Gbps)
+- `SuperSpeedPlus20` - USB 3.2 Gen 2x2 (20 Gbps)
 
 ## Testing
 

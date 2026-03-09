@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/mstephenholl/engraver/main/install.
 less install.sh
 
 # Verify checksum
-echo "d691f039c98a9598368532747504f8f1d9362977fe5897f96c7111e7de6ddd50  install.sh" | sha256sum -c
+echo "3d310d2094281e011d80db8d7dcf2922cbbb71c018ffdf365ab2966dd976adda  install.sh" | sha256sum -c
 
 # Run after inspection
 bash install.sh
@@ -105,6 +105,9 @@ engraver benchmark /dev/sdb --size 1G --pattern random
 
 # Test multiple block sizes to find optimal performance
 engraver benchmark /dev/sdb --test-block-sizes "4K,64K,1M,4M,16M"
+
+# Erase a drive (zero-fill)
+engraver erase /dev/sdb
 ```
 
 ## Resume Support

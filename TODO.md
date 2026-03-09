@@ -99,7 +99,7 @@ Planned features, improvements, and development roadmap for Engraver.
 - [x] **cargo-audit in CI** - Security vulnerability scanning active
 
 - [x] **Code coverage with Codecov** - tarpaulin + codecov.io integration
-- [x] **MSRV validation job** - Testing against Rust 1.85
+- [x] **MSRV validation job** - Testing against Rust 1.87
 - [x] **cargo-deny for license compliance** - `deny.toml` created with license allowlist
 
 ### High Priority
@@ -190,7 +190,7 @@ Planned features, improvements, and development roadmap for Engraver.
 ## Testing
 
 - [x] **CLI unit tests** - Comprehensive test coverage across all crates
-  - 589+ unit tests across the codebase (based on `#[test]` count)
+  - 782+ unit tests across the codebase (based on `#[test]` count)
   - Integration tests in cli, core, detect, and platform crates
   - Added tests for list.rs, benchmark.rs, checksum.rs utility functions
 
@@ -205,7 +205,7 @@ Planned features, improvements, and development roadmap for Engraver.
 - [ ] **Compression decompression tests** with real compressed images
 
 - [x] **Expand fuzz targets**
-  - Added additional coverage of edge cases (currently 20 targets)
+  - Added additional coverage of edge cases (currently 18 targets)
 
 ---
 

@@ -52,6 +52,7 @@ engraver/
 - Argument parsing (clap)
 - User interaction (dialoguer)
 - Progress display (indicatif)
+- Drive erasure (zero-fill)
 - JSON output for scripting
 
 ### engraver-gui (Planned)
