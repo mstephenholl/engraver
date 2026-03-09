@@ -31,9 +31,11 @@ Planned features, improvements, and development roadmap for Engraver.
   - `engraver config --init` to create, `engraver config` to view
   - `--config-file` flag for custom config path
 
-- [ ] **Parallel verification (checksum while writing)**
+- [x] **Parallel verification (checksum while writing)**
   - Calculate checksum during write operation instead of separate pass
   - Reduces total time for write+verify workflow
+  - Uses `write_and_verify()` when `--verify` is set (falls back to sequential for `--resume`)
+  - Progress bar transitions from "Writing" to "Verifying" phase automatically
 
 - [ ] **Multi-drive support**
   - Write to multiple drives simultaneously

@@ -20,7 +20,7 @@ use std::time::Instant;
 use engraver_core::{
     auto_detect_checksum, validate_checkpoint, validate_source, CheckpointManager,
     ChecksumAlgorithm, Source, SourceType, Verifier, VerifyConfig, WriteCheckpoint, WriteConfig,
-    Writer,
+    WritePhase, Writer,
 };
 #[cfg(feature = "partition-info")]
 use engraver_core::{inspect_from_buffer, read_partition_header, PartitionTableType};
@@ -523,10 +523,22 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     let cancel_flag = args.cancel_flag.clone();
 
-    let config = WriteConfig::new()
+    // Enable parallel verification: hash source data during write, then read back
+    // target to verify. Cannot be used with resume (partial hash would be incorrect).
+    let use_parallel_verify = args.verify && resume_offset == 0;
+    let verify_algo: ChecksumAlgorithm = args
+        .checksum_algo
+        .parse()
+        .unwrap_or(ChecksumAlgorithm::Sha256);
+
+    let mut config = WriteConfig::new()
         .block_size(block_size)
         .sync_each_block(false)
         .sync_on_complete(true);
+
+    if use_parallel_verify {
+        config = config.checksum_algorithm(Some(verify_algo));
+    }
 
     let writer = Writer::with_config(config);
 
@@ -535,8 +547,23 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     let last_checkpoint_bytes =
         std::sync::Arc::new(std::sync::atomic::AtomicU64::new(resume_offset));
     let last_checkpoint_clone = last_checkpoint_bytes.clone();
+    let phase_switched = std::sync::Arc::new(AtomicBool::new(false));
+    let phase_switched_clone = phase_switched.clone();
 
     let writer = writer.on_progress(move |progress| {
+        // When the phase switches to Verifying, update the progress bar style
+        if progress.phase == WritePhase::Verifying
+            && !phase_switched_clone.swap(true, Ordering::Relaxed)
+        {
+            pb_clone.set_position(0);
+            pb_clone.set_style(
+                ProgressStyle::default_bar()
+                    .template("  {spinner:.green} Verifying [{bar:40.cyan/blue}] {bytes}/{total_bytes} {msg}")
+                    .unwrap()
+                    .progress_chars("█▓░"),
+            );
+        }
+
         pb_clone.set_position(progress.bytes_written);
 
         // Build detailed progress message
@@ -548,7 +575,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             progress.eta_display()
         );
 
-        // Show retry count if any retries have occurred
+        // Show retry count if any retries have occurred (only during write phase)
         if progress.retry_count > 0 {
             msg.push_str(&format!(" | {} retries", progress.retry_count));
         }
@@ -556,7 +583,9 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         pb_clone.set_message(msg);
 
         // Track progress for checkpointing (checkpoint saved in main thread)
-        last_checkpoint_clone.store(progress.bytes_written, Ordering::Relaxed);
+        if progress.phase == WritePhase::Writing {
+            last_checkpoint_clone.store(progress.bytes_written, Ordering::Relaxed);
+        }
     });
 
     // Connect cancel flag
@@ -572,9 +601,12 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     let mut writer = writer;
     let start_time = Instant::now();
 
-    // Use write_from_offset for resume support
-    let write_result =
-        writer.write_from_offset(&mut source, &mut *target, total_size, resume_offset);
+    // Use write_and_verify for parallel verification, write_from_offset otherwise
+    let write_result = if use_parallel_verify {
+        writer.write_and_verify(&mut source, &mut *target, total_size)
+    } else {
+        writer.write_from_offset(&mut source, &mut *target, total_size, resume_offset)
+    };
 
     pb.finish_and_clear();
 
@@ -627,6 +659,41 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                     retry_info
                 );
             }
+
+            // Report parallel verification results if used
+            if let Some(verified) = result.verified {
+                let verify_elapsed = result
+                    .verification_elapsed
+                    .map(|d| format!("{:.1}s", d.as_secs_f64()))
+                    .unwrap_or_else(|| "?".to_string());
+                if verified {
+                    println_if!(
+                        silent,
+                        "  {} Verification passed ({}) in {}",
+                        style("✓").green(),
+                        verify_algo,
+                        verify_elapsed
+                    );
+                    if let Some(ref checksum) = result.source_checksum {
+                        println_if!(silent, "    {}", checksum);
+                    }
+                } else {
+                    bail!(
+                        "Verification failed!\n\
+                         Source checksum:  {}\n\
+                         Written checksum: {}\n\
+                         \n\
+                         The written data doesn't match the source.\n\
+                         \n\
+                         Suggestions:\n\
+                         • Try writing again to a different device\n\
+                         • Use a different USB port (preferably USB 3.0)",
+                        result.source_checksum.as_deref().unwrap_or("unknown"),
+                        result.target_checksum.as_deref().unwrap_or("unknown")
+                    );
+                }
+            }
+
             true
         }
         Err(engraver_core::Error::Cancelled) => {
@@ -700,7 +767,8 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     println_if!(silent, "{}", style("done").green());
 
     // Step 11: Verify (if requested)
-    if args.verify {
+    // Skip if parallel verification already completed during write
+    if args.verify && !use_parallel_verify {
         println_if!(silent, "\n{}", style("Verifying write...").bold());
 
         // For verification, we need a seekable source

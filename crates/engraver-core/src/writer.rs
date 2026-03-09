@@ -70,9 +70,21 @@ pub const MIN_BLOCK_SIZE: usize = 4 * 1024;
 /// Maximum block size (64 MB)
 pub const MAX_BLOCK_SIZE: usize = 64 * 1024 * 1024;
 
+/// Phase of the write operation (used for progress reporting)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WritePhase {
+    /// Writing data from source to target
+    Writing,
+    /// Verifying written data by reading back and checksumming
+    Verifying,
+}
+
 /// Write progress information
 #[derive(Debug, Clone)]
 pub struct WriteProgress {
+    /// Current phase of the operation
+    pub phase: WritePhase,
+
     /// Bytes written so far
     pub bytes_written: u64,
 
@@ -103,6 +115,7 @@ impl WriteProgress {
     pub fn new(total_bytes: u64, block_size: usize) -> Self {
         let total_blocks = total_bytes.div_ceil(block_size as u64);
         Self {
+            phase: WritePhase::Writing,
             bytes_written: 0,
             total_bytes,
             speed_bps: 0,
@@ -433,6 +446,12 @@ impl Writer {
         let mut buffer = vec![0u8; block_size];
         let mut bytes_read_total = 0u64;
 
+        // Progress tracking for verification phase
+        let mut progress = WriteProgress::new(size, block_size);
+        progress.phase = WritePhase::Verifying;
+        let mut speed_tracker = SpeedTracker::new();
+        let verify_start = Instant::now();
+
         while bytes_read_total < size {
             // Check for cancellation
             if self.cancel_flag.load(Ordering::SeqCst) {
@@ -448,6 +467,18 @@ impl Writer {
 
             hasher.update(&buffer[..bytes_read]);
             bytes_read_total += bytes_read as u64;
+
+            // Update and report verification progress
+            progress.bytes_written = bytes_read_total;
+            progress.current_block = bytes_read_total.div_ceil(block_size as u64);
+            progress.elapsed = verify_start.elapsed();
+            speed_tracker.update(bytes_read_total);
+            progress.speed_bps = speed_tracker.current_speed();
+            progress.eta_seconds = calculate_eta(bytes_read_total, size, progress.speed_bps);
+
+            if let Some(ref callback) = self.progress_callback {
+                callback(&progress);
+            }
         }
 
         Ok(hasher.finalize_hex())
@@ -1307,6 +1338,67 @@ mod tests {
         // CRC32 produces 8 hex characters
         assert_eq!(result.source_checksum.as_ref().unwrap().len(), 8);
         assert_eq!(result.verified, Some(true));
+    }
+
+    #[test]
+    fn test_write_and_verify_reports_phase_transitions() {
+        use crate::verifier::ChecksumAlgorithm;
+        use std::sync::{Arc, Mutex};
+
+        let source_data = vec![0xCDu8; 8192];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; 8192]);
+
+        let config = WriteConfig::new()
+            .block_size(MIN_BLOCK_SIZE)
+            .checksum_algorithm(Some(ChecksumAlgorithm::Sha256));
+
+        let phases_seen = Arc::new(Mutex::new(Vec::new()));
+        let phases_clone = phases_seen.clone();
+
+        let mut writer = Writer::with_config(config).on_progress(move |progress| {
+            let mut phases = phases_clone.lock().unwrap();
+            if phases.last() != Some(&progress.phase) {
+                phases.push(progress.phase);
+            }
+        });
+
+        let result = writer.write_and_verify(source, target, 8192).unwrap();
+        assert_eq!(result.verified, Some(true));
+
+        let phases = phases_seen.lock().unwrap();
+        assert_eq!(*phases, vec![WritePhase::Writing, WritePhase::Verifying]);
+    }
+
+    #[test]
+    fn test_write_and_verify_cancel_during_verify() {
+        use crate::verifier::ChecksumAlgorithm;
+
+        // Use large enough data that verification takes multiple blocks
+        let size = MIN_BLOCK_SIZE * 4;
+        let source_data = vec![0xEEu8; size];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; size]);
+
+        let config = WriteConfig::new()
+            .block_size(MIN_BLOCK_SIZE)
+            .checksum_algorithm(Some(ChecksumAlgorithm::Sha256));
+
+        let writer = Writer::with_config(config);
+
+        // Get the cancel handle and set up callback that cancels during verify
+        let cancel_handle = writer.cancel_handle();
+
+        let writer = writer.on_progress(move |progress| {
+            // Cancel once we enter the verification phase
+            if progress.phase == WritePhase::Verifying {
+                cancel_handle.store(true, Ordering::SeqCst);
+            }
+        });
+        let mut writer = writer;
+
+        let result = writer.write_and_verify(source, target, size as u64);
+        assert!(matches!(result, Err(crate::error::Error::Cancelled)));
     }
 
     #[test]

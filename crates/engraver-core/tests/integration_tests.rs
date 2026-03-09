@@ -873,4 +873,28 @@ mod checksum_integration_tests {
         assert!(verify_result.success);
         assert_eq!(verify_result.bytes_verified, 16384);
     }
+
+    #[test]
+    fn test_parallel_verify_pipeline() {
+        // Test the write_and_verify path: hash source during write, then read back
+        // and verify in a single operation — equivalent to write + separate verify
+        // but more efficient (source is only read once).
+        let source_data: Vec<u8> = (0..32768).map(|i| (i % 256) as u8).collect();
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; 32768]);
+
+        let config = WriteConfig::new()
+            .block_size(MIN_BLOCK_SIZE)
+            .checksum_algorithm(Some(ChecksumAlgorithm::Sha256));
+        let mut writer = Writer::with_config(config);
+
+        let result = writer.write_and_verify(source, target, 32768).unwrap();
+
+        assert_eq!(result.bytes_written, 32768);
+        assert_eq!(result.verified, Some(true));
+        assert!(result.source_checksum.is_some());
+        assert!(result.target_checksum.is_some());
+        assert_eq!(result.source_checksum, result.target_checksum);
+        assert!(result.verification_elapsed.is_some());
+    }
 }
