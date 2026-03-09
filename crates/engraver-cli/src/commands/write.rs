@@ -648,6 +648,10 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                     println_if!(silent, "  Run with --resume to continue from this point");
                 }
             }
+            // Sync to flush any pending writes before returning
+            if let Err(e) = target.sync() {
+                tracing::debug!("Sync after cancel: {}", e);
+            }
             println_if!(silent, "\n{}", style("Write cancelled by user.").yellow());
             return Ok(());
         }
@@ -668,6 +672,10 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                     );
                     eprintln!("  Run with --resume to continue from this point");
                 }
+            }
+            // Sync to flush any pending writes before bailing
+            if let Err(sync_err) = target.sync() {
+                tracing::debug!("Sync after error: {}", sync_err);
             }
             // Provide user-friendly error with suggestions
             bail!("{}", format_write_error(e));

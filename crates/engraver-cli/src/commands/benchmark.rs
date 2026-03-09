@@ -152,7 +152,7 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
 
     // Step 7: Open device for writing
     println_if!(silent, "{} Opening device...", style("▶").cyan());
-    let device = open_device(
+    let mut device = open_device(
         &target_drive.path,
         OpenOptions::new().write(true).direct_io(true),
     )
@@ -160,9 +160,9 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
     println_if!(silent, "  {} Device opened", style("✓").green());
 
     // Step 8: Run benchmark
-    if is_multi_block {
+    let result = if is_multi_block {
         run_multi_block_benchmark(
-            device,
+            &mut *device,
             &target_drive.path,
             base_test_size,
             &block_sizes,
@@ -173,7 +173,7 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
         )
     } else {
         run_single_benchmark(
-            device,
+            &mut *device,
             &target_drive.path,
             base_test_size,
             block_size,
@@ -183,7 +183,22 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
             silent,
             args.cancel_flag,
         )
+    };
+
+    // Step 9: Sync device to flush any pending writes
+    if let Err(e) = device.sync() {
+        tracing::debug!("Sync after benchmark: {}", e);
     }
+
+    if result.is_ok() && !args.json {
+        println_if!(
+            silent,
+            "{}",
+            style("You can safely remove the drive.").green()
+        );
+    }
+
+    result
 }
 
 /// Validate command arguments before any I/O
@@ -400,7 +415,7 @@ fn get_progress_style(percentage: u8) -> ProgressStyle {
 /// Run single block size benchmark
 #[allow(clippy::too_many_arguments)]
 fn run_single_benchmark<W>(
-    device: W,
+    device: &mut W,
     device_path: &str,
     test_size: u64,
     block_size: u64,
@@ -411,7 +426,7 @@ fn run_single_benchmark<W>(
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<()>
 where
-    W: std::io::Write + std::io::Seek,
+    W: std::io::Write + std::io::Seek + ?Sized,
 {
     let config = BenchmarkConfig {
         test_size,
@@ -484,7 +499,7 @@ where
 /// Run multi-block-size benchmark
 #[allow(clippy::too_many_arguments)]
 fn run_multi_block_benchmark<W>(
-    mut device: W,
+    device: &mut W,
     device_path: &str,
     base_test_size: u64,
     block_sizes: &[u64],
@@ -494,7 +509,7 @@ fn run_multi_block_benchmark<W>(
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<()>
 where
-    W: std::io::Write + std::io::Seek,
+    W: std::io::Write + std::io::Seek + ?Sized,
 {
     let effective_size =
         BenchmarkConfig::effective_test_size_for_block_sizes(base_test_size, block_sizes);
@@ -546,7 +561,7 @@ where
 
         let pb_clone = pb.clone();
         let result = runner.run(
-            &mut device,
+            &mut *device,
             device_path,
             Some(move |progress: &BenchmarkProgress| {
                 let pct = progress.percentage();

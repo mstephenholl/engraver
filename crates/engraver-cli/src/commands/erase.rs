@@ -231,6 +231,10 @@ pub fn execute(args: EraseArgs) -> Result<()> {
         // Check cancellation
         if !cancel_flag.load(Ordering::SeqCst) {
             pb.finish_and_clear();
+            // Sync to flush any pending writes before returning
+            if let Err(e) = target.sync() {
+                tracing::debug!("Sync after cancel: {}", e);
+            }
             println_if!(silent, "\n{}", style("Erase cancelled by user.").yellow());
             return Ok(());
         }
@@ -308,9 +312,11 @@ pub fn execute(args: EraseArgs) -> Result<()> {
     println_if!(
         silent,
         "{}",
-        style("✓ Erase complete! The device has been zero-filled.")
-            .green()
-            .bold()
+        style(
+            "✓ Erase complete! The device has been zero-filled. You can safely remove the drive."
+        )
+        .green()
+        .bold()
     );
 
     Ok(())
