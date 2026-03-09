@@ -41,7 +41,7 @@ engraver/
 
 - **Source handling**: Local files, remote URLs, compressed archives, cloud storage
 - **Block writing**: High-performance writer with progress tracking
-- **Verification**: Post-write checksums (SHA-256, SHA-512, MD5, CRC32)
+- **Verification**: Parallel write verification with checksums (SHA-256, SHA-512, MD5, CRC32)
 - **Benchmark**: Drive performance testing with configurable patterns
 - **Resume**: Checkpoint-based resumption of interrupted writes
 - **Partition inspection**: MBR and GPT partition table parsing
@@ -78,10 +78,14 @@ Source (ISO/IMG/URL/Cloud)
   │ Engine  │     │ Adapter  │ (O_DIRECT, etc.)
   └────┬────┘     └──────────┘
        │
-       │ (optional)
+       │ (--verify: parallel verification)
+       │ Hashes source during write, then reads
+       │ back target to compare checksums.
+       │ Falls back to sequential verify for
+       │ resumed writes (--resume).
        ▼
   ┌─────────┐
-  │Verifier │ Checksum comparison
+  │Verifier │ Read-back + checksum comparison
   └─────────┘
 ```
 

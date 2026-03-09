@@ -10,7 +10,7 @@ Inspired by [Balena Etcher](https://etcher.balena.io/), built for developers and
 
 - **Safety First** - System drive protection prevents accidental overwrites
 - **Fast** - High-performance block writing with progress tracking
-- **Reliable** - Post-write verification ensures data integrity
+- **Reliable** - Parallel write verification hashes data during write for fast integrity checks
 - **Remote Sources** - Write directly from HTTP/HTTPS URLs
 - **Compression** - Supports .gz, .xz, .zst, and .bz2 compressed images
 - **Resumable** - Resume interrupted writes with checkpoint support
@@ -70,7 +70,7 @@ engraver write https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso 
 # Write a compressed image (auto-detected)
 engraver write ubuntu.iso.xz /dev/sdb
 
-# Write with post-write verification (recommended)
+# Write with verification (hashes during write, then reads back to verify)
 engraver write ubuntu.iso /dev/sdb --verify
 
 # Skip confirmation prompt (for scripts)
@@ -308,7 +308,7 @@ Engraver includes multiple safety mechanisms:
 1. **System drive detection** - Refuses to write to drives containing system partitions
 2. **Removable-only by default** - Only shows removable drives unless `--all` is specified
 3. **Confirmation prompts** - Requires explicit confirmation before writing
-4. **Verification** - Optional post-write verification with `--verify`
+4. **Verification** - Parallel write verification with `--verify` (hashes source during write, reads back to compare)
 
 ## Development
 

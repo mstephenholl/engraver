@@ -66,7 +66,7 @@ sudo engraver verify ubuntu.iso /dev/sdb
 
 | Option | Description |
 |--------|-------------|
-| `--verify` | Verify after writing |
+| `--verify` | Verify after writing (hashes during write, then reads back) |
 | `-y` | Skip confirmation prompt |
 | `--silent` | No output (implies -y) |
 | `--checkpoint` | Enable resume support |

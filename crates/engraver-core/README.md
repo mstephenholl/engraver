@@ -7,7 +7,7 @@ Core library for the Engraver disk imaging tool.
 - **High-performance writer**: Block-based writing with configurable sizes (4KB-64MB)
 - **Progress tracking**: Real-time speed calculation and ETA estimation
 - **Source handling**: Local files, HTTP/HTTPS URLs, compressed archives, cloud storage
-- **Verification**: Post-write read-back verification with multiple checksum algorithms
+- **Verification**: Parallel write verification — hashes source during write, reads back target to compare (SHA-256, SHA-512, MD5, CRC32)
 - **Resume support**: Checkpoint-based resumption of interrupted writes
 - **Benchmark**: Drive performance testing with configurable patterns
 - **Partition inspection**: MBR and GPT partition table parsing
@@ -158,6 +158,7 @@ for partition in &info.partitions {
 
 The `WriteProgress` struct provides:
 
+- `phase`: Current operation phase (`Writing` or `Verifying`)
 - `bytes_written` / `total_bytes`: Progress tracking
 - `speed_bps`: Current write speed in bytes/second
 - `eta_seconds`: Estimated time remaining

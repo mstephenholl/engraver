@@ -10,7 +10,8 @@ Write an image to a drive
 .SH OPTIONS
 .TP
 \fB\-\-verify\fR
-Verify write by reading back and comparing
+Verify write integrity by hashing source data during the write pass, then reading back the target and comparing checksums.
+Falls back to sequential verification when resuming a partial write (--resume).
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 Skip confirmation prompt (use with caution!)

@@ -6,7 +6,7 @@ A safe, fast command-line tool for creating bootable USB drives, SD cards, and N
 
 - **Safe by default**: Refuses to write to system drives
 - **Multiple sources**: Local files, URLs, compressed archives, cloud storage
-- **Verification**: Optional post-write verification with multiple checksum algorithms
+- **Verification**: Parallel write verification — hashes source during write, reads back to compare
 - **Progress display**: Real-time progress with speed and ETA
 - **Resumable**: Checkpoint-based resume for interrupted writes
 - **Cross-platform**: Linux, macOS, Windows support
