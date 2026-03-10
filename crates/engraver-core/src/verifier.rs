@@ -51,6 +51,7 @@ pub const MAX_VERIFY_BLOCK_SIZE: usize = 16 * 1024 * 1024;
 
 /// Supported checksum algorithms
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ChecksumAlgorithm {
     /// SHA-256 (recommended)
     Sha256,
@@ -271,6 +272,7 @@ impl VerificationProgress {
 
 /// Type of verification operation in progress
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VerificationOperation {
     /// Calculating checksum
     Checksum,

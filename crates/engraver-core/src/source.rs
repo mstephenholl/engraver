@@ -58,6 +58,7 @@ fn parse_size_with_default(s: &str, default: usize) -> usize {
 
 /// Source type enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SourceType {
     /// Local uncompressed file
     LocalFile,
@@ -411,8 +412,10 @@ pub struct ZstdSource<'a, R: Read> {
 impl<'a, R: Read> ZstdSource<'a, R> {
     /// Create a new zstd source
     pub fn new(reader: R, info: SourceInfo) -> Result<Self> {
-        let decoder = zstd::Decoder::new(reader)
-            .map_err(|e| Error::Decompression(format!("Failed to create zstd decoder: {}", e)))?;
+        let decoder = zstd::Decoder::new(reader).map_err(|e| Error::Decompression {
+            message: "Failed to create zstd decoder".to_string(),
+            source: Some(Box::new(e)),
+        })?;
         Ok(Self { decoder, info })
     }
 
@@ -496,14 +499,16 @@ impl HttpSource {
             .unwrap_or(DEFAULT_HTTP_TIMEOUT_SECS);
 
         // Validate URL
-        let parsed_url = url::Url::parse(url)
-            .map_err(|e| Error::Network(format!("Invalid URL '{}': {}", url, e)))?;
+        let parsed_url = url::Url::parse(url).map_err(|e| Error::Network {
+            message: format!("Invalid URL '{}'", url),
+            source: Some(Box::new(e)),
+        })?;
 
         if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
-            return Err(Error::Network(format!(
-                "Unsupported URL scheme: {}",
-                parsed_url.scheme()
-            )));
+            return Err(Error::Network {
+                message: format!("Unsupported URL scheme: {}", parsed_url.scheme()),
+                source: None,
+            });
         }
 
         // Build request
@@ -511,7 +516,10 @@ impl HttpSource {
             .user_agent(concat!("engraver/", env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .build()
-            .map_err(|e| Error::Network(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| Error::Network {
+                message: "Failed to create HTTP client".to_string(),
+                source: Some(Box::new(e)),
+            })?;
 
         let mut request = client.get(url);
 
@@ -523,25 +531,34 @@ impl HttpSource {
         // Send request
         let response = request.send().map_err(|e| {
             if e.is_timeout() {
-                Error::Network(format!(
-                    "HTTP request timed out after {} seconds: {}",
-                    timeout_secs, e
-                ))
+                Error::Network {
+                    message: format!("HTTP request timed out after {} seconds", timeout_secs),
+                    source: Some(Box::new(e)),
+                }
             } else if e.is_connect() {
-                Error::Network(format!("Failed to connect to server: {}", e))
+                Error::Network {
+                    message: "Failed to connect to server".to_string(),
+                    source: Some(Box::new(e)),
+                }
             } else {
-                Error::Network(format!("HTTP request failed: {}", e))
+                Error::Network {
+                    message: "HTTP request failed".to_string(),
+                    source: Some(Box::new(e)),
+                }
             }
         })?;
 
         // Check status
         let status = response.status();
         if !status.is_success() && status.as_u16() != 206 {
-            return Err(Error::Network(format!(
-                "HTTP error {}: {}",
-                status.as_u16(),
-                status.canonical_reason().unwrap_or("Unknown")
-            )));
+            return Err(Error::Network {
+                message: format!(
+                    "HTTP error {}: {}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("Unknown")
+                ),
+                source: None,
+            });
         }
 
         // Extract headers
@@ -689,8 +706,10 @@ impl CloudSource {
             })
             .unwrap_or(DEFAULT_CLOUD_CHUNK_SIZE);
 
-        let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| Error::Network(format!("Failed to create tokio runtime: {}", e)))?;
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| Error::Network {
+            message: "Failed to create tokio runtime".to_string(),
+            source: Some(Box::new(e)),
+        })?;
 
         let (store, location, source_type) =
             runtime.block_on(async { Self::create_store(uri).await })?;
@@ -698,7 +717,10 @@ impl CloudSource {
         // Get object metadata
         let meta = runtime
             .block_on(async { store.head(&location).await })
-            .map_err(|e| Error::Network(format!("Failed to get object metadata: {}", e)))?;
+            .map_err(|e| Error::Network {
+                message: "Failed to get object metadata".to_string(),
+                source: Some(Box::new(e)),
+            })?;
 
         let total_size = meta.size;
         let etag = meta.e_tag.clone();
@@ -750,7 +772,10 @@ impl CloudSource {
             let store = object_store::aws::AmazonS3Builder::from_env()
                 .with_bucket_name(&bucket)
                 .build()
-                .map_err(|e| Error::Network(format!("Failed to create S3 client: {}", e)))?;
+                .map_err(|e| Error::Network {
+                    message: "Failed to create S3 client".to_string(),
+                    source: Some(Box::new(e)),
+                })?;
             return Ok((
                 Arc::new(store),
                 object_store::path::Path::from(key),
@@ -764,7 +789,10 @@ impl CloudSource {
             let store = object_store::gcp::GoogleCloudStorageBuilder::from_env()
                 .with_bucket_name(&bucket)
                 .build()
-                .map_err(|e| Error::Network(format!("Failed to create GCS client: {}", e)))?;
+                .map_err(|e| Error::Network {
+                    message: "Failed to create GCS client".to_string(),
+                    source: Some(Box::new(e)),
+                })?;
             return Ok((
                 Arc::new(store),
                 object_store::path::Path::from(object),
@@ -779,7 +807,10 @@ impl CloudSource {
                 .with_account(&account)
                 .with_container_name(&container)
                 .build()
-                .map_err(|e| Error::Network(format!("Failed to create Azure client: {}", e)))?;
+                .map_err(|e| Error::Network {
+                    message: "Failed to create Azure client".to_string(),
+                    source: Some(Box::new(e)),
+                })?;
             return Ok((
                 Arc::new(store),
                 object_store::path::Path::from(blob),
@@ -857,6 +888,7 @@ impl Read for CloudSource {
 // ============================================================================
 
 /// Unified source that can read from any supported source type
+#[non_exhaustive]
 pub enum Source {
     /// Local uncompressed file
     Local(LocalFileSource),
@@ -1251,10 +1283,10 @@ pub fn get_source_size(path: &str) -> Result<Option<u64>> {
             {
                 // Do a HEAD request to get size
                 let client = reqwest::blocking::Client::new();
-                let response = client
-                    .head(path)
-                    .send()
-                    .map_err(|e| Error::Network(format!("HEAD request failed: {}", e)))?;
+                let response = client.head(path).send().map_err(|e| Error::Network {
+                    message: "HEAD request failed".to_string(),
+                    source: Some(Box::new(e)),
+                })?;
 
                 Ok(response.content_length())
             }
@@ -1322,32 +1354,47 @@ pub fn validate_source_with_settings(
                     .unwrap_or(DEFAULT_VALIDATION_TIMEOUT_SECS);
 
                 // Validate URL format
-                url::Url::parse(path).map_err(|e| Error::Network(format!("Invalid URL: {}", e)))?;
+                url::Url::parse(path).map_err(|e| Error::Network {
+                    message: "Invalid URL".to_string(),
+                    source: Some(Box::new(e)),
+                })?;
 
                 // Do a HEAD request to check availability
                 let client = reqwest::blocking::Client::builder()
                     .timeout(std::time::Duration::from_secs(timeout_secs))
                     .build()
-                    .map_err(|e| Error::Network(format!("Failed to create client: {}", e)))?;
+                    .map_err(|e| Error::Network {
+                        message: "Failed to create client".to_string(),
+                        source: Some(Box::new(e)),
+                    })?;
 
                 let response = client.head(path).send().map_err(|e| {
                     if e.is_timeout() {
-                        Error::Network(format!(
-                            "URL validation timed out after {} seconds: {}",
-                            timeout_secs, e
-                        ))
+                        Error::Network {
+                            message: format!(
+                                "URL validation timed out after {} seconds",
+                                timeout_secs
+                            ),
+                            source: Some(Box::new(e)),
+                        }
                     } else if e.is_connect() {
-                        Error::Network(format!("Failed to connect to URL: {}", e))
+                        Error::Network {
+                            message: "Failed to connect to URL".to_string(),
+                            source: Some(Box::new(e)),
+                        }
                     } else {
-                        Error::Network(format!("Failed to reach URL: {}", e))
+                        Error::Network {
+                            message: "Failed to reach URL".to_string(),
+                            source: Some(Box::new(e)),
+                        }
                     }
                 })?;
 
                 if !response.status().is_success() {
-                    return Err(Error::Network(format!(
-                        "URL returned status {}",
-                        response.status()
-                    )));
+                    return Err(Error::Network {
+                        message: format!("URL returned status {}", response.status()),
+                        source: None,
+                    });
                 }
 
                 let size = response.content_length();
@@ -1405,15 +1452,20 @@ pub fn validate_source_with_settings(
 /// Validate a cloud source by checking if the object exists (via HEAD/metadata request)
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 fn validate_cloud_source(path: &str, source_type: SourceType) -> Result<SourceInfo> {
-    let runtime = tokio::runtime::Runtime::new()
-        .map_err(|e| Error::Network(format!("Failed to create tokio runtime: {}", e)))?;
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| Error::Network {
+        message: "Failed to create tokio runtime".to_string(),
+        source: Some(Box::new(e)),
+    })?;
 
     let (store, location, _) = runtime.block_on(async { CloudSource::create_store(path).await })?;
 
     // Use HEAD request (object metadata) to check existence without downloading
     let meta = runtime
         .block_on(async { store.head(&location).await })
-        .map_err(|e| Error::Network(format!("Object not found or inaccessible: {}", e)))?;
+        .map_err(|e| Error::Network {
+            message: "Object not found or inaccessible".to_string(),
+            source: Some(Box::new(e)),
+        })?;
 
     Ok(SourceInfo {
         path: path.to_string(),

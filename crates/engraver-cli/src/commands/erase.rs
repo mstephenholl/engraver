@@ -27,29 +27,6 @@ pub struct EraseArgs {
     pub silent: bool,
 }
 
-/// Conditionally print based on silent mode
-macro_rules! print_if {
-    ($silent:expr, $($arg:tt)*) => {
-        if !$silent {
-            print!($($arg)*);
-        }
-    };
-}
-
-/// Conditionally println based on silent mode
-macro_rules! println_if {
-    ($silent:expr) => {
-        if !$silent {
-            println!();
-        }
-    };
-    ($silent:expr, $($arg:tt)*) => {
-        if !$silent {
-            println!($($arg)*);
-        }
-    };
-}
-
 /// Execute the erase command
 pub fn execute(args: EraseArgs) -> Result<()> {
     let block_size = parse_block_size(&args.block_size)?;

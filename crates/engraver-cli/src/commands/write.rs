@@ -46,36 +46,14 @@ pub struct WriteArgs {
     pub show_partitions: bool,
 }
 
-/// Conditionally print based on silent mode
-macro_rules! print_if {
-    ($silent:expr, $($arg:tt)*) => {
-        if !$silent {
-            print!($($arg)*);
-        }
-    };
+/// Shared context for the write command's helper functions
+struct WriteContext {
+    silent: bool,
+    block_size: usize,
 }
 
-/// Conditionally println based on silent mode
-macro_rules! println_if {
-    ($silent:expr) => {
-        if !$silent {
-            println!();
-        }
-    };
-    ($silent:expr, $($arg:tt)*) => {
-        if !$silent {
-            println!($($arg)*);
-        }
-    };
-}
-
-/// Execute the write command
-pub fn execute(args: WriteArgs) -> Result<()> {
-    // Parse block size
-    let block_size = parse_block_size(&args.block_size)?;
-    let silent = args.silent;
-
-    // Step 0: Check for elevated privileges
+/// Check that the process has elevated privileges, bail if not
+fn check_privileges() -> Result<()> {
     if !has_elevated_privileges() {
         #[cfg(unix)]
         bail!(
@@ -92,17 +70,23 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         #[cfg(not(any(unix, windows)))]
         bail!("Elevated privileges required for raw device access.");
     }
+    Ok(())
+}
 
-    // Step 1: Validate source
+/// Validate the source image and display info
+fn validate_source_info(
+    source: &str,
+    silent: bool,
+) -> Result<(engraver_core::SourceInfo, Option<u64>)> {
     println_if!(
         silent,
         "{} {}",
         style("Source:").bold(),
-        style(&args.source).cyan()
+        style(source).cyan()
     );
 
-    let source_info = validate_source(&args.source)
-        .with_context(|| format!("Failed to validate source: {}", args.source))?;
+    let source_info = validate_source(source)
+        .with_context(|| format!("Failed to validate source: {}", source))?;
 
     let source_size = source_info.size.or(source_info.compressed_size);
     let source_type_str = match source_info.source_type {
@@ -118,6 +102,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         SourceType::Gcs => "GCS object",
         #[cfg(feature = "azure")]
         SourceType::Azure => "Azure blob",
+        _ => "unknown",
     };
 
     if let Some(size) = source_size {
@@ -137,19 +122,29 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         );
     }
 
-    // Step 2: Validate target device
+    Ok((source_info, source_size))
+}
+
+/// Validate the target device, performing safety checks
+fn validate_target_device<'a>(
+    target: &str,
+    drives: &'a [Drive],
+    force: bool,
+    skip_confirm: bool,
+    source_size: Option<u64>,
+    silent: bool,
+) -> Result<&'a Drive> {
     println_if!(
         silent,
         "\n{} {}",
         style("Target:").bold(),
-        style(&args.target).cyan()
+        style(target).cyan()
     );
 
-    let drives = list_drives().context("Failed to list drives")?;
-    let target_drive = find_drive(&drives, &args.target)?;
+    let target_drive = find_drive(drives, target)?;
 
     // Safety check
-    if target_drive.is_system && !args.force {
+    if target_drive.is_system && !force {
         bail!(
             "Refusing to write to system drive: {}\n\
              Reason: {}\n\n\
@@ -163,12 +158,12 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     }
 
     // Warn if not safe target
-    if !target_drive.is_safe_target() && !args.force {
+    if !target_drive.is_safe_target() && !force {
         eprintln!(
             "{} Target drive is not marked as safe!",
             style("Warning:").yellow().bold()
         );
-        if !args.skip_confirm {
+        if !skip_confirm {
             let proceed = Confirm::new()
                 .with_prompt("Are you absolutely sure you want to continue?")
                 .default(false)
@@ -224,7 +219,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     }
 
     // Show mount points that will be unmounted
-    if !target_drive.mount_points.is_empty() && !args.no_unmount {
+    if !target_drive.mount_points.is_empty() {
         println_if!(
             silent,
             "  {} Will unmount: {}",
@@ -233,83 +228,87 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         );
     }
 
-    // Step 2.5: Show partition information if requested
-    if args.show_partitions {
-        display_source_partitions(&args.source, silent)?;
+    Ok(target_drive)
+}
+
+/// Display the confirmation dialog and return whether to proceed
+fn confirm_write(
+    source_info: &engraver_core::SourceInfo,
+    drive: &Drive,
+    skip_confirm: bool,
+) -> Result<bool> {
+    if skip_confirm {
+        return Ok(true);
     }
 
-    // Step 3: Confirmation (skip_confirm is already true when silent)
-    if !args.skip_confirm {
-        println!();
-        println!(
-            "{}",
-            style("╔════════════════════════════════════════════════════════════╗")
-                .red()
-                .bold()
-        );
-        println!(
-            "{}",
-            style("║                        WARNING                             ║")
-                .red()
-                .bold()
-        );
-        println!(
-            "{}",
-            style("║  ALL DATA ON THE TARGET DEVICE WILL BE PERMANENTLY LOST!   ║")
-                .red()
-                .bold()
-        );
-        println!(
-            "{}",
-            style("╚════════════════════════════════════════════════════════════╝")
-                .red()
-                .bold()
-        );
-        println!();
+    println!();
+    println!(
+        "{}",
+        style("╔════════════════════════════════════════════════════════════╗")
+            .red()
+            .bold()
+    );
+    println!(
+        "{}",
+        style("║                        WARNING                             ║")
+            .red()
+            .bold()
+    );
+    println!(
+        "{}",
+        style("║  ALL DATA ON THE TARGET DEVICE WILL BE PERMANENTLY LOST!   ║")
+            .red()
+            .bold()
+    );
+    println!(
+        "{}",
+        style("╚════════════════════════════════════════════════════════════╝")
+            .red()
+            .bold()
+    );
+    println!();
 
-        let confirm_text = format!(
-            "Write {} to {}?",
-            source_info
-                .path
-                .split('/')
-                .next_back()
-                .unwrap_or(&source_info.path),
-            target_drive.path
-        );
+    let confirm_text = format!(
+        "Write {} to {}?",
+        source_info
+            .path
+            .split('/')
+            .next_back()
+            .unwrap_or(&source_info.path),
+        drive.path
+    );
 
-        let proceed = Confirm::new()
-            .with_prompt(confirm_text)
-            .default(false)
-            .interact()?;
+    let proceed = Confirm::new()
+        .with_prompt(confirm_text)
+        .default(false)
+        .interact()?;
 
-        if !proceed {
-            println!("{}", style("Aborted.").yellow());
-            return Ok(());
+    if !proceed {
+        println!("{}", style("Aborted.").yellow());
+    }
+
+    Ok(proceed)
+}
+
+/// Unmount the target device
+fn unmount_target(path: &str, silent: bool) {
+    println_if!(silent, "\n{}", style("Unmounting device...").bold());
+
+    match unmount_device(path) {
+        Ok(()) => println_if!(silent, "  {} Device unmounted", style("✓").green()),
+        Err(e) => {
+            tracing::debug!("Unmount result: {}", e);
+            println_if!(silent, "  {} Unmount: {}", style("ℹ").blue(), e);
         }
     }
+}
 
-    // Step 4: Unmount device using platform layer
-    if !args.no_unmount {
-        println_if!(silent, "\n{}", style("Unmounting device...").bold());
-
-        // Use the device path for unmounting (unmount all partitions)
-        match unmount_device(&target_drive.path) {
-            Ok(()) => println_if!(silent, "  {} Device unmounted", style("✓").green()),
-            Err(e) => {
-                // Some platforms may return error if nothing to unmount
-                tracing::debug!("Unmount result: {}", e);
-                println_if!(silent, "  {} Unmount: {}", style("ℹ").blue(), e);
-            }
-        }
-    }
-
-    // Step 5: Auto-detect and verify source checksum
-    // First, try to auto-detect if enabled and no explicit checksum provided
+/// Auto-detect or use explicit checksum, verify if found
+fn setup_checksum(args: &WriteArgs, source_size: Option<u64>, ctx: &WriteContext) -> Result<()> {
     let (effective_checksum, effective_algo) = if args.checksum.is_none() && args.auto_checksum {
-        // Try to auto-detect checksum file
         if let Some(detected) = auto_detect_checksum(&args.source) {
             println_if!(
-                silent,
+                ctx.silent,
                 "\n{} Found checksum file: {}",
                 style("✓").green(),
                 detected.source_file.display()
@@ -317,14 +316,13 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             (Some(detected.checksum), Some(detected.algorithm))
         } else {
             println_if!(
-                silent,
+                ctx.silent,
                 "\n{} No checksum file found (tried .sha256, .sha512, .md5, SHA256SUMS, etc.)",
                 style("ℹ").blue()
             );
             (None, None)
         }
     } else {
-        // Use explicit checksum if provided
         let algo = args.checksum.as_ref().map(|_| {
             args.checksum_algo
                 .parse::<ChecksumAlgorithm>()
@@ -333,9 +331,12 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         (args.checksum.clone(), algo)
     };
 
-    // Verify source checksum if we have one (either explicit or auto-detected)
     if let Some(expected_checksum) = &effective_checksum {
-        println_if!(silent, "\n{}", style("Verifying source checksum...").bold());
+        println_if!(
+            ctx.silent,
+            "\n{}",
+            style("Verifying source checksum...").bold()
+        );
 
         let algo: ChecksumAlgorithm = effective_algo.unwrap_or_else(|| {
             args.checksum_algo
@@ -346,9 +347,9 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         let mut source_for_checksum =
             Source::open(&args.source).context("Failed to open source for checksum")?;
 
-        let pb = create_progress_bar(source_size, "Checksumming", silent);
+        let pb = create_progress_bar(source_size, "Checksumming", ctx.silent);
 
-        let config = VerifyConfig::new().block_size(block_size);
+        let config = VerifyConfig::new().block_size(ctx.block_size);
         let pb_clone = pb.clone();
         let mut verifier = Verifier::with_config(config).on_progress(move |p| {
             pb_clone.set_position(p.bytes_processed);
@@ -365,7 +366,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
         match result {
             Ok(_) => println_if!(
-                silent,
+                ctx.silent,
                 "  {} Checksum verified ({})",
                 style("✓").green(),
                 algo.name()
@@ -374,7 +375,16 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         }
     }
 
-    // Step 6: Check for existing checkpoint (resume support)
+    Ok(())
+}
+
+/// Set up checkpoint manager and handle resume logic
+fn setup_checkpoint(
+    args: &WriteArgs,
+    source_info: &engraver_core::SourceInfo,
+    target_drive: &Drive,
+) -> Result<(Option<CheckpointManager>, u64, Option<WriteCheckpoint>)> {
+    let silent = args.silent;
     let checkpoint_manager = if args.checkpoint || args.resume {
         match CheckpointManager::default_location() {
             Ok(mgr) => Some(mgr),
@@ -393,11 +403,9 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     if args.resume {
         if let Some(ref mgr) = checkpoint_manager {
             if let Ok(Some(checkpoint)) = mgr.find_checkpoint(&args.source, &target_drive.path) {
-                // Validate the checkpoint
-                let validation = validate_checkpoint(&checkpoint, &source_info, target_drive.size);
+                let validation = validate_checkpoint(&checkpoint, source_info, target_drive.size);
 
                 if validation.valid {
-                    // Show resume info
                     println_if!(
                         silent,
                         "\n{}",
@@ -415,12 +423,10 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                     );
                     println_if!(silent, "  Resume count: {}", checkpoint.resume_count);
 
-                    // Show any warnings
                     for warning in &validation.warnings {
                         println_if!(silent, "  {} {}", style("Warning:").yellow(), warning);
                     }
 
-                    // Ask for confirmation unless skip_confirm is set
                     let should_resume = if args.skip_confirm {
                         true
                     } else {
@@ -440,12 +446,10 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                             resume_offset
                         );
                     } else {
-                        // User chose not to resume, remove old checkpoint
                         let _ = mgr.remove(&checkpoint);
                         println_if!(silent, "  {} Starting fresh write", style("ℹ").blue());
                     }
                 } else {
-                    // Checkpoint is invalid, show why and remove it
                     println_if!(
                         silent,
                         "\n{}",
@@ -460,6 +464,54 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             }
         }
     }
+
+    Ok((checkpoint_manager, resume_offset, existing_checkpoint))
+}
+
+/// Execute the write command
+pub fn execute(args: WriteArgs) -> Result<()> {
+    let block_size = parse_block_size(&args.block_size)?;
+    let silent = args.silent;
+    let ctx = WriteContext { silent, block_size };
+
+    // Step 0: Check for elevated privileges
+    check_privileges()?;
+
+    // Step 1: Validate source
+    let (source_info, source_size) = validate_source_info(&args.source, silent)?;
+
+    // Step 2: Validate target device
+    let drives = list_drives().context("Failed to list drives")?;
+    let target_drive = validate_target_device(
+        &args.target,
+        &drives,
+        args.force,
+        args.skip_confirm,
+        source_size,
+        silent,
+    )?;
+
+    // Step 2.5: Show partition information if requested
+    if args.show_partitions {
+        display_source_partitions(&args.source, silent)?;
+    }
+
+    // Step 3: Confirmation
+    if !confirm_write(&source_info, target_drive, args.skip_confirm)? {
+        return Ok(());
+    }
+
+    // Step 4: Unmount device
+    if !args.no_unmount {
+        unmount_target(&target_drive.path, silent);
+    }
+
+    // Step 5: Checksum verification
+    setup_checksum(&args, source_size, &ctx)?;
+
+    // Step 6: Check for existing checkpoint (resume support)
+    let (checkpoint_manager, resume_offset, mut existing_checkpoint) =
+        setup_checkpoint(&args, &source_info, target_drive)?;
 
     // Step 7: Open source and target device
     let total_blocks = source_size
@@ -1164,7 +1216,7 @@ fn format_write_error(error: &engraver_core::Error) -> String {
                 offset, expected, actual
             )
         }
-        Error::Network(msg) => {
+        Error::Network { ref message, .. } => {
             format!(
                 "Network error: {}\n\
                  \n\
@@ -1173,10 +1225,10 @@ fn format_write_error(error: &engraver_core::Error) -> String {
                  • Verify the URL is accessible in a browser\n\
                  • If using a proxy, ensure it's configured correctly\n\
                  • Try downloading the file locally first, then write it",
-                msg
+                message
             )
         }
-        Error::Decompression(msg) => {
+        Error::Decompression { ref message, .. } => {
             format!(
                 "Decompression error: {}\n\
                  \n\
@@ -1187,7 +1239,7 @@ fn format_write_error(error: &engraver_core::Error) -> String {
                  • Re-download the file if it's from the internet\n\
                  • Try decompressing manually to verify the file\n\
                  • Ensure you have enough disk space for decompression",
-                msg
+                message
             )
         }
         Error::Cancelled => "Operation cancelled".to_string(),

@@ -25,6 +25,8 @@ use engraver_core::Settings;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
+#[macro_use]
+mod macros;
 mod commands;
 mod progress;
 

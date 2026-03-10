@@ -30,9 +30,10 @@ pub fn list_drives() -> Result<Vec<Drive>> {
 
     let block_dir = Path::new("/sys/block");
     if !block_dir.exists() {
-        return Err(DetectError::EnumerationFailed(
-            "/sys/block not found".to_string(),
-        ));
+        return Err(DetectError::EnumerationFailed {
+            message: "/sys/block not found".to_string(),
+            source: None,
+        });
     }
 
     for entry in fs::read_dir(block_dir)? {
@@ -156,8 +157,11 @@ fn parse_block_device(
 pub(crate) fn get_mount_info() -> Result<HashMap<String, MountInfo>> {
     let mut mounts = HashMap::new();
 
-    let content = fs::read_to_string("/proc/mounts")
-        .map_err(|e| DetectError::EnumerationFailed(format!("Failed to read /proc/mounts: {e}")))?;
+    let content =
+        fs::read_to_string("/proc/mounts").map_err(|e| DetectError::EnumerationFailed {
+            message: "Failed to read /proc/mounts".to_string(),
+            source: Some(e),
+        })?;
 
     for line in content.lines() {
         if let Some((device, info)) = parse_mount_line(line) {

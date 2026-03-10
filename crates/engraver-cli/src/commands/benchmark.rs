@@ -45,20 +45,6 @@ pub struct BenchmarkArgs {
     pub cancel_flag: Arc<AtomicBool>,
 }
 
-/// Conditionally println based on silent mode
-macro_rules! println_if {
-    ($silent:expr) => {
-        if !$silent {
-            println!();
-        }
-    };
-    ($silent:expr, $($arg:tt)*) => {
-        if !$silent {
-            println!($($arg)*);
-        }
-    };
-}
-
 /// Execute the benchmark command
 pub fn execute(args: BenchmarkArgs) -> Result<()> {
     let silent = args.silent;
@@ -289,7 +275,6 @@ fn find_target_drive<'a>(
 }
 
 /// Display benchmark configuration
-#[allow(clippy::too_many_arguments)]
 fn display_benchmark_info(
     drive: &engraver_detect::Drive,
     test_size: u64,
@@ -337,6 +322,7 @@ fn display_benchmark_info(
         DataPattern::Zeros => "zeros",
         DataPattern::Random => "random",
         DataPattern::Sequential => "sequential",
+        _ => "unknown",
     };
     println_if!(silent, "  Pattern: {}", pattern_str);
 
@@ -413,7 +399,6 @@ fn get_progress_style(percentage: u8) -> ProgressStyle {
 }
 
 /// Run single block size benchmark
-#[allow(clippy::too_many_arguments)]
 fn run_single_benchmark<W>(
     device: &mut W,
     device_path: &str,
@@ -497,7 +482,6 @@ where
 }
 
 /// Run multi-block-size benchmark
-#[allow(clippy::too_many_arguments)]
 fn run_multi_block_benchmark<W>(
     device: &mut W,
     device_path: &str,

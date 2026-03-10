@@ -19,6 +19,7 @@ use thiserror::Error;
 
 /// Platform-specific errors
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum PlatformError {
     /// IO operation failed
     #[error("IO error: {0}")]

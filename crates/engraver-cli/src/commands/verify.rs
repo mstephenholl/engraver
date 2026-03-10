@@ -12,20 +12,6 @@ use engraver_core::{
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, OpenOptions};
 
-/// Conditionally println based on silent mode
-macro_rules! println_if {
-    ($silent:expr) => {
-        if !$silent {
-            println!();
-        }
-    };
-    ($silent:expr, $($arg:tt)*) => {
-        if !$silent {
-            println!($($arg)*);
-        }
-    };
-}
-
 /// Execute the verify command
 pub fn execute(
     source: &str,

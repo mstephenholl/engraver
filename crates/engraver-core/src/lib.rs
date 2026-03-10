@@ -37,8 +37,6 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
-#![allow(dead_code)] // Allow during development
-
 pub mod benchmark;
 pub mod config;
 pub mod error;
@@ -88,57 +86,3 @@ pub use writer::{
     format_duration, format_speed, ReadSeek, WriteConfig, WritePhase, WriteProgress, WriteResult,
     Writer, DEFAULT_BLOCK_SIZE, MAX_BLOCK_SIZE, MIN_BLOCK_SIZE,
 };
-
-/// Orchestrates the complete write operation
-pub struct Engraver {
-    config: Config,
-}
-
-impl Engraver {
-    /// Create a new Engraver instance with default configuration
-    pub fn new() -> Self {
-        Self {
-            config: Config::default(),
-        }
-    }
-
-    /// Create a new Engraver instance with custom configuration
-    pub fn with_config(config: Config) -> Self {
-        Self { config }
-    }
-
-    /// Get the current configuration
-    pub fn config(&self) -> &Config {
-        &self.config
-    }
-}
-
-impl Default for Engraver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_engraver_new() {
-        let engraver = Engraver::new();
-        assert!(engraver.config().verify);
-    }
-
-    #[test]
-    fn test_engraver_with_config() {
-        let config = Config {
-            block_size: 1024 * 1024,
-            verify: false,
-            sync_each_block: true,
-            retry_attempts: 5,
-        };
-        let engraver = Engraver::with_config(config);
-        assert!(!engraver.config().verify);
-        assert_eq!(engraver.config().block_size, 1024 * 1024);
-    }
-}

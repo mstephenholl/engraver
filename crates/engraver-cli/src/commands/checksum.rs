@@ -6,20 +6,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use engraver_core::{validate_source, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
 
-/// Conditionally println based on silent mode
-macro_rules! println_if {
-    ($silent:expr) => {
-        if !$silent {
-            println!();
-        }
-    };
-    ($silent:expr, $($arg:tt)*) => {
-        if !$silent {
-            println!($($arg)*);
-        }
-    };
-}
-
 /// Execute the checksum command
 pub fn execute(source: &str, algorithm: &str, silent: bool) -> Result<()> {
     // Parse algorithm

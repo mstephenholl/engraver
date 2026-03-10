@@ -77,13 +77,19 @@ fn get_physical_disks() -> Result<Vec<PhysicalDisk>> {
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("PowerShell failed: {}", e)))?;
+        .map_err(|e| DetectError::CommandFailed {
+            message: format!("PowerShell failed"),
+            source: Some(e),
+        })?;
 
     if !output.status.success() {
-        return Err(DetectError::CommandFailed(format!(
-            "PowerShell failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+        return Err(DetectError::CommandFailed {
+            message: format!(
+                "PowerShell failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            source: None,
+        });
     }
 
     let output_str = String::from_utf8_lossy(&output.stdout);
@@ -195,7 +201,10 @@ fn get_volumes() -> Result<Vec<VolumeInfo>> {
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("PowerShell failed: {}", e)))?;
+        .map_err(|e| DetectError::CommandFailed {
+            message: format!("PowerShell failed"),
+            source: Some(e),
+        })?;
 
     if !output.status.success() {
         return Ok(Vec::new());

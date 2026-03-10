@@ -4,6 +4,7 @@ use thiserror::Error;
 
 /// Main error type for Engraver operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Source file not found or inaccessible
     #[error("Source not found: {0}")]
@@ -33,12 +34,24 @@ pub enum Error {
     },
 
     /// Network error for remote sources
-    #[error("Network error: {0}")]
-    Network(String),
+    #[error("Network error: {message}")]
+    Network {
+        /// Description of the network error
+        message: String,
+        /// The underlying error, if available
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 
     /// Decompression error
-    #[error("Decompression error: {0}")]
-    Decompression(String),
+    #[error("Decompression error: {message}")]
+    Decompression {
+        /// Description of the decompression error
+        message: String,
+        /// The underlying error, if available
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 
     /// Permission denied
     #[error("Permission denied: {0}")]
@@ -187,7 +200,10 @@ mod tests {
 
     #[test]
     fn test_error_display_network() {
-        let err = Error::Network("connection timeout".to_string());
+        let err = Error::Network {
+            message: "connection timeout".to_string(),
+            source: None,
+        };
         let msg = err.to_string();
         assert!(msg.contains("Network error"));
         assert!(msg.contains("connection timeout"));
@@ -195,7 +211,10 @@ mod tests {
 
     #[test]
     fn test_error_display_decompression() {
-        let err = Error::Decompression("invalid gzip header".to_string());
+        let err = Error::Decompression {
+            message: "invalid gzip header".to_string(),
+            source: None,
+        };
         let msg = err.to_string();
         assert!(msg.contains("Decompression error"));
         assert!(msg.contains("invalid gzip header"));
@@ -256,5 +275,54 @@ mod tests {
         };
         let debug_str = format!("{:?}", err);
         assert!(debug_str.contains("PartialWrite"));
+    }
+
+    #[test]
+    fn test_error_source_chain_network() {
+        use std::error::Error as StdError;
+
+        let io_err = std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timed out");
+        let err = Error::Network {
+            message: "request failed".to_string(),
+            source: Some(Box::new(io_err)),
+        };
+
+        // The source chain should be traversable
+        let source = StdError::source(&err);
+        assert!(source.is_some(), "Network error should have a source");
+        assert!(
+            source.unwrap().to_string().contains("connection timed out"),
+            "Source should contain the underlying error message"
+        );
+    }
+
+    #[test]
+    fn test_error_source_chain_decompression() {
+        use std::error::Error as StdError;
+
+        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, "corrupt data");
+        let err = Error::Decompression {
+            message: "gzip failed".to_string(),
+            source: Some(Box::new(io_err)),
+        };
+
+        let source = StdError::source(&err);
+        assert!(source.is_some(), "Decompression error should have a source");
+        assert!(source.unwrap().to_string().contains("corrupt data"));
+    }
+
+    #[test]
+    fn test_error_source_chain_none() {
+        use std::error::Error as StdError;
+
+        let err = Error::Network {
+            message: "bad status".to_string(),
+            source: None,
+        };
+
+        assert!(
+            StdError::source(&err).is_none(),
+            "Network error without source should return None"
+        );
     }
 }

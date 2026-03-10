@@ -15,13 +15,19 @@ pub fn list_drives() -> Result<Vec<Drive>> {
     let output = Command::new("diskutil")
         .args(["list", "-plist"])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("diskutil list failed: {e}")))?;
+        .map_err(|e| DetectError::CommandFailed {
+            message: "diskutil list failed".to_string(),
+            source: Some(e),
+        })?;
 
     if !output.status.success() {
-        return Err(DetectError::CommandFailed(format!(
-            "diskutil list failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
+        return Err(DetectError::CommandFailed {
+            message: format!(
+                "diskutil list failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            source: None,
+        });
     }
 
     let plist_str = String::from_utf8_lossy(&output.stdout);
@@ -127,7 +133,10 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
     let output = Command::new("diskutil")
         .args(["info", "-plist", disk_name])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("diskutil info failed: {e}")))?;
+        .map_err(|e| DetectError::CommandFailed {
+            message: "diskutil info failed".to_string(),
+            source: Some(e),
+        })?;
 
     if !output.status.success() {
         return Ok(None);
@@ -266,7 +275,10 @@ fn get_disk_partitions(disk_name: &str) -> Result<Vec<Partition>> {
     let output = Command::new("diskutil")
         .args(["list", "-plist", disk_name])
         .output()
-        .map_err(|e| DetectError::CommandFailed(format!("diskutil list failed: {e}")))?;
+        .map_err(|e| DetectError::CommandFailed {
+            message: "diskutil list failed".to_string(),
+            source: Some(e),
+        })?;
 
     if !output.status.success() {
         return Ok(Vec::new());

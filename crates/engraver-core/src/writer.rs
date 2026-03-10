@@ -9,6 +9,7 @@
 use crate::error::{Error, Result};
 use crate::settings::{DEFAULT_RETRY_ATTEMPTS, DEFAULT_RETRY_DELAY_MS};
 use crate::verifier::ChecksumAlgorithm;
+use std::borrow::Cow;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -42,23 +43,25 @@ impl SourceHasher {
     fn finalize_hex(self) -> String {
         use sha2::Digest;
         match self {
-            SourceHasher::Sha256(h) => {
-                let result = h.finalize();
-                result.iter().map(|b| format!("{:02x}", b)).collect()
-            }
-            SourceHasher::Sha512(h) => {
-                let result = h.finalize();
-                result.iter().map(|b| format!("{:02x}", b)).collect()
-            }
-            SourceHasher::Md5(h) => {
-                let result = h.finalize();
-                result.iter().map(|b| format!("{:02x}", b)).collect()
-            }
+            SourceHasher::Sha256(h) => bytes_to_hex(&h.finalize()),
+            SourceHasher::Sha512(h) => bytes_to_hex(&h.finalize()),
+            SourceHasher::Md5(h) => bytes_to_hex(&h.finalize()),
             SourceHasher::Crc32(h) => {
                 format!("{:08x}", h.finalize())
             }
         }
     }
+}
+
+/// Convert a byte slice to a lowercase hex string using a single pre-allocated buffer.
+#[cfg(feature = "checksum")]
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(hex, "{:02x}", b);
+    }
+    hex
 }
 
 /// Default block size for write operations (4 MB)
@@ -72,6 +75,7 @@ pub const MAX_BLOCK_SIZE: usize = 64 * 1024 * 1024;
 
 /// Phase of the write operation (used for progress reporting)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WritePhase {
     /// Writing data from source to target
     Writing,
@@ -147,10 +151,10 @@ impl WriteProgress {
     }
 
     /// Format ETA for display (e.g., "2m 30s")
-    pub fn eta_display(&self) -> String {
+    pub fn eta_display(&self) -> Cow<'static, str> {
         match self.eta_seconds {
-            Some(secs) if secs > 0 => format_duration(secs),
-            _ => "calculating...".to_string(),
+            Some(secs) if secs > 0 => Cow::Owned(format_duration(secs)),
+            _ => Cow::Borrowed("calculating..."),
         }
     }
 }
@@ -715,7 +719,11 @@ impl Writer {
         })
     }
 
-    /// Write a single block with retry logic
+    /// Write a single block with retry logic using exponential backoff.
+    ///
+    /// Each retry waits `base_delay * 2^(attempt-1)`, capped at `8 * base_delay`.
+    /// A small deterministic jitter derived from the offset is added to avoid
+    /// thundering-herd effects in multi-device scenarios.
     fn write_block_with_retry<W: Write + Seek>(
         &self,
         target: &mut W,
@@ -724,11 +732,22 @@ impl Writer {
         retry_count: &mut u32,
     ) -> Result<usize> {
         let mut last_error = None;
+        let base_delay = self.config.retry_delay;
+        let max_delay = base_delay.saturating_mul(8);
 
         for attempt in 0..=self.config.retry_attempts {
             if attempt > 0 {
                 *retry_count += 1;
-                std::thread::sleep(self.config.retry_delay);
+
+                // Exponential backoff: base_delay * 2^(attempt-1), capped at 8x
+                let exp_delay = base_delay.saturating_mul(1 << (attempt - 1).min(3));
+                let capped_delay = exp_delay.min(max_delay);
+
+                // Deterministic jitter from offset to spread out retries
+                let jitter_ms = (offset.wrapping_mul(2654435761) >> 32) % 50;
+                let delay = capped_delay + Duration::from_millis(jitter_ms);
+
+                std::thread::sleep(delay);
 
                 // Seek back to the write position
                 target.seek(SeekFrom::Start(offset))?;
@@ -1549,5 +1568,102 @@ mod tests {
     #[test]
     fn test_calculate_eta_just_started() {
         assert_eq!(calculate_eta(1, 1_000_000, 1000), Some(999));
+    }
+
+    // -------------------------------------------------------------------------
+    // Retry with exponential backoff tests
+    // -------------------------------------------------------------------------
+
+    /// A mock writer that always fails, used to test retry behavior.
+    struct FailingWriter {
+        attempt_times: std::sync::Mutex<Vec<Instant>>,
+    }
+
+    impl FailingWriter {
+        fn new() -> Self {
+            Self {
+                attempt_times: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn attempt_times(&self) -> Vec<Instant> {
+            self.attempt_times.lock().unwrap().clone()
+        }
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            self.attempt_times.lock().unwrap().push(Instant::now());
+            Err(std::io::Error::other("simulated write failure"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for FailingWriter {
+        fn seek(&mut self, _pos: SeekFrom) -> std::io::Result<u64> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn test_retry_exponential_backoff_increases_delay() {
+        // Skip timing-sensitive tests in CI
+        if std::env::var("CI").is_ok() {
+            return;
+        }
+
+        let base_delay_ms = 50;
+        let config = WriteConfig::new()
+            .retry_attempts(3)
+            .retry_delay(Duration::from_millis(base_delay_ms));
+        let writer = Writer::with_config(config);
+
+        let mut target = FailingWriter::new();
+        let mut retry_count = 0u32;
+
+        let result = writer.write_block_with_retry(&mut target, &[0u8; 64], 0, &mut retry_count);
+
+        assert!(result.is_err());
+        assert_eq!(retry_count, 3); // 3 retries after initial attempt
+
+        let times = target.attempt_times();
+        assert_eq!(times.len(), 4); // 1 initial + 3 retries
+
+        // Verify delays increase: gap[1] >= gap[0] and gap[2] >= gap[1]
+        let gaps: Vec<Duration> = times.windows(2).map(|w| w[1] - w[0]).collect();
+
+        // First retry: ~50ms, second: ~100ms, third: ~200ms
+        // Allow generous tolerance for thread scheduling
+        assert!(
+            gaps[1] >= gaps[0],
+            "Second gap ({:?}) should be >= first gap ({:?})",
+            gaps[1],
+            gaps[0]
+        );
+        assert!(
+            gaps[2] >= gaps[1],
+            "Third gap ({:?}) should be >= second gap ({:?})",
+            gaps[2],
+            gaps[1]
+        );
+    }
+
+    #[test]
+    fn test_retry_returns_last_error_on_exhaustion() {
+        let config = WriteConfig::new()
+            .retry_attempts(2)
+            .retry_delay(Duration::from_millis(1));
+        let writer = Writer::with_config(config);
+
+        let mut target = FailingWriter::new();
+        let mut retry_count = 0u32;
+
+        let result = writer.write_block_with_retry(&mut target, &[0u8; 64], 0, &mut retry_count);
+
+        assert!(matches!(result, Err(Error::Io(_))));
+        assert_eq!(retry_count, 2);
     }
 }

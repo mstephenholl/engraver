@@ -19,6 +19,7 @@ const DEFAULT_TEST_SIZE: u64 = 256 * 1024 * 1024; // 256 MB
 
 /// Errors that can occur during benchmark operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum BenchmarkError {
     /// Size value is not a power of 2
     #[error("Size must be a power of 2: {0}")]
@@ -55,6 +56,7 @@ pub type Result<T> = std::result::Result<T, BenchmarkError>;
 /// Data pattern for benchmark writes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum DataPattern {
     /// All zeros (fastest to generate)
     #[default]
@@ -448,7 +450,6 @@ impl BenchmarkRunner {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn run_pass<W, F>(
         &self,
         target: &mut W,

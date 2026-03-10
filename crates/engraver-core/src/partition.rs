@@ -20,6 +20,7 @@ pub const PARTITION_HEADER_SIZE: usize = 64 * 1024;
 
 /// Type of partition table found in the image
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum PartitionTableType {
     /// GUID Partition Table (modern)
     Gpt,

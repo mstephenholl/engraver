@@ -190,7 +190,10 @@ fn test_partition_creation() {
 
 #[test]
 fn test_error_types() {
-    let err = DetectError::EnumerationFailed("test".to_string());
+    let err = DetectError::EnumerationFailed {
+        message: "test".to_string(),
+        source: None,
+    };
     assert!(err.to_string().contains("test"));
 
     let err = DetectError::PermissionDenied("need sudo".to_string());

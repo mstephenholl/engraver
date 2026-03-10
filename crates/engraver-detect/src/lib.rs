@@ -21,10 +21,17 @@ use thiserror::Error;
 
 /// Drive detection errors
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum DetectError {
     /// Failed to enumerate drives
-    #[error("Failed to enumerate drives: {0}")]
-    EnumerationFailed(String),
+    #[error("Failed to enumerate drives: {message}")]
+    EnumerationFailed {
+        /// Description of the enumeration failure
+        message: String,
+        /// The underlying I/O error, if available
+        #[source]
+        source: Option<std::io::Error>,
+    },
 
     /// Permission denied when accessing drive information
     #[error("Permission denied: {0}")]
@@ -35,8 +42,14 @@ pub enum DetectError {
     UnsupportedPlatform,
 
     /// Command execution failed
-    #[error("Command failed: {0}")]
-    CommandFailed(String),
+    #[error("Command failed: {message}")]
+    CommandFailed {
+        /// Description of the command failure
+        message: String,
+        /// The underlying I/O error, if available
+        #[source]
+        source: Option<std::io::Error>,
+    },
 
     /// Failed to parse drive information
     #[error("Parse error: {0}")]
@@ -52,6 +65,7 @@ pub type Result<T> = std::result::Result<T, DetectError>;
 
 /// Type of drive connection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum DriveType {
     /// USB connected drive
     Usb,
@@ -80,6 +94,7 @@ impl fmt::Display for DriveType {
 
 /// USB connection speed
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum UsbSpeed {
     /// USB 1.x Low Speed (1.5 Mbps)
     Low,
@@ -431,26 +446,33 @@ pub fn validate_target(device_path: &str) -> Result<Drive> {
     let drive = drives
         .into_iter()
         .find(|d| d.path == device_path || d.raw_path == device_path)
-        .ok_or_else(|| {
-            DetectError::EnumerationFailed(format!("Device not found: {device_path}"))
+        .ok_or_else(|| DetectError::EnumerationFailed {
+            message: format!("Device not found: {device_path}"),
+            source: None,
         })?;
 
     // Check if safe
     if drive.is_system {
-        return Err(DetectError::EnumerationFailed(format!(
-            "Refusing to use system drive: {} ({})",
-            device_path,
-            drive
-                .system_reason
-                .as_deref()
-                .unwrap_or("system drive detected")
-        )));
+        return Err(DetectError::EnumerationFailed {
+            message: format!(
+                "Refusing to use system drive: {} ({})",
+                device_path,
+                drive
+                    .system_reason
+                    .as_deref()
+                    .unwrap_or("system drive detected")
+            ),
+            source: None,
+        });
     }
 
     if !drive.removable {
-        return Err(DetectError::EnumerationFailed(format!(
-            "Drive is not removable: {device_path}. Use --force to override (dangerous!)"
-        )));
+        return Err(DetectError::EnumerationFailed {
+            message: format!(
+                "Drive is not removable: {device_path}. Use --force to override (dangerous!)"
+            ),
+            source: None,
+        });
     }
 
     Ok(drive)
@@ -748,7 +770,10 @@ mod tests {
 
     #[test]
     fn test_error_display() {
-        let err = DetectError::EnumerationFailed("test error".to_string());
+        let err = DetectError::EnumerationFailed {
+            message: "test error".to_string(),
+            source: None,
+        };
         assert_eq!(err.to_string(), "Failed to enumerate drives: test error");
 
         let err = DetectError::PermissionDenied("need root".to_string());
@@ -760,7 +785,10 @@ mod tests {
 
     #[test]
     fn test_error_display_command_failed() {
-        let err = DetectError::CommandFailed("diskutil list failed".to_string());
+        let err = DetectError::CommandFailed {
+            message: "diskutil list failed".to_string(),
+            source: None,
+        };
         assert!(err.to_string().contains("Command failed"));
         assert!(err.to_string().contains("diskutil list failed"));
     }

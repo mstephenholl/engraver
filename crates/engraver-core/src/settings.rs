@@ -298,6 +298,7 @@ impl Settings {
 
 /// Errors that can occur when working with settings
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SettingsError {
     /// No configuration directory available
     #[error("Could not determine configuration directory")]
