@@ -27,6 +27,59 @@ To bypass hooks temporarily (not recommended):
 git commit --no-verify
 ```
 
+## Testing
+
+### Unit and Integration Tests
+
+Run the full test suite (no special hardware required):
+
+```bash
+cargo test --workspace
+```
+
+Run tests for a specific crate:
+
+```bash
+cargo test -p engraver-core
+cargo test -p engraver -- write   # filter by test name
+```
+
+### Device Workflow Tests
+
+End-to-end tests that validate write, verify, and erase workflows against a
+**real removable drive**. These tests are destructive and `#[ignore]`d by
+default — they never run in CI or during normal `cargo test`.
+
+**Requirements:**
+- A removable drive (USB stick, SD card) connected to the system
+- Root/admin privileges
+- The `ENGRAVER_TEST_DEVICE` environment variable set to the device path
+
+**Running:**
+
+```bash
+# Linux
+sudo ENGRAVER_TEST_DEVICE=/dev/sdX cargo test -p engraver --test device_tests -- --ignored
+
+# macOS
+sudo ENGRAVER_TEST_DEVICE=/dev/disk4 cargo test -p engraver --test device_tests -- --ignored
+```
+
+> **WARNING**: All data on the test device will be permanently destroyed!
+
+The device tests cover:
+- **Write** — writing a test image to the device
+- **Write + verify** — writing with the `--verify` flag
+- **Standalone verify** — writing then verifying with a separate `verify` command
+- **Block size variations** — writing with 4K, 64K, and 1M block sizes
+- **Erase** — zero-filling the device
+- **Mismatch detection** — verifying that a wrong image is rejected
+- **Full lifecycle** — write → verify → erase → verify zeros
+- **Checkpoint** — writing with `--checkpoint` enabled
+
+One safety-check test (`test_erase_rejects_nonexistent_device`) runs without a
+device and without `#[ignore]`. Write rejection tests live in `cli_tests.rs`.
+
 ## Code Style
 
 - Follow Rust conventions
