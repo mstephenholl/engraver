@@ -16,6 +16,8 @@ targets = [
 db-path = "~/.cargo/advisory-db"
 # URL to the advisory database
 db-urls = ["https://github.com/rustsec/advisory-db"]
+# Explicitly flag unmaintained crates (workspace = warn for direct deps)
+unmaintained = "workspace"
 # Ignore specific advisories (by RUSTSEC ID)
 ignore = [
 ]
@@ -46,10 +48,10 @@ expression = "MIT AND ISC AND OpenSSL"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [bans]
-# Lint level for multiple versions of the same crate
-multiple-versions = "warn"
-# Lint level for when a crate is used from a git repository
-wildcards = "allow"  # Allow workspace path dependencies
+# Deny multiple versions of the same crate (known duplicates are in `skip`)
+multiple-versions = "deny"
+# Allow wildcards: required for workspace path-only dependencies (no version field)
+wildcards = "allow"
 # List of crates to deny
 deny = []
 # List of crates to allow

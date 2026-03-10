@@ -155,15 +155,18 @@ Planned features, improvements, and development roadmap for Engraver.
 
 ## Dependency Management
 
-- [ ] **Tighten cargo-deny configuration**
-  - Review and reduce permissiveness in `deny.toml`
-  - Consider stricter license allow-list
-  - Evaluate changing `multiple-versions = "warn"` to `"deny"`
-  - Review `wildcards = "allow"` setting for workspace dependencies
+- [x] **Tighten cargo-deny configuration**
+  - Changed `multiple-versions` from `"warn"` to `"deny"` (known duplicates handled via `skip`)
+  - Added explicit `unmaintained = "workspace"` to flag unmaintained direct deps
+  - Reviewed `wildcards = "allow"` — required for workspace path-only deps, clarified comment
+  - License allow-list already minimal and well-documented, no changes needed
+  - Advisory ignore list is empty (clean), sources section already strict
 
-- [ ] **Audit and remediate unmaintained dependencies**
-  - Periodically review advisory-db ignore list
-  - Consider pinning or replacing problematic transitive deps
+- [x] **Audit and remediate unmaintained dependencies**
+  - Advisory-db ignore list is empty — no ignored advisories
+  - `cargo deny check advisories` passes clean
+  - Only duplicate deps: `getrandom` 0.2/0.3 (ring), `windows-sys` 0.60/0.61 — both in `skip`
+  - Periodic review should continue as part of CI (cargo-deny runs in CI pipeline)
 
 ---
 
