@@ -177,6 +177,8 @@ install_completions() {
 
     # PowerShell
     local ps_dir
+    # $PROFILE is a PowerShell variable, not a shell variable
+    # shellcheck disable=SC2016
     if ps_dir="$(pwsh -NoProfile -Command 'Split-Path $PROFILE' 2>/dev/null)"; then
         if [[ -d "$ps_dir" ]]; then
             info "Installing PowerShell completions..."
