@@ -1,19 +1,55 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH list 1  "list " 
+.TH engraver\-list 1  "engraver 0.1.0"
 .SH NAME
-list \- List available drives
+engraver\-list \- List available drives
 .SH SYNOPSIS
-\fBlist\fR [\fB\-a\fR|\fB\-\-all\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBengraver list\fR [\fB\-a\fR|\fB\-\-all\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .SH DESCRIPTION
-List available drives
+Detect and display available removable drives. Shows drive metadata including
+model name, capacity, vendor, serial number, and USB connection speed.
+.PP
+By default, only removable drives are shown. System drives and internal disks
+are hidden to prevent accidental data loss. Use \fB\-\-all\fR to include all drives.
 .SH OPTIONS
 .TP
 \fB\-a\fR, \fB\-\-all\fR
-Show all drives including system drives
+Show all drives including system drives and internal disks.
 .TP
 \fB\-\-json\fR
-Output in JSON format
+Output drive information in JSON format for scripting and automation.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help information.
+.SH EXAMPLES
+List removable drives:
+.PP
+.nf
+    engraver list
+.fi
+.PP
+List all drives including system disks:
+.PP
+.nf
+    engraver list \-\-all
+.fi
+.PP
+Output JSON for use in scripts:
+.PP
+.nf
+    engraver list \-\-json
+.fi
+.PP
+Parse JSON output with jq to get device paths:
+.PP
+.nf
+    engraver list \-\-json | jq \-r '.[].path'
+.fi
+.SH NOTES
+USB speed detection shows the connection speed (USB 2.0 vs 3.0) and warns
+if a USB 3.0\-capable device is connected at USB 2.0 speed. This can indicate
+the device is plugged into a USB 2.0 port.
+.SH SEE ALSO
+\fBengraver\fR(1), \fBengraver\-write\fR(1), \fBengraver\-benchmark\fR(1)
+.SH AUTHORS
+Engraver Contributors

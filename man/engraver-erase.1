@@ -1,0 +1,65 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH engraver\-erase 1  "engraver 0.1.0"
+.SH NAME
+engraver\-erase \- Erase a drive by zero-filling the entire device
+.SH SYNOPSIS
+\fBengraver erase\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR] [\fB\-\-no\-unmount\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
+.SH DESCRIPTION
+Securely erase a drive by writing zeros to the entire device.
+This is useful for wiping a drive before disposal, repurposing, or preparing
+it for a fresh partition table.
+.PP
+\fBWARNING:\fR This operation is \fBdestructive\fR and \fBirreversible\fR. All data on
+the target device will be permanently lost.
+.SH OPTIONS
+.TP
+<\fITARGET\fR>
+Target device (e.g., /dev/sdb, /dev/disk2, \\\\.\\PhysicalDrive1)
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip confirmation prompt. Use with caution.
+.TP
+\fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR
+Block size for writing (e.g., 4M, 1M, 512K).
+Default from config or 4M.
+.TP
+\fB\-\-no\-unmount\fR
+Do not unmount partitions before erasing.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help information.
+.SH EXAMPLES
+Erase a USB drive with confirmation prompt:
+.PP
+.nf
+    engraver erase /dev/sdb
+.fi
+.PP
+Erase without confirmation (for scripting):
+.PP
+.nf
+    engraver erase /dev/sdb \-y
+.fi
+.PP
+Erase with a larger block size for faster throughput:
+.PP
+.nf
+    engraver erase /dev/sdb \-\-block\-size 16M
+.fi
+.PP
+Erase on macOS:
+.PP
+.nf
+    engraver erase /dev/disk2
+.fi
+.SH NOTES
+System drive protection prevents accidental erasure of drives containing
+system partitions, unless the hidden \fB\-\-force\fR flag is used.
+.PP
+Partitions on the target device are automatically unmounted before erasing
+unless \fB\-\-no\-unmount\fR is specified.
+.SH SEE ALSO
+\fBengraver\fR(1), \fBengraver\-write\fR(1), \fBengraver\-benchmark\fR(1)
+.SH AUTHORS
+Engraver Contributors

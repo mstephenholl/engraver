@@ -1,38 +1,140 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH write 1  "write " 
+.TH engraver\-write 1  "engraver 0.1.0"
 .SH NAME
-write \- Write an image to a drive
+engraver\-write \- Write an image to a drive
 .SH SYNOPSIS
-\fBwrite\fR [\fB\-\-verify\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-b\fR|\fB\-\-block\-size\fR] [\fB\-\-checksum\fR] [\fB\-\-checksum\-algo\fR] [\fB\-\-no\-unmount\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> <\fITARGET\fR> 
+\fBengraver write\fR [\fB\-\-verify\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<SIZE>\fR] [\fB\-\-checksum\fR \fI<HASH>\fR] [\fB\-\-checksum\-algo\fR \fI<ALGO>\fR] [\fB\-\-auto\-checksum\fR] [\fB\-\-no\-unmount\fR] [\fB\-\-checkpoint\fR] [\fB\-\-resume\fR] [\fB\-p\fR|\fB\-\-show\-partitions\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> <\fITARGET\fR>
 .SH DESCRIPTION
-Write an image to a drive
+Write a disk image to a target device. The source can be a local file, an
+HTTP/HTTPS URL, or a cloud storage URL (s3://, gs://, az://). Compressed
+images (.gz, .xz, .zst, .bz2) are automatically detected and decompressed
+during the write.
+.PP
+When \fB\-\-verify\fR is specified, Engraver performs parallel verification by
+hashing the source data during the write pass, then reading back the target
+and comparing checksums. This is significantly faster than a separate verify step.
 .SH OPTIONS
 .TP
-\fB\-\-verify\fR
-Verify write integrity by hashing source data during the write pass, then reading back the target and comparing checksums.
-Falls back to sequential verification when resuming a partial write (--resume).
-.TP
-\fB\-y\fR, \fB\-\-yes\fR
-Skip confirmation prompt (use with caution!)
-.TP
-\fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR [default: 4M]
-Block size for writing (e.g., 4M, 1M, 512K)
-.TP
-\fB\-\-checksum\fR \fI<CHECKSUM>\fR
-Verify checksum against expected value
-.TP
-\fB\-\-checksum\-algo\fR \fI<CHECKSUM_ALGO>\fR [default: sha256]
-Checksum algorithm (sha256, sha512, md5)
-.TP
-\fB\-\-no\-unmount\fR
-Do not unmount partitions before writing
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
-.TP
 <\fISOURCE\fR>
-Source image (local file or URL)
+Source image. Can be a local file path, HTTP/HTTPS URL, or cloud storage URL
+(s3://bucket/key, gs://bucket/object, az://container/blob).
 .TP
 <\fITARGET\fR>
-Target device (e.g., /dev/sdb, /dev/disk2, \\\\.\\PhysicalDrive1)
+Target device (e.g., /dev/sdb, /dev/disk2, \\\\.\\PhysicalDrive1).
+.TP
+\fB\-\-verify\fR
+Verify write integrity by hashing source data during the write pass, then
+reading back the target and comparing checksums. Falls back to sequential
+verification when resuming a partial write (\fB\-\-resume\fR).
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip confirmation prompt. Use with caution.
+.TP
+\fB\-b\fR, \fB\-\-block\-size\fR \fI<SIZE>\fR [default: 4M]
+Block size for writing (e.g., 4M, 1M, 512K). Larger block sizes may improve
+throughput. Use \fBengraver benchmark \-\-test\-block\-sizes\fR to find the optimal
+value for your drive.
+.TP
+\fB\-\-checksum\fR \fI<HASH>\fR
+Verify the source image checksum against the given expected hash value before writing.
+.TP
+\fB\-\-checksum\-algo\fR \fI<ALGO>\fR [default: sha256]
+Checksum algorithm to use with \fB\-\-checksum\fR. Supported: sha256, sha512, md5.
+.TP
+\fB\-\-auto\-checksum\fR
+Automatically detect and verify checksums from companion files (.sha256, .sha512,
+.md5, .sha256sum) alongside the source image. Searches the same directory as
+the source file.
+.TP
+\fB\-\-no\-unmount\fR
+Do not unmount partitions on the target device before writing.
+.TP
+\fB\-\-checkpoint\fR
+Enable checkpointing so the write can be resumed if interrupted. A checkpoint
+file is saved on Ctrl+C or transient errors. Automatically enabled when
+\fB\-\-resume\fR is used.
+.TP
+\fB\-\-resume\fR
+Resume a previously interrupted write operation from the last checkpoint.
+Requires that the previous write was started with \fB\-\-checkpoint\fR or
+\fB\-\-resume\fR.
+.TP
+\fB\-p\fR, \fB\-\-show\-partitions\fR
+Display the partition layout (MBR or GPT) of the source image before writing.
+Works with compressed sources by decompressing the first 64 KB.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help information.
+.SH EXAMPLES
+Write an ISO to a USB drive:
+.PP
+.nf
+    engraver write ubuntu.iso /dev/sdb
+.fi
+.PP
+Write with parallel verification:
+.PP
+.nf
+    engraver write ubuntu.iso /dev/sdb \-\-verify
+.fi
+.PP
+Write a compressed image from a URL:
+.PP
+.nf
+    engraver write https://example.com/image.iso.xz /dev/sdb
+.fi
+.PP
+Write with checkpointing, then resume if interrupted:
+.PP
+.nf
+    engraver write large\-image.iso /dev/sdb \-\-checkpoint
+    # If interrupted, resume:
+    engraver write large\-image.iso /dev/sdb \-\-resume
+.fi
+.PP
+Verify checksum from a companion .sha256 file automatically:
+.PP
+.nf
+    engraver write ubuntu.iso /dev/sdb \-\-auto\-checksum \-\-verify
+.fi
+.PP
+Inspect partitions before writing:
+.PP
+.nf
+    engraver write ubuntu.iso /dev/sdb \-\-show\-partitions
+.fi
+.PP
+Write from S3 cloud storage:
+.PP
+.nf
+    engraver write s3://my\-bucket/images/firmware.img /dev/sdb
+.fi
+.PP
+Non-interactive write for scripting:
+.PP
+.nf
+    engraver write ubuntu.iso /dev/sdb \-y \-\-verify
+.fi
+.SH NOTES
+.SS Resume Limitations
+.IP \(bu 2
+\fBLocal files:\fR Always resumable (seekable).
+.IP \(bu 2
+\fBHTTP/HTTPS sources:\fR Resumable if the server supports Range headers.
+.IP \(bu 2
+\fBCompressed files:\fR Cannot be resumed due to stream-based decompression.
+.PP
+When resuming with \fB\-\-verify\fR, verification falls back to sequential mode
+(separate read-back pass) since the source checksum from the partial write
+is incomplete.
+.SS Checkpoints
+Checkpoint files are stored in:
+.IP \(bu 2
+Linux/macOS: ~/.local/state/engraver/checkpoints/
+.IP \(bu 2
+Windows: %LOCALAPPDATA%\\engraver\\checkpoints\\
+.SH SEE ALSO
+\fBengraver\fR(1), \fBengraver\-verify\fR(1), \fBengraver\-checksum\fR(1), \fBengraver\-benchmark\fR(1), \fBengraver\-config\fR(1)
+.SH AUTHORS
+Engraver Contributors

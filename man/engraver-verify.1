@@ -1,22 +1,55 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH verify 1  "verify " 
+.TH engraver\-verify 1  "engraver 0.1.0"
 .SH NAME
-verify \- Verify a drive against a source image
+engraver\-verify \- Verify a drive against a source image
 .SH SYNOPSIS
-\fBverify\fR [\fB\-b\fR|\fB\-\-block\-size\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> <\fITARGET\fR> 
+\fBengraver verify\fR [\fB\-b\fR|\fB\-\-block\-size\fR \fI<SIZE>\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> <\fITARGET\fR>
 .SH DESCRIPTION
-Verify a drive against a source image
+Read back a target device and compare it block-by-block against a source
+image to verify write integrity. This is a standalone verification pass
+that reads both the source and the device.
+.PP
+For faster verification during writes, consider using \fBengraver write \-\-verify\fR
+instead, which hashes the source data during the write pass and only needs
+to read back the device.
 .SH OPTIONS
 .TP
-\fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR [default: 4M]
-Block size for reading
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
-.TP
 <\fISOURCE\fR>
-Source image (local file or URL)
+Source image (local file or URL) to verify against.
 .TP
 <\fITARGET\fR>
-Target device to verify
+Target device to verify (e.g., /dev/sdb, /dev/disk2, \\\\.\\PhysicalDrive1).
+.TP
+\fB\-b\fR, \fB\-\-block\-size\fR \fI<SIZE>\fR [default: 4M]
+Block size for reading during verification.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help information.
+.SH EXAMPLES
+Verify a USB drive against a local image:
+.PP
+.nf
+    engraver verify ubuntu.iso /dev/sdb
+.fi
+.PP
+Verify against a remote image:
+.PP
+.nf
+    engraver verify https://example.com/image.iso /dev/sdb
+.fi
+.PP
+Verify on macOS with a smaller block size:
+.PP
+.nf
+    engraver verify ubuntu.iso /dev/disk2 \-\-block\-size 1M
+.fi
+.SH NOTES
+This command performs a full sequential read of both the source and target,
+which can be slow for large images. If you are writing and verifying in the
+same session, \fBengraver write \-\-verify\fR is significantly faster because it
+hashes the source during the write pass.
+.SH SEE ALSO
+\fBengraver\fR(1), \fBengraver\-write\fR(1), \fBengraver\-checksum\fR(1)
+.SH AUTHORS
+Engraver Contributors

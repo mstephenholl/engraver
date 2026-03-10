@@ -2,7 +2,7 @@
 
 Planned features, improvements, and development roadmap for Engraver.
 
-**Last updated**: 2026-02-02
+**Last updated**: 2026-03-10
 
 ---
 
@@ -242,8 +242,18 @@ Planned features, improvements, and development roadmap for Engraver.
 - [x] **Detect README updated**
   - Added USB speed detection documentation
 
-- [ ] **Man page improvements**
-- [ ] **More examples in README**
+- [x] **Man page improvements**
+  - Added missing man pages: engraver-benchmark.1, engraver-erase.1, engraver-config.1
+  - Updated engraver.1 with all subcommands, EXAMPLES, FILES, and SEE ALSO sections
+  - Updated engraver-write.1 with missing flags (--resume, --checkpoint, --auto-checksum, --show-partitions)
+  - Added EXAMPLES, NOTES, and SEE ALSO sections to all man pages
+  - Fixed version strings across all man pages
+- [x] **More examples in README**
+  - Added Cloud Storage section (S3, GCS, Azure Blob examples)
+  - Added Erasing Drives section
+  - Added Partition Inspection section
+  - Added Platform Notes section with macOS/Windows device path examples
+  - Added Scripting & Automation section (JSON output, silent mode, exit codes, example script)
 
 ---
 

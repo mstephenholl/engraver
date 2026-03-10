@@ -1,0 +1,88 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH engraver\-config 1  "engraver 0.1.0"
+.SH NAME
+engraver\-config \- Manage configuration settings
+.SH SYNOPSIS
+\fBengraver config\fR [\fB\-\-init\fR] [\fB\-\-path\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.SH DESCRIPTION
+View and manage Engraver's persistent configuration settings.
+When run without flags, displays the current configuration values.
+.PP
+Configuration settings provide default values for command-line options.
+Command-line flags always take precedence over configuration file settings.
+.SH OPTIONS
+.TP
+\fB\-\-init\fR
+Create a new configuration file with default values.
+Will not overwrite an existing configuration file.
+.TP
+\fB\-\-path\fR
+Print the path to the configuration file and exit.
+.TP
+\fB\-\-json\fR
+Output current settings in JSON format for scripting.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help information.
+.SH CONFIGURATION FILE
+The configuration file is located at:
+.TP
+\fBLinux/macOS:\fR
+~/.config/engraver/engraver_config.toml
+.TP
+\fBWindows:\fR
+%APPDATA%\\engraver\\engraver_config.toml
+.PP
+A custom configuration file can be specified with the \fB\-\-config\-file\fR
+global option.
+.SS Sections
+.TP
+\fB[write]\fR
+Default block size, verify, checkpoint, retry settings, and read buffer size.
+.TP
+\fB[checksum]\fR
+Default algorithm and auto-detection settings.
+.TP
+\fB[behavior]\fR
+Confirmation prompts and quiet mode defaults.
+.TP
+\fB[benchmark]\fR
+Default block size, test size, data pattern, passes, and JSON output.
+.TP
+\fB[network]\fR
+HTTP timeout, URL validation timeout, and cloud storage chunk size.
+.SH EXAMPLES
+View current configuration:
+.PP
+.nf
+    engraver config
+.fi
+.PP
+Create a default configuration file:
+.PP
+.nf
+    engraver config \-\-init
+.fi
+.PP
+Show where the configuration file is stored:
+.PP
+.nf
+    engraver config \-\-path
+.fi
+.PP
+Pipe configuration as JSON to another tool:
+.PP
+.nf
+    engraver config \-\-json | jq '.write.block_size'
+.fi
+.PP
+Use a custom configuration file:
+.PP
+.nf
+    engraver \-\-config\-file ./my\-config.toml write image.iso /dev/sdb
+.fi
+.SH SEE ALSO
+\fBengraver\fR(1), \fBengraver\-write\fR(1), \fBengraver\-benchmark\fR(1)
+.SH AUTHORS
+Engraver Contributors

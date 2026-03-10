@@ -146,6 +146,28 @@ engraver write https://example.com/image.iso /dev/sdb --verify
 engraver write https://example.com/large-image.iso /dev/sdb --checkpoint
 ```
 
+## Cloud Storage
+
+Write images directly from S3, Google Cloud Storage, or Azure Blob Storage:
+
+```bash
+# Write from Amazon S3
+engraver write s3://my-bucket/images/firmware.img /dev/sdb
+
+# Write from Google Cloud Storage
+engraver write gs://my-bucket/images/ubuntu.iso /dev/sdb
+
+# Write from Azure Blob Storage
+engraver write az://my-container/images/debian.iso /dev/sdb
+
+# Presigned URLs work as regular HTTPS URLs
+engraver write "https://my-bucket.s3.amazonaws.com/image.iso?X-Amz-..." /dev/sdb
+```
+
+Cloud sources support resume via Range headers, just like HTTP/HTTPS. The cloud chunk size is configurable in the `[network]` section of the configuration file.
+
+> **Note:** Cloud storage support is an optional feature flag. Pre-built binaries include it by default. When building from source, enable it with `cargo build --features cloud`.
+
 ## Compression Support
 
 Compressed images are automatically detected and decompressed during write:
@@ -165,6 +187,100 @@ engraver write archlinux.iso.zst /dev/sdb
 ```
 
 Compressed images cannot be resumed if interrupted.
+
+## Erasing Drives
+
+Securely wipe a drive by zero-filling the entire device:
+
+```bash
+# Erase a USB drive (with confirmation prompt)
+engraver erase /dev/sdb
+
+# Erase without confirmation (for scripting)
+engraver erase /dev/sdb -y
+
+# Erase with a larger block size for faster throughput
+engraver erase /dev/sdb --block-size 16M
+```
+
+System drive protection applies to erase just as it does to write — Engraver refuses to erase drives containing system partitions.
+
+## Partition Inspection
+
+Preview the partition layout of a source image before writing:
+
+```bash
+# Show MBR or GPT partition table
+engraver write ubuntu.iso /dev/sdb --show-partitions
+```
+
+This displays partition type, sizes, and filesystem labels. Works with compressed sources by decompressing just the first 64 KB to read the partition table header.
+
+## Platform Notes
+
+Engraver works on Linux, macOS, and Windows. Device paths differ by platform:
+
+| Platform | Example Device Path | List Command |
+|----------|-------------------|--------------|
+| Linux | `/dev/sdb` | `engraver list` |
+| macOS | `/dev/disk2` | `engraver list` |
+| Windows | `\\.\PhysicalDrive1` | `engraver list` |
+
+```bash
+# macOS — write to an external drive
+engraver write ubuntu.iso /dev/disk2 --verify
+
+# Windows — write to a USB drive (run as Administrator)
+engraver write ubuntu.iso \\.\PhysicalDrive1 --verify
+```
+
+On macOS, Engraver uses `F_FULLFSYNC` for guaranteed physical media flush and `DKIOCGETBLOCKSIZE` ioctl for accurate block size detection. On Linux, standard `fsync` and `/sys/block` are used.
+
+## Scripting & Automation
+
+Engraver is designed to work well in scripts and CI/CD pipelines:
+
+```bash
+# JSON output for machine-readable drive listing
+engraver list --json | jq -r '.[].path'
+
+# Non-interactive write (skip confirmation)
+engraver write ubuntu.iso /dev/sdb -y --verify
+
+# Silent mode (no output except errors, implies -y)
+engraver write ubuntu.iso /dev/sdb --silent --verify
+
+# JSON benchmark results for performance tracking
+engraver benchmark /dev/sdb --json --passes 3 -y
+
+# Configuration as JSON
+engraver config --json | jq '.write.block_size'
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Error (permission denied, device not found, verification failure, etc.) |
+
+### Example: Scripted Write with Verification
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+IMAGE="ubuntu-24.04-desktop-amd64.iso"
+DEVICE="/dev/sdb"
+
+# Verify the image checksum before writing
+engraver checksum "$IMAGE" --algorithm sha256
+
+# Write with verification, skip prompt
+engraver write "$IMAGE" "$DEVICE" -y --verify --auto-checksum
+
+echo "Write complete and verified."
+```
 
 ## Shell Completions
 

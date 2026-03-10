@@ -1,0 +1,85 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH engraver\-benchmark 1  "engraver 0.1.0"
+.SH NAME
+engraver\-benchmark \- Benchmark write speed of a drive
+.SH SYNOPSIS
+\fBengraver benchmark\fR [\fB\-s\fR|\fB\-\-size\fR \fI<SIZE>\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR] [\fB\-\-pattern\fR \fI<PATTERN>\fR] [\fB\-\-passes\fR \fI<N>\fR] [\fB\-\-test\-block\-sizes\fR \fI<SIZES>\fR] [\fB\-\-json\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
+.SH DESCRIPTION
+Test the write speed of a drive before committing to a long write operation.
+Writes a configurable amount of test data to the target device and measures throughput.
+A color-coded progress bar indicates performance (red \(-> yellow \(-> green \(-> blue).
+.PP
+\fBWARNING:\fR Benchmarking is a \fBdestructive\fR operation that will overwrite data on the target device.
+.SH OPTIONS
+.TP
+<\fITARGET\fR>
+Target device (e.g., /dev/sdb, /dev/disk2, \\\\.\\PhysicalDrive1)
+.TP
+\fB\-s\fR, \fB\-\-size\fR \fI<SIZE>\fR
+Amount of data to write for the test (e.g., 256M, 1G).
+Mutually exclusive with \fB\-\-test\-block\-sizes\fR.
+Default from config or 256M.
+.TP
+\fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR
+Block size for writes (e.g., 4K, 1M, 4M).
+Must be a power of 2, maximum 64M.
+Default from config or 4M.
+.TP
+\fB\-\-pattern\fR \fI<PATTERN>\fR
+Data pattern to write: \fBzeros\fR, \fBrandom\fR, or \fBsequential\fR.
+Default from config or zeros.
+.TP
+\fB\-\-passes\fR \fI<N>\fR
+Number of benchmark passes. Results are averaged across passes.
+Default from config or 1.
+.TP
+\fB\-\-test\-block\-sizes\fR \fI<SIZES>\fR
+Test multiple block sizes in a single run (comma-separated, e.g., "4K,64K,1M,4M,16M").
+Mutually exclusive with \fB\-\-size\fR.
+.TP
+\fB\-\-json\fR
+Output benchmark results in JSON format for scripting and automation.
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip confirmation prompt.
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help information.
+.SH EXAMPLES
+Basic benchmark with default settings (256 MB, 4 MB blocks, zeros pattern):
+.PP
+.nf
+    engraver benchmark /dev/sdb
+.fi
+.PP
+Benchmark with 1 GB of random data:
+.PP
+.nf
+    engraver benchmark /dev/sdb \-\-size 1G \-\-pattern random
+.fi
+.PP
+Find the optimal block size for a drive:
+.PP
+.nf
+    engraver benchmark /dev/sdb \-\-test\-block\-sizes "4K,64K,1M,4M,16M"
+.fi
+.PP
+Run 3 passes and output JSON for CI integration:
+.PP
+.nf
+    engraver benchmark /dev/sdb \-\-passes 3 \-\-json
+.fi
+.SH NOTES
+All size values must be powers of 2. Block sizes are limited to 64 MB maximum.
+.PP
+The \fB\-\-size\fR and \fB\-\-test\-block\-sizes\fR options are mutually exclusive.
+When using \fB\-\-test\-block\-sizes\fR, each block size is tested with a proportional
+amount of data.
+.PP
+Default values can be configured in the configuration file under the \fB[benchmark]\fR section.
+See \fBengraver\-config\fR(1) for details.
+.SH SEE ALSO
+\fBengraver\fR(1), \fBengraver\-write\fR(1), \fBengraver\-erase\fR(1), \fBengraver\-config\fR(1)
+.SH AUTHORS
+Engraver Contributors

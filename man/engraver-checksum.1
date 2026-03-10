@@ -1,19 +1,57 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH checksum 1  "checksum " 
+.TH engraver\-checksum 1  "engraver 0.1.0"
 .SH NAME
-checksum \- Calculate checksum of an image
+engraver\-checksum \- Calculate checksum of an image
 .SH SYNOPSIS
-\fBchecksum\fR [\fB\-a\fR|\fB\-\-algorithm\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> 
+\fBengraver checksum\fR [\fB\-a\fR|\fB\-\-algorithm\fR \fI<ALGO>\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR>
 .SH DESCRIPTION
-Calculate checksum of an image
+Calculate and display the checksum of a source image file. Useful for
+verifying downloaded images against published checksums before writing
+them to a drive.
 .SH OPTIONS
 .TP
-\fB\-a\fR, \fB\-\-algorithm\fR \fI<ALGORITHM>\fR [default: sha256]
-Checksum algorithm (sha256, sha512, md5, crc32)
+<\fISOURCE\fR>
+Source image (local file or URL) to calculate the checksum for.
+.TP
+\fB\-a\fR, \fB\-\-algorithm\fR \fI<ALGO>\fR [default: sha256]
+Checksum algorithm. Supported: sha256, sha512, md5, crc32.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
-.TP
-<\fISOURCE\fR>
-Source image (local file or URL)
+Print help information.
+.SH EXAMPLES
+Calculate SHA-256 checksum (default):
+.PP
+.nf
+    engraver checksum ubuntu.iso
+.fi
+.PP
+Calculate SHA-512 checksum:
+.PP
+.nf
+    engraver checksum ubuntu.iso \-\-algorithm sha512
+.fi
+.PP
+Calculate checksum of a remote image:
+.PP
+.nf
+    engraver checksum https://example.com/image.iso
+.fi
+.PP
+Compare against a known checksum:
+.PP
+.nf
+    expected="e3b0c44298fc1c149..."
+    actual=$(engraver checksum ubuntu.iso)
+    [ "$expected" = "$actual" ] && echo "Match" || echo "MISMATCH"
+.fi
+.SH NOTES
+For automatic checksum verification during writes, use \fBengraver write \-\-auto\-checksum\fR
+which detects companion .sha256, .sha512, and .md5 files alongside the source image.
+.PP
+The default algorithm can be configured in the configuration file under
+\fB[checksum] algorithm\fR. See \fBengraver\-config\fR(1).
+.SH SEE ALSO
+\fBengraver\fR(1), \fBengraver\-write\fR(1), \fBengraver\-verify\fR(1), \fBengraver\-config\fR(1)
+.SH AUTHORS
+Engraver Contributors

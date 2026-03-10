@@ -1,47 +1,90 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH engraver 1  "engraver 0.1.0" 
+.TH engraver 1  "engraver 0.1.0"
 .SH NAME
-engraver \- A safe, fast tool for creating bootable USB drives
+engraver \- A safe, fast tool for creating bootable USB drives, SD cards, and NVMe drives
 .SH SYNOPSIS
-\fBengraver\fR [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+\fBengraver\fR [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-\-config\-file\fR \fI<PATH>\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIcommand\fR>
 .SH DESCRIPTION
-A safe, fast tool for creating bootable USB drives
+Engraver is a fast, safe command-line tool for writing disk images to USB drives,
+SD cards, and NVMe drives. It supports local files, HTTP/HTTPS URLs, and cloud
+storage sources (S3, GCS, Azure Blob). Compressed images (.gz, .xz, .zst, .bz2)
+are automatically decompressed during write.
+.PP
+Engraver includes multiple safety mechanisms: system drive detection prevents
+accidental overwrites, confirmation prompts require explicit consent, and
+parallel verification can hash data during the write pass for fast integrity checks.
 .SH OPTIONS
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
-Enable verbose output
+Enable verbose output with additional diagnostic information.
 .TP
 \fB\-q\fR, \fB\-\-quiet\fR
-Suppress all output except errors
+Suppress all output except errors.
+.TP
+\fB\-\-config\-file\fR \fI<PATH>\fR
+Use a custom configuration file instead of the default location.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help information.
 .TP
 \fB\-V\fR, \fB\-\-version\fR
-Print version
+Print version information.
 .SH SUBCOMMANDS
 .TP
-engraver\-list(1)
-List available drives
+\fBengraver\-list\fR(1)
+List available removable drives with metadata (size, model, USB speed).
 .TP
-engraver\-write(1)
-Write an image to a drive
+\fBengraver\-write\fR(1)
+Write an image to a drive with optional verification and resume support.
 .TP
-engraver\-verify(1)
-Verify a drive against a source image
+\fBengraver\-verify\fR(1)
+Verify a drive's contents against a source image.
 .TP
-engraver\-checksum(1)
-Calculate checksum of an image
+\fBengraver\-checksum\fR(1)
+Calculate the checksum of an image file.
 .TP
-engraver\-completions(1)
-Generate shell completions
+\fBengraver\-benchmark\fR(1)
+Benchmark write speed of a drive (destructive).
 .TP
-engraver\-mangen(1)
-Generate man pages
+\fBengraver\-erase\fR(1)
+Erase a drive by zero-filling the entire device.
 .TP
-engraver\-help(1)
-Print this message or the help of the given subcommand(s)
+\fBengraver\-config\fR(1)
+View and manage persistent configuration settings.
+.SH EXAMPLES
+List available drives:
+.PP
+.nf
+    engraver list
+.fi
+.PP
+Write an ISO to a USB drive with verification:
+.PP
+.nf
+    engraver write ubuntu.iso /dev/sdb \-\-verify
+.fi
+.PP
+Write from a URL with checkpointing for resume support:
+.PP
+.nf
+    engraver write https://example.com/image.iso /dev/sdb \-\-checkpoint
+.fi
+.PP
+Benchmark a drive to find the optimal block size:
+.PP
+.nf
+    engraver benchmark /dev/sdb \-\-test\-block\-sizes "4K,64K,1M,4M"
+.fi
+.SH FILES
+.TP
+\fB~/.config/engraver/engraver_config.toml\fR
+Configuration file (Linux/macOS). See \fBengraver\-config\fR(1).
+.TP
+\fB~/.local/state/engraver/checkpoints/\fR
+Checkpoint files for resume support (Linux/macOS).
+.SH SEE ALSO
+\fBengraver\-write\fR(1), \fBengraver\-list\fR(1), \fBengraver\-verify\fR(1), \fBengraver\-checksum\fR(1), \fBengraver\-benchmark\fR(1), \fBengraver\-erase\fR(1), \fBengraver\-config\fR(1)
 .SH VERSION
 v0.1.0
 .SH AUTHORS
