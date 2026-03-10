@@ -79,11 +79,13 @@ jobs:
             ./target/${{ matrix.target }}/release/engraver.exe completions zsh > completions/_engraver
             ./target/${{ matrix.target }}/release/engraver.exe completions fish > completions/engraver.fish
             ./target/${{ matrix.target }}/release/engraver.exe completions powershell > completions/_engraver.ps1
+            ./target/${{ matrix.target }}/release/engraver.exe completions elvish > completions/engraver.elv
           else
             ./target/${{ matrix.target }}/release/engraver completions bash > completions/engraver.bash
             ./target/${{ matrix.target }}/release/engraver completions zsh > completions/_engraver
             ./target/${{ matrix.target }}/release/engraver completions fish > completions/engraver.fish
             ./target/${{ matrix.target }}/release/engraver completions powershell > completions/_engraver.ps1
+            ./target/${{ matrix.target }}/release/engraver completions elvish > completions/engraver.elv
           fi
 
       - name: Generate man pages

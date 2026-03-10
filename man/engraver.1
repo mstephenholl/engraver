@@ -52,6 +52,12 @@ Erase a drive by zero-filling the entire device.
 .TP
 \fBengraver\-config\fR(1)
 View and manage persistent configuration settings.
+.TP
+\fBengraver completions\fR \fI<SHELL>\fR
+Generate shell completions for bash, zsh, fish, powershell, or elvish.
+.TP
+\fBengraver mangen\fR [\fB\-o\fR \fI<DIR>\fR]
+Generate man pages in roff format.
 .SH EXAMPLES
 List available drives:
 .PP
@@ -85,6 +91,9 @@ Configuration file (Linux/macOS). See \fBengraver\-config\fR(1).
 Checkpoint files for resume support (Linux/macOS).
 .SH SEE ALSO
 \fBengraver\-write\fR(1), \fBengraver\-list\fR(1), \fBengraver\-verify\fR(1), \fBengraver\-checksum\fR(1), \fBengraver\-benchmark\fR(1), \fBengraver\-erase\fR(1), \fBengraver\-config\fR(1)
+.PP
+Shell completions can be generated with \fBengraver completions\fR \fI<SHELL>\fR.
+Man pages can be generated with \fBengraver mangen\fR.
 .SH VERSION
 v0.1.0
 .SH AUTHORS

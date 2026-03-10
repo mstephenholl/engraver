@@ -168,6 +168,21 @@ install_completions() {
         info "Installing fish completions..."
         cp "${src_dir}/completions/engraver.fish" ~/.config/fish/completions/ 2>/dev/null || true
     fi
+
+    # Elvish
+    if [[ -d ~/.elvish/lib ]]; then
+        info "Installing elvish completions..."
+        cp "${src_dir}/completions/engraver.elv" ~/.elvish/lib/ 2>/dev/null || true
+    fi
+
+    # PowerShell
+    local ps_dir
+    if ps_dir="$(pwsh -NoProfile -Command 'Split-Path $PROFILE' 2>/dev/null)"; then
+        if [[ -d "$ps_dir" ]]; then
+            info "Installing PowerShell completions..."
+            cp "${src_dir}/completions/_engraver.ps1" "${ps_dir}/engraver.ps1" 2>/dev/null || true
+        fi
+    fi
 }
 
 install_man_pages() {
@@ -224,6 +239,8 @@ install_from_source() {
     ./target/release/engraver completions bash > completions/engraver.bash
     ./target/release/engraver completions zsh > completions/_engraver
     ./target/release/engraver completions fish > completions/engraver.fish
+    ./target/release/engraver completions powershell > completions/_engraver.ps1
+    ./target/release/engraver completions elvish > completions/engraver.elv
     
     mkdir -p man
     ./target/release/engraver mangen --out-dir man

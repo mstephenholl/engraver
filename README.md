@@ -287,11 +287,14 @@ echo "Write complete and verified."
 Engraver can generate shell completions for tab-completion of commands and arguments.
 
 ```bash
-# Bash - add to ~/.bashrc
-engraver completions bash >> ~/.bashrc
+# Bash
+engraver completions bash > ~/.local/share/bash-completion/completions/engraver
 
-# Zsh - add to ~/.zshrc or a completions directory
-engraver completions zsh >> ~/.zshrc
+# Zsh - place in a directory on your fpath
+engraver completions zsh > ~/.zfunc/_engraver
+# Then add to .zshrc if not already present:
+#   fpath=(~/.zfunc $fpath)
+#   autoload -Uz compinit && compinit
 
 # Fish
 engraver completions fish > ~/.config/fish/completions/engraver.fish
@@ -300,7 +303,7 @@ engraver completions fish > ~/.config/fish/completions/engraver.fish
 engraver completions powershell >> $PROFILE
 
 # Elvish
-engraver completions elvish >> ~/.elvish/rc.elv
+engraver completions elvish > ~/.elvish/lib/engraver.elv
 ```
 
 ## Configuration
