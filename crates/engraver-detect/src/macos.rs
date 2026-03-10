@@ -177,6 +177,7 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
 
     let vendor = info.get("MediaName").cloned();
     let model = info.get("IORegistryEntryName").cloned();
+    let serial = info.get("DeviceSerialNumber").cloned();
 
     let drive_type = detect_drive_type(&info);
     let partitions = get_disk_partitions(disk_name)?;
@@ -212,7 +213,7 @@ fn get_disk_info(disk_name: &str) -> Result<Option<Drive>> {
         drive_type,
         vendor,
         model,
-        serial: None,
+        serial,
         mount_points,
         partitions,
         system_reason,
@@ -638,6 +639,26 @@ mod tests {
         assert_eq!(info.get("RemovableMedia"), Some(&"true".to_string()));
         assert_eq!(info.get("Internal"), Some(&"false".to_string()));
         assert_eq!(info.get("MediaName"), Some(&"SanDisk Ultra".to_string()));
+    }
+
+    #[test]
+    fn test_parse_disk_info_with_serial() {
+        let plist = r"
+<dict>
+    <key>DeviceNode</key>
+    <string>/dev/disk2</string>
+    <key>DeviceSerialNumber</key>
+    <string>ABC123456789</string>
+    <key>MediaName</key>
+    <string>SanDisk Ultra</string>
+</dict>
+        ";
+
+        let info = parse_disk_info(plist);
+        assert_eq!(
+            info.get("DeviceSerialNumber"),
+            Some(&"ABC123456789".to_string())
+        );
     }
 
     #[test]

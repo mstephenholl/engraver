@@ -185,7 +185,21 @@ Planned features, improvements, and development roadmap for Engraver.
 - [ ] **GUI implementation (engraver-gui crate)**
   - Placeholder exists, planned frameworks: iced or Tauri
 - [ ] **Windows-specific optimizations**
+  - [ ] `get_block_size()` — query actual device sector size via `IOCTL_DISK_GET_DRIVE_GEOMETRY`
+    - Currently hardcoded to 512 bytes; important for 4Kn Advanced Format drives
+  - [ ] `sync_all()` — implement device-level flush via `FlushFileBuffers`
+    - Currently a no-op; ensures data is committed to physical media before safe eject
+  - [ ] Drive detection — populate `vendor` field from WMI `Win32_DiskDrive.Manufacturer`
+    - Currently always `None`; helps distinguish identically-sized drives in `engraver list`
 - [ ] **macOS-specific optimizations**
+  - [x] `get_block_size()` — use `DKIOCGETBLOCKSIZE` ioctl instead of `diskutil` output parsing
+    - Implemented with direct ioctl; falls back to 512 if ioctl fails
+  - [x] `sync()` — use `F_FULLFSYNC` instead of `fsync` for guaranteed physical media flush
+    - `fsync` only flushes to disk controller; `F_FULLFSYNC` flushes drive write cache too
+  - [x] `get_block_size()` — query `DKIOCGETPHYSICALBLOCKSIZE` for 4Kn Advanced Format drives
+    - Returns physical sector size (4096) vs logical (512) for better I/O alignment
+  - [x] Drive detection — populate `serial` field from `diskutil` plist `DeviceSerialNumber`
+    - Helps distinguish identically-sized drives in `engraver list`
 
 ---
 

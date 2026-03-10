@@ -129,12 +129,22 @@ impl RawDevice for MacOSDevice {
 
     fn sync(&self) -> Result<()> {
         let fd = self.file.as_raw_fd();
+        // F_FULLFSYNC flushes all the way to physical media, unlike fsync which
+        // only guarantees data reaches the disk controller on macOS.
         #[allow(unsafe_code)]
-        let result = unsafe { libc::fsync(fd) };
+        let result = unsafe { libc::fcntl(fd, libc::F_FULLFSYNC) };
         if result == 0 {
             Ok(())
         } else {
-            Err(PlatformError::Io(std::io::Error::last_os_error()))
+            // Fall back to fsync if F_FULLFSYNC is not supported (e.g. on some
+            // file systems or network mounts)
+            #[allow(unsafe_code)]
+            let fallback = unsafe { libc::fsync(fd) };
+            if fallback == 0 {
+                Ok(())
+            } else {
+                Err(PlatformError::Io(std::io::Error::last_os_error()))
+            }
         }
     }
 
@@ -241,6 +251,11 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
 }
 
 /// Get device block size
+///
+/// Returns the larger of the logical and physical block sizes. On Advanced
+/// Format (4Kn) drives the physical block size is 4096 while the logical
+/// block size remains 512 — using the physical size avoids read-modify-write
+/// amplification in the drive firmware.
 fn get_device_block_size(path: &str) -> Result<u32> {
     let raw_path = to_raw_device_path(path);
     let file = StdOpenOptions::new()
@@ -254,15 +269,31 @@ fn get_device_block_size(path: &str) -> Result<u32> {
     #[cfg(target_os = "macos")]
     {
         const DKIOCGETBLOCKSIZE: libc::c_ulong = 0x40046418;
+        const DKIOCGETPHYSICALBLOCKSIZE: libc::c_ulong = 0x4004644D;
 
-        let mut block_size: u32 = 0;
+        let mut logical_size: u32 = 0;
         #[allow(unsafe_code)]
-        let result = unsafe { libc::ioctl(fd, DKIOCGETBLOCKSIZE, &mut block_size) };
+        let logical_ok = unsafe { libc::ioctl(fd, DKIOCGETBLOCKSIZE, &mut logical_size) } == 0
+            && logical_size > 0;
 
-        if result == 0 && block_size > 0 {
+        let mut physical_size: u32 = 0;
+        #[allow(unsafe_code)]
+        let physical_ok = unsafe { libc::ioctl(fd, DKIOCGETPHYSICALBLOCKSIZE, &mut physical_size) }
+            == 0
+            && physical_size > 0;
+
+        if logical_ok || physical_ok {
+            let logical = if logical_ok { logical_size } else { 512 };
+            let physical = if physical_ok { physical_size } else { logical };
+            let block_size = logical.max(physical);
+            if physical_ok && physical_size > logical_size {
+                tracing::debug!(
+                    "Device {path} has 4Kn physical sectors (logical={logical_size}, physical={physical_size})"
+                );
+            }
             return Ok(block_size);
         }
-        tracing::debug!("DKIOCGETBLOCKSIZE ioctl failed for {path}, defaulting to 512");
+        tracing::debug!("Block size ioctls failed for {path}, defaulting to 512");
     }
 
     // Default to 512
