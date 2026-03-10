@@ -428,6 +428,45 @@ Engraver includes multiple safety mechanisms:
 
 ## Development
 
+### Prerequisites
+
+- [Rust](https://www.rust-lang.org/tools/install) 1.87+ (MSRV)
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### Required Cargo Tools
+
+These are used by pre-commit hooks and standard development workflows:
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| **clippy** | Linter | `rustup component add clippy` |
+| **rustfmt** | Code formatter | `rustup component add rustfmt` |
+
+Pre-commit hooks are managed by [cargo-husky](https://github.com/rhysd/cargo-husky) and install automatically on `cargo build` or `cargo test`. They run `cargo fmt --check`, `cargo clippy`, and `cargo test --lib`.
+
+### Optional Cargo Tools
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| **cargo-deny** | License compliance and dependency audit | `cargo install cargo-deny --locked` |
+| **cargo-audit** | Security vulnerability scanning | `cargo install cargo-audit --locked` |
+| **cargo-llvm-cov** | Code coverage | `cargo install cargo-llvm-cov --locked` |
+| **cargo-fuzz** | Fuzz testing (requires nightly) | `cargo install cargo-fuzz --locked` |
+| **cargo-sbom** | SBOM generation for releases | `cargo install cargo-sbom --locked` |
+
+### System Dependencies (optional)
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| **musl-tools** | Static Linux binaries | `sudo apt-get install musl-tools` |
+| **gcc-aarch64-linux-gnu** | ARM64 cross-compilation | `sudo apt-get install gcc-aarch64-linux-gnu` |
+| **shellcheck** | Shell script linting | `sudo apt-get install shellcheck` |
+
+### Common Commands
+
 ```bash
 # Run tests
 cargo test
@@ -435,11 +474,27 @@ cargo test
 # Run clippy
 cargo clippy -- -D warnings
 
+# Check formatting
+cargo fmt --check
+
 # Build release
 cargo build --release
 
 # Run CLI
 cargo r -- list
+
+# Run benchmarks
+cargo bench -p engraver-core
+
+# Run fuzz targets (requires nightly)
+cargo +nightly fuzz run fuzz_writer -p engraver-core
+
+# Generate code coverage
+cargo llvm-cov --html
+
+# Audit dependencies
+cargo deny check
+cargo audit
 ```
 
 ## License
