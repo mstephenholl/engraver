@@ -120,9 +120,9 @@ Planned features, improvements, and development roadmap for Engraver.
 
 ### Medium Priority
 
-- [ ] **Add SBOM generation to releases**
-  - cargo-sbom in release workflow
-  - Software Bill of Materials for compliance
+- [x] **Add SBOM generation to releases**
+  - cargo-sbom generates CycloneDX JSON in release workflow
+  - SBOM included in GitHub Release assets and checksums
 
 - [x] **Parallelize integration tests**
   - Removed sequential dependency on unit tests
@@ -133,15 +133,17 @@ Planned features, improvements, and development roadmap for Engraver.
   - Created `_build.yml` for configurable Rust builds
   - CI workflow now uses reusable workflows for tests and musl build
 
-- [ ] **Add performance benchmarking CI**
+- [x] **Add performance benchmarking CI**
   - [x] Criterion benchmarks implemented (`cargo bench -p engraver-core`)
   - [x] Benchmarks for checksums (SHA-256, SHA-512, MD5, CRC32), comparison, block sizes
-  - [ ] Integrate into release workflow with github-action-benchmark
+  - [x] Integrated via `.github/workflows/benchmark.yml` with github-action-benchmark
 
 ### Low Priority
 
-- [ ] **Sign release artifacts**
-  - Add GPG signing to release workflow
+- [x] **Sign release artifacts**
+  - Sigstore cosign keyless signing in release workflow
+  - Uses GitHub OIDC identity — no secret keys to manage
+  - `.bundle` files included in GitHub Release assets
 
 - [x] **Beta/nightly Rust CI testing**
   - Scheduled daily at 4:00 AM UTC via `.github/workflows/nightly.yml`

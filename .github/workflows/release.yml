@@ -133,20 +133,43 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write  # Required for cosign keyless signing via OIDC
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
+      - name: Generate SBOM
+        run: |
+          cargo install cargo-sbom --locked
+          cargo sbom --output-format cyclonedx-json > artifacts/engraver-sbom.cdx.json
+
       - name: Create checksums
         run: |
           cd artifacts
-          find . -name "*.tar.gz" -o -name "*.zip" | while read f; do
+          find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.cdx.json" | while read f; do
             sha256sum "$f" >> checksums.txt
           done
           cat checksums.txt
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release artifacts
+        run: |
+          cd artifacts
+          for f in $(find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.cdx.json"); do
+            cosign sign-blob --yes "$f" --bundle "${f}.bundle"
+          done
+          cosign sign-blob --yes checksums.txt --bundle checksums.txt.bundle
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -154,6 +177,8 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
+            artifacts/**/*.cdx.json
+            artifacts/**/*.bundle
             artifacts/checksums.txt
           generate_release_notes: true
           draft: false
