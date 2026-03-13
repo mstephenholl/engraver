@@ -134,7 +134,7 @@ pub fn execute(args: EraseArgs) -> Result<()> {
         );
         println!(
             "{}",
-            style("║  The entire device will be zero-filled.                     ║")
+            style("║  The entire device will be zero-filled.                    ║")
                 .red()
                 .bold()
         );
