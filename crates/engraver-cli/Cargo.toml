@@ -23,7 +23,7 @@ engraver-platform = { path = "../engraver-platform" }
 # CLI framework
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4"
-clap_mangen = "0.2"
+clap_mangen = "0.3"
 
 # Progress bars and terminal UI
 indicatif = "0.18"
