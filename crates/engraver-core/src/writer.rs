@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 use crate::settings::{DEFAULT_RETRY_ATTEMPTS, DEFAULT_RETRY_DELAY_MS};
 use crate::verifier::ChecksumAlgorithm;
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -803,17 +804,27 @@ impl Default for Writer {
     }
 }
 
-/// Speed tracking with smoothing
+/// Sliding-window speed tracker.
+///
+/// Holds at most `max_samples` (`Instant`, `bytes_written`) pairs and
+/// reports the byte delta over the time delta between the oldest and
+/// newest retained samples. The deque is sized to `max_samples` up
+/// front so no reallocation happens during normal operation.
+///
+/// Was previously backed by a `Vec` that evicted the oldest sample with
+/// `Vec::remove(0)` — an `O(n)` shift of the remaining elements on
+/// every progress block. `VecDeque::pop_front` is `O(1)`.
 struct SpeedTracker {
-    samples: Vec<(Instant, u64)>,
+    samples: VecDeque<(Instant, u64)>,
     max_samples: usize,
 }
 
 impl SpeedTracker {
     fn new() -> Self {
+        let max_samples = 10;
         Self {
-            samples: Vec::with_capacity(10),
-            max_samples: 10,
+            samples: VecDeque::with_capacity(max_samples),
+            max_samples,
         }
     }
 
@@ -821,10 +832,10 @@ impl SpeedTracker {
         let now = Instant::now();
 
         if self.samples.len() >= self.max_samples {
-            self.samples.remove(0);
+            self.samples.pop_front();
         }
 
-        self.samples.push((now, bytes_written));
+        self.samples.push_back((now, bytes_written));
     }
 
     fn current_speed(&self) -> u64 {
@@ -832,8 +843,12 @@ impl SpeedTracker {
             return 0;
         }
 
-        let first = &self.samples[0];
-        let last = &self.samples[self.samples.len() - 1];
+        // Safe: the < 2 check above guarantees both ends exist.
+        let first = self
+            .samples
+            .front()
+            .expect("non-empty after len >= 2 check");
+        let last = self.samples.back().expect("non-empty after len >= 2 check");
 
         let duration = last.0.duration_since(first.0);
         let bytes = last.1.saturating_sub(first.1);
@@ -1305,6 +1320,43 @@ mod tests {
         let speed = tracker.current_speed();
         // Should be roughly 1 MB/s (100KB in 100ms)
         assert!(speed > 500_000 && speed < 2_000_000, "Speed was {}", speed);
+    }
+
+    #[test]
+    fn test_speed_tracker_drops_oldest_samples_in_fifo_order() {
+        // Push 13 distinct byte counts; the tracker keeps at most 10
+        // samples, so the first 3 must be evicted. The remaining
+        // current_speed() computation uses the *oldest retained* sample
+        // as the window start — pushing in monotonically increasing
+        // byte counts and asserting the speed reflects a 10-sample
+        // window (not a 13-sample window or a 7-sample window) proves
+        // both that eviction happened and that it was FIFO.
+        let mut tracker = SpeedTracker::new();
+
+        for n in 1..=13u64 {
+            tracker.update(n * 1_000_000);
+        }
+
+        // After 13 updates capped at 10, the oldest retained sample is
+        // the 4th push (4_000_000 bytes); the latest is the 13th
+        // (13_000_000). If FIFO eviction broke — e.g. the back was
+        // popped instead of the front — the oldest retained sample
+        // would be 1_000_000 (window 33% wider than it should be).
+        assert_eq!(
+            tracker.samples.len(),
+            10,
+            "tracker must retain exactly max_samples items"
+        );
+        assert_eq!(
+            tracker.samples.front().map(|(_, b)| *b),
+            Some(4_000_000),
+            "oldest retained sample must be the 4th push (FIFO eviction)"
+        );
+        assert_eq!(
+            tracker.samples.back().map(|(_, b)| *b),
+            Some(13_000_000),
+            "newest sample must be the 13th push"
+        );
     }
 
     // -------------------------------------------------------------------------
