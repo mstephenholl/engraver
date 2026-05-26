@@ -40,6 +40,7 @@
 pub mod benchmark;
 pub mod config;
 pub mod error;
+pub mod hex;
 #[cfg(feature = "partition-info")]
 pub mod partition;
 pub mod resume;

@@ -189,13 +189,13 @@ impl Checksum {
             )));
         }
 
-        let bytes = hex_to_bytes(&hex)?;
+        let bytes = crate::hex::hex_to_bytes(&hex)?;
         Ok(Self { algorithm, bytes })
     }
 
     /// Get the checksum as a lowercase hex string
     pub fn to_hex(&self) -> String {
-        bytes_to_hex(&self.bytes)
+        crate::hex::bytes_to_hex(&self.bytes)
     }
 
     /// Check if this checksum matches another
@@ -977,29 +977,11 @@ fn read_full<R: Read + ?Sized>(reader: &mut R, buf: &mut [u8]) -> Result<usize> 
     Ok(total)
 }
 
-/// Convert bytes to lowercase hex string
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
-/// Convert hex string to bytes
-#[allow(clippy::manual_is_multiple_of)]
-fn hex_to_bytes(hex: &str) -> Result<Vec<u8>> {
-    if hex.len() % 2 != 0 {
-        return Err(Error::InvalidConfig(
-            "Hex string must have even length".to_string(),
-        ));
-    }
-
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| {
-                Error::InvalidConfig(format!("Invalid hex character at position {}", i))
-            })
-        })
-        .collect()
-}
+// Hex encoding lives in `crate::hex`. Two functions used to live here
+// (a slow `format!()`-per-byte `bytes_to_hex` plus a `&str`-slicing
+// `hex_to_bytes` that panicked on multibyte UTF-8 input). Both moved
+// to the shared module so writer / verifier share the same fast,
+// panic-safe implementation.
 
 // ============================================================================
 // Unit Tests
@@ -1648,32 +1630,8 @@ mod tests {
         assert!(found.is_none());
     }
 
-    // -------------------------------------------------------------------------
-    // Helper function tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_bytes_to_hex() {
-        assert_eq!(bytes_to_hex(&[]), "");
-        assert_eq!(bytes_to_hex(&[0x00]), "00");
-        assert_eq!(bytes_to_hex(&[0xff]), "ff");
-        assert_eq!(bytes_to_hex(&[0x01, 0x23, 0x45]), "012345");
-    }
-
-    #[test]
-    fn test_hex_to_bytes() {
-        assert_eq!(hex_to_bytes("").unwrap(), Vec::<u8>::new());
-        assert_eq!(hex_to_bytes("00").unwrap(), vec![0x00u8]);
-        assert_eq!(hex_to_bytes("ff").unwrap(), vec![0xffu8]);
-        assert_eq!(hex_to_bytes("FF").unwrap(), vec![0xffu8]);
-        assert_eq!(hex_to_bytes("012345").unwrap(), vec![0x01u8, 0x23, 0x45]);
-    }
-
-    #[test]
-    fn test_hex_to_bytes_invalid() {
-        assert!(hex_to_bytes("0").is_err()); // Odd length
-        assert!(hex_to_bytes("gg").is_err()); // Invalid chars
-    }
+    // Helper-function tests for bytes_to_hex / hex_to_bytes moved to
+    // `crate::hex::tests` along with the implementations themselves.
 
     // -------------------------------------------------------------------------
     // Auto-detect checksum tests

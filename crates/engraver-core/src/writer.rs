@@ -43,25 +43,14 @@ impl SourceHasher {
     fn finalize_hex(self) -> String {
         use sha2::Digest;
         match self {
-            SourceHasher::Sha256(h) => bytes_to_hex(&h.finalize()),
-            SourceHasher::Sha512(h) => bytes_to_hex(&h.finalize()),
-            SourceHasher::Md5(h) => bytes_to_hex(&h.finalize()),
+            SourceHasher::Sha256(h) => crate::hex::bytes_to_hex(&h.finalize()),
+            SourceHasher::Sha512(h) => crate::hex::bytes_to_hex(&h.finalize()),
+            SourceHasher::Md5(h) => crate::hex::bytes_to_hex(&h.finalize()),
             SourceHasher::Crc32(h) => {
                 format!("{:08x}", h.finalize())
             }
         }
     }
-}
-
-/// Convert a byte slice to a lowercase hex string using a single pre-allocated buffer.
-#[cfg(feature = "checksum")]
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut hex = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(hex, "{:02x}", b);
-    }
-    hex
 }
 
 /// Default block size for write operations (4 MB)
