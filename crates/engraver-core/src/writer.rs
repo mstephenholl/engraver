@@ -592,11 +592,7 @@ impl Writer {
         }
 
         let write_elapsed = start_time.elapsed();
-        let average_speed = if write_elapsed.as_secs() > 0 {
-            progress.bytes_written / write_elapsed.as_secs()
-        } else {
-            progress.bytes_written
-        };
+        let average_speed = compute_average_speed_bps(progress.bytes_written, write_elapsed);
 
         // Get source checksum if calculated
         let source_checksum = hasher.map(|h| h.finalize_hex());
@@ -701,11 +697,7 @@ impl Writer {
         }
 
         let elapsed = start_time.elapsed();
-        let average_speed = if elapsed.as_secs() > 0 {
-            progress.bytes_written / elapsed.as_secs()
-        } else {
-            progress.bytes_written
-        };
+        let average_speed = compute_average_speed_bps(progress.bytes_written, elapsed);
 
         Ok(WriteResult {
             bytes_written: progress.bytes_written,
@@ -845,6 +837,26 @@ fn calculate_eta(bytes_written: u64, total_bytes: u64, speed_bps: u64) -> Option
 
     let remaining = total_bytes.saturating_sub(bytes_written);
     Some(remaining / speed_bps)
+}
+
+/// Compute the average throughput in bytes per second for a write or
+/// read that produced `bytes` over `elapsed`.
+///
+/// Uses floating-point seconds so sub-second windows are reported
+/// honestly. The previous code path used `Duration::as_secs()` (integer
+/// truncation) plus an else-branch that returned `bytes_written` itself
+/// for sub-second elapsed values — collapsing 100 KB/s and 1 GB/s to
+/// the same number whenever the write took less than a second, and
+/// reporting ~50% low for a write that took 1.9 seconds.
+///
+/// Returns 0 when `elapsed` is zero; a zero-elapsed window has no
+/// defined throughput.
+fn compute_average_speed_bps(bytes: u64, elapsed: Duration) -> u64 {
+    let secs = elapsed.as_secs_f64();
+    if secs <= 0.0 {
+        return 0;
+    }
+    (bytes as f64 / secs) as u64
 }
 
 /// Format speed for display
@@ -1120,6 +1132,36 @@ mod tests {
 
         assert_eq!(result.bytes_written, 1024);
         assert_eq!(result.retry_count, 0);
+    }
+
+    #[test]
+    fn test_writer_average_speed_is_not_raw_byte_count() {
+        // REGRESSION: when `elapsed < 1 second` the old code returned
+        // `progress.bytes_written` itself as the "speed", conflating
+        // the byte count with bytes-per-second. A 4 KB in-memory
+        // write completes in microseconds on any modern machine; the
+        // reported speed should be orders of magnitude larger than the
+        // byte count, not equal to it.
+        let data_size = 4096;
+        let source_data = vec![0xCDu8; data_size];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; data_size]);
+
+        let config = WriteConfig::new().block_size(MIN_BLOCK_SIZE);
+        let mut writer = Writer::with_config(config);
+
+        let result = writer.write(source, target, data_size as u64).unwrap();
+
+        assert_eq!(result.bytes_written, data_size as u64);
+        // 100 KB/s is a deliberately generous lower bound — a real
+        // Cursor write is in the GB/s range. We only need to rule out
+        // the bug where average_speed equals bytes_written (4096).
+        assert!(
+            result.average_speed > 100_000,
+            "average_speed must reflect real throughput, not the byte count; got {} for {} bytes",
+            result.average_speed,
+            data_size
+        );
     }
 
     #[test]
@@ -1568,6 +1610,76 @@ mod tests {
     #[test]
     fn test_calculate_eta_just_started() {
         assert_eq!(calculate_eta(1, 1_000_000, 1000), Some(999));
+    }
+
+    // -------------------------------------------------------------------------
+    // compute_average_speed_bps tests
+    //
+    // Regression: the old computation used `Duration::as_secs()` (integer
+    // truncation) and an else-branch that returned the raw byte count for
+    // sub-second elapsed. That made sub-second throughput unintelligible
+    // and reported ~50% low for a 1.9s elapsed window.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_compute_average_speed_zero_elapsed() {
+        // Zero-elapsed window has no defined throughput. The bug used
+        // to return `bytes` itself here, conflating bytes-written with
+        // bytes-per-second.
+        assert_eq!(compute_average_speed_bps(1024, Duration::ZERO), 0);
+        assert_eq!(compute_average_speed_bps(1024 * 1024, Duration::ZERO), 0);
+    }
+
+    #[test]
+    fn test_compute_average_speed_subsecond_does_not_collapse() {
+        // 1 MB in 500 ms = 2 MB/s. Old code: elapsed.as_secs() == 0,
+        // else branch returns bytes (1 MB) as a "speed" of 1 MB/s —
+        // off by exactly 2x.
+        let speed = compute_average_speed_bps(1024 * 1024, Duration::from_millis(500));
+        let expected = 2 * 1024 * 1024;
+        let tolerance = 1024;
+        assert!(
+            speed.abs_diff(expected) < tolerance,
+            "Expected ~{expected} B/s for 1 MB in 500 ms, got {speed}"
+        );
+    }
+
+    #[test]
+    fn test_compute_average_speed_preserves_subsecond_precision_above_one_second() {
+        // 10 MB in 1.9 s ≈ 5.52 MB/s. Old code: as_secs() == 1, so
+        // 10 MB / 1 = 10 MB/s — off by ~80% in the *non-zero-secs*
+        // branch.
+        let speed = compute_average_speed_bps(10 * 1024 * 1024, Duration::from_millis(1900));
+        let expected = ((10 * 1024 * 1024) as f64 / 1.9) as u64;
+        let tolerance = 100_000;
+        assert!(
+            speed.abs_diff(expected) < tolerance,
+            "Expected ~{expected} B/s for 10 MB in 1.9 s, got {speed}"
+        );
+        // Must NOT match the old buggy answer (10 MB/s exact).
+        assert_ne!(speed, 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_compute_average_speed_long_duration_integer_clean() {
+        // 1 GB in 10 s = 100 MB/s exactly. Old code handled this case
+        // correctly; this guard ensures the new helper doesn't regress
+        // for elapsed times where integer math worked.
+        let one_gb = 1024u64 * 1024 * 1024;
+        let speed = compute_average_speed_bps(one_gb, Duration::from_secs(10));
+        let expected = one_gb / 10;
+        let tolerance = 1024;
+        assert!(
+            speed.abs_diff(expected) < tolerance,
+            "Expected ~{expected} B/s for 1 GB in 10 s, got {speed}"
+        );
+    }
+
+    #[test]
+    fn test_compute_average_speed_zero_bytes_any_duration() {
+        // No bytes consumed: speed is 0 regardless of elapsed.
+        assert_eq!(compute_average_speed_bps(0, Duration::from_secs(5)), 0);
+        assert_eq!(compute_average_speed_bps(0, Duration::from_millis(1)), 0);
     }
 
     // -------------------------------------------------------------------------
