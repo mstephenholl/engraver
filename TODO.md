@@ -215,9 +215,10 @@ Planned features, improvements, and development roadmap for Engraver.
   - Integration tests in cli, core, detect, and platform crates
   - Added tests for list.rs, benchmark.rs, checksum.rs utility functions
 
-- [ ] **Integration tests for actual write operations**
-  - Test with virtual block devices or disk images
-  - End-to-end write and verify workflows
+- [x] **Integration tests for actual write operations**
+  - `tests/write_integration.rs` covers the Writer against tempfile-backed devices
+  - `tests/resume_integration.rs` covers end-to-end resume, content-hash
+    validation against replaced sources, and CheckpointManager round-trip
 
 - [ ] **Integration tests for verify operations**
 
