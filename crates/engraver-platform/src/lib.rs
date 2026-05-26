@@ -229,6 +229,65 @@ pub fn bytes_consumed_from_aligned_write(syscall_returned: usize, buf_len: usize
     syscall_returned.min(buf_len)
 }
 
+/// Return `true` when `mount_device` is the same block device as
+/// `device_path`, or one of its partitions, under Linux block-device
+/// naming conventions.
+///
+/// Matches:
+/// - exact equality (`/dev/sda` ↔ `/dev/sda`)
+/// - traditional partitions: `device_path` followed by one or more digits
+///   (`/dev/sda` → `/dev/sda1`, `/dev/sda10`)
+/// - NVMe / mmc / loop-style partitions: `device_path` followed by `p`
+///   and digits, used when the device name already ends in a digit
+///   (`/dev/nvme0n1` → `/dev/nvme0n1p1`, `/dev/mmcblk0` → `/dev/mmcblk0p2`)
+///
+/// Rejects unrelated devices that share a prefix (`/dev/sdab` is NOT a
+/// partition of `/dev/sda`) and arbitrary substring overlaps
+/// (`/dev/mapper/loop_sda` does NOT match `/dev/sda`). This rejection
+/// is the safety property — unmounting an unrelated filesystem because
+/// the device name happened to be a substring would be catastrophic.
+///
+/// This is a Linux naming convention but the helper lives in the
+/// platform-neutral module so it can be unit-tested on every host.
+pub fn is_linux_partition_of(mount_device: &str, device_path: &str) -> bool {
+    if device_path.is_empty() {
+        return false;
+    }
+    if mount_device == device_path {
+        return true;
+    }
+    let Some(suffix) = mount_device.strip_prefix(device_path) else {
+        return false;
+    };
+    if suffix.is_empty() {
+        return false; // already covered by equality
+    }
+    let bytes = suffix.as_bytes();
+
+    // Devices whose name ends in a digit (nvme0n1, mmcblk0, loop0) name
+    // their partitions with a `p` separator; otherwise the trailing
+    // digits would be ambiguous between "part of the device name" and
+    // "partition number".
+    let needs_p_separator = device_path
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_ascii_digit());
+
+    let digit_start = if needs_p_separator {
+        if bytes[0] != b'p' {
+            return false;
+        }
+        1
+    } else {
+        0
+    };
+
+    if digit_start >= bytes.len() {
+        return false;
+    }
+    bytes[digit_start..].iter().all(|b| b.is_ascii_digit())
+}
+
 // Platform-specific implementations
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
@@ -579,5 +638,95 @@ mod tests {
         // Degenerate but well-defined: empty user buffer means zero
         // bytes consumed regardless of what the syscall reports.
         assert_eq!(bytes_consumed_from_aligned_write(4096, 0), 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // is_linux_partition_of tests
+    //
+    // The Linux unmount path used to compute "is this mount on the target
+    // device?" with `starts_with(device_path) || mount_device.contains(base)`.
+    // Both halves had false positives that could unmount unrelated
+    // filesystems. These tests guard the safe replacement.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_partition_of_exact_match() {
+        assert!(is_linux_partition_of("/dev/sda", "/dev/sda"));
+        assert!(is_linux_partition_of("/dev/nvme0n1", "/dev/nvme0n1"));
+    }
+
+    #[test]
+    fn test_partition_of_scsi_partitions() {
+        assert!(is_linux_partition_of("/dev/sda1", "/dev/sda"));
+        assert!(is_linux_partition_of("/dev/sda2", "/dev/sda"));
+        assert!(is_linux_partition_of("/dev/sda10", "/dev/sda"));
+        assert!(is_linux_partition_of("/dev/sda99", "/dev/sda"));
+    }
+
+    #[test]
+    fn test_partition_of_nvme_partitions() {
+        assert!(is_linux_partition_of("/dev/nvme0n1p1", "/dev/nvme0n1"));
+        assert!(is_linux_partition_of("/dev/nvme0n1p10", "/dev/nvme0n1"));
+        assert!(is_linux_partition_of("/dev/mmcblk0p1", "/dev/mmcblk0"));
+        assert!(is_linux_partition_of("/dev/loop0p1", "/dev/loop0"));
+    }
+
+    #[test]
+    fn test_partition_of_rejects_prefix_devices_regression_sda_sdab() {
+        // REGRESSION: `starts_with("/dev/sda")` used to return true for
+        // `/dev/sdab`, which would have unmounted an unrelated drive's
+        // partitions.
+        assert!(!is_linux_partition_of("/dev/sdab", "/dev/sda"));
+        assert!(!is_linux_partition_of("/dev/sdab1", "/dev/sda"));
+        assert!(!is_linux_partition_of("/dev/sdaa", "/dev/sda"));
+    }
+
+    #[test]
+    fn test_partition_of_rejects_substring_matches_regression_loop_sda() {
+        // REGRESSION: `mount_device.contains("sda")` used to return true
+        // for `/dev/mapper/loop_sda`. With this fix, that mount line is
+        // ignored — only true partitions of /dev/sda are matched.
+        assert!(!is_linux_partition_of("/dev/mapper/loop_sda", "/dev/sda"));
+        assert!(!is_linux_partition_of("/dev/mapper/sda1", "/dev/sda"));
+        assert!(!is_linux_partition_of("sda1", "/dev/sda"));
+    }
+
+    #[test]
+    fn test_partition_of_rejects_nvme_without_p_separator() {
+        // For names ending in a digit, the partition separator `p` is
+        // mandatory. `/dev/nvme0n11` would be ambiguous (is `1` part of
+        // the namespace or a partition?), and the kernel convention is
+        // that it cannot exist — only `nvme0n1p1` does. Anything else
+        // sharing the prefix is a different device or unrelated.
+        assert!(!is_linux_partition_of("/dev/nvme0n11", "/dev/nvme0n1"));
+        assert!(!is_linux_partition_of("/dev/nvme0n1a", "/dev/nvme0n1"));
+        assert!(!is_linux_partition_of("/dev/mmcblk01", "/dev/mmcblk0"));
+    }
+
+    #[test]
+    fn test_partition_of_rejects_different_device() {
+        assert!(!is_linux_partition_of("/dev/sdb", "/dev/sda"));
+        assert!(!is_linux_partition_of("/dev/sdb1", "/dev/sda"));
+        assert!(!is_linux_partition_of("/dev/nvme0n2", "/dev/nvme0n1"));
+        assert!(!is_linux_partition_of("/dev/nvme1n1", "/dev/nvme0n1"));
+        assert!(!is_linux_partition_of("/dev/loop1", "/dev/loop0"));
+    }
+
+    #[test]
+    fn test_partition_of_rejects_non_partition_suffixes() {
+        // Trailing non-digit, non-`p` suffix is never a partition.
+        assert!(!is_linux_partition_of("/dev/sda_bak", "/dev/sda"));
+        assert!(!is_linux_partition_of("/dev/sda-partition", "/dev/sda"));
+        // `p` without digits is not a partition either.
+        assert!(!is_linux_partition_of("/dev/nvme0n1p", "/dev/nvme0n1"));
+        assert!(!is_linux_partition_of("/dev/nvme0n1pa", "/dev/nvme0n1"));
+    }
+
+    #[test]
+    fn test_partition_of_empty_device_path() {
+        // Defensive: empty input must not match anything.
+        assert!(!is_linux_partition_of("/dev/sda", ""));
+        assert!(!is_linux_partition_of("", ""));
+        assert!(!is_linux_partition_of("", "/dev/sda"));
     }
 }

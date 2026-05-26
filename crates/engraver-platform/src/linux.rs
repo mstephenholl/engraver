@@ -3,8 +3,8 @@
 //! Uses O_DIRECT for direct I/O and standard POSIX file operations.
 
 use crate::{
-    align_up, bytes_consumed_from_aligned_write, is_aligned, DeviceInfo, OpenOptions,
-    PlatformError, PlatformOps, RawDevice, Result,
+    align_up, bytes_consumed_from_aligned_write, is_aligned, is_linux_partition_of, DeviceInfo,
+    OpenOptions, PlatformError, PlatformOps, RawDevice, Result,
 };
 use std::fs::{File, OpenOptions as StdOpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -402,11 +402,6 @@ fn unmount_linux_device(device_path: &str) -> Result<()> {
     let mounts = std::fs::read_to_string("/proc/mounts")
         .map_err(|e| PlatformError::UnmountFailed(format!("Cannot read /proc/mounts: {}", e)))?;
 
-    let device_base = Path::new(device_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-
     let mut unmounted_any = false;
 
     for line in mounts.lines() {
@@ -418,10 +413,13 @@ fn unmount_linux_device(device_path: &str) -> Result<()> {
         let mount_device = parts[0];
         let mount_point = parts[1];
 
-        // Check if this mount is on our device
-        if mount_device.starts_with(device_path)
-            || (mount_device.contains(device_base) && device_base.len() > 2)
-        {
+        // Strict match: only the device itself or one of its real
+        // partitions. The previous heuristic (`starts_with` OR `contains`
+        // on the basename) had false positives for unrelated devices
+        // sharing a prefix (`/dev/sdab` matched `/dev/sda`) and for
+        // arbitrary substring overlaps (`/dev/mapper/loop_sda` matched
+        // `/dev/sda`) — unmounting either would corrupt unrelated data.
+        if is_linux_partition_of(mount_device, device_path) {
             tracing::debug!("Unmounting {} from {}", mount_device, mount_point);
 
             let status = Command::new("umount").arg(mount_point).status();
