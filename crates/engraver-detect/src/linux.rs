@@ -93,9 +93,7 @@ fn parse_block_device(
         return None;
     }
 
-    let removable = read_sys_value(&format!("{sys_path}/removable"))
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false);
+    let removable = read_sys_value(&format!("{sys_path}/removable")).is_ok_and(|s| s.trim() == "1");
 
     let vendor = read_sys_value(&format!("{sys_path}/device/vendor"))
         .ok()
@@ -343,9 +341,7 @@ pub(crate) fn detect_drive_type(name: &str, sys_path: &str) -> DriveType {
     }
 
     // Check removable attribute as fallback for USB
-    let removable = read_sys_value(&format!("{sys_path}/removable"))
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false);
+    let removable = read_sys_value(&format!("{sys_path}/removable")).is_ok_and(|s| s.trim() == "1");
 
     if removable && name.starts_with("sd") {
         return DriveType::Usb;
