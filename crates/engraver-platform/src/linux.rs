@@ -3,7 +3,8 @@
 //! Uses O_DIRECT for direct I/O and standard POSIX file operations.
 
 use crate::{
-    align_up, is_aligned, DeviceInfo, OpenOptions, PlatformError, PlatformOps, RawDevice, Result,
+    align_up, bytes_consumed_from_aligned_write, is_aligned, DeviceInfo, OpenOptions,
+    PlatformError, PlatformOps, RawDevice, Result,
 };
 use std::fs::{File, OpenOptions as StdOpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -212,9 +213,11 @@ impl RawDevice for LinuxDevice {
                     *byte = 0;
                 }
 
-                self.file
+                let written = self
+                    .file
                     .write(&aligned_slice[..aligned_len])
-                    .map_err(PlatformError::Io)
+                    .map_err(PlatformError::Io)?;
+                Ok(bytes_consumed_from_aligned_write(written, data.len()))
             } else {
                 // Fallback to regular write
                 self.file.write(data).map_err(PlatformError::Io)
@@ -299,9 +302,8 @@ impl Write for LinuxDevice {
                 for byte in &mut aligned_slice[buf.len()..aligned_len] {
                     *byte = 0;
                 }
-                self.file
-                    .write(&aligned_slice[..aligned_len])
-                    .map(|_| buf.len())
+                let written = self.file.write(&aligned_slice[..aligned_len])?;
+                Ok(bytes_consumed_from_aligned_write(written, buf.len()))
             } else {
                 self.file.write(buf)
             }
@@ -855,5 +857,99 @@ tmpfs /tmp tmpfs rw,nosuid 0 0
         let err = PlatformError::DeviceNotFound("/dev/xyz".to_string());
         let msg = format!("{}", err);
         assert!(msg.contains("/dev/xyz"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Direct-I/O byte-count contract tests
+    //
+    // These tests force the aligned-buffer code path by toggling
+    // `direct_io` on the open `LinuxDevice` after construction, rather
+    // than passing `direct_io(true)` to `open()` (which would attempt to
+    // set O_DIRECT and fail on tmpfs/ext4 in CI). This isolates the
+    // byte-count logic from the kernel.
+    // -------------------------------------------------------------------------
+
+    /// Build a `LinuxDevice` backed by a tmpfile, then enable the
+    /// aligned-buffer code path manually.
+    fn open_with_forced_direct_io(temp: &NamedTempFile, block_size: usize) -> LinuxDevice {
+        let options = OpenOptions::new().direct_io(false).block_size(block_size);
+        let mut device = LinuxDevice::open(temp.path().to_str().unwrap(), options).unwrap();
+        device.info.direct_io = true;
+        device.info.block_size = block_size as u32;
+        device.aligned_buffer = Some(AlignedBuffer::new(block_size * 2, block_size));
+        device
+    }
+
+    #[test]
+    fn test_write_at_direct_io_returns_user_data_length_not_aligned_padding() {
+        // BUG REGRESSION: `write_at` previously returned the aligned syscall
+        // length (e.g. 4096) instead of the user-buffer length (e.g. 100),
+        // misleading callers about how many bytes of their data landed on
+        // the device.
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0u8; 8192]).unwrap();
+
+        let block_size = 4096;
+        let mut device = open_with_forced_direct_io(&temp, block_size);
+
+        let data = vec![0x42u8; 100];
+        let written = device.write_at(0, &data).unwrap();
+
+        assert_eq!(
+            written, 100,
+            "write_at must report user-buffer bytes consumed (100), not aligned length"
+        );
+    }
+
+    #[test]
+    fn test_write_trait_direct_io_never_overreports_buf_len() {
+        // BUG REGRESSION: `Write::write` previously returned `buf.len()`
+        // even when the underlying syscall returned a short count, hiding
+        // partial writes from the Writer's retry logic.
+        //
+        // We cannot easily inject a short kernel write against a regular
+        // file, so we assert the upper-bound invariant: the return value
+        // must never exceed `buf.len()`. Combined with
+        // `bytes_consumed_from_aligned_write`'s explicit truncation in
+        // the helper tests, this fully guards the contract.
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0u8; 8192]).unwrap();
+
+        let block_size = 4096;
+        let mut device = open_with_forced_direct_io(&temp, block_size);
+
+        let data = vec![0xCDu8; 100];
+        let written = device.write(&data).unwrap();
+
+        assert!(
+            written <= data.len(),
+            "Write::write must not overreport (got {}, buf was {})",
+            written,
+            data.len()
+        );
+        assert_eq!(
+            written, 100,
+            "with a regular file backing the syscall always completes the full aligned slice, so all 100 user bytes are committed"
+        );
+    }
+
+    #[test]
+    fn test_write_at_aligned_data_unaffected_by_fix() {
+        // Regression guard for the happy path: aligned data should still
+        // return aligned-length bytes written (matches what the kernel
+        // reports because data.len() == aligned_len).
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0u8; 8192]).unwrap();
+
+        let block_size = 4096;
+        let mut device = open_with_forced_direct_io(&temp, block_size);
+
+        // Allocate aligned data: a Vec of exactly block_size bytes whose
+        // pointer happens to be block-aligned on the allocator we use.
+        // We don't require alignment to hit the aligned-buffer path here,
+        // we just verify the count math holds when buf_len == aligned_len.
+        let data = vec![0x77u8; block_size];
+        let written = device.write_at(0, &data).unwrap();
+        assert_eq!(written, block_size);
     }
 }

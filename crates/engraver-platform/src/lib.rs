@@ -204,6 +204,31 @@ pub fn is_ptr_aligned<T>(ptr: *const T, alignment: usize) -> bool {
     is_aligned(ptr as usize, alignment)
 }
 
+/// Compute the number of *user-buffer* bytes committed when a write went
+/// through a padded, alignment-sized syscall.
+///
+/// When direct I/O requires aligned lengths, a write of `buf_len` bytes is
+/// copied into an aligned scratch buffer, the tail is zero-padded up to
+/// `aligned_len >= buf_len`, and the kernel returns `syscall_returned` —
+/// the number of bytes of the *scratch buffer* that were committed.
+///
+/// The trait contract for `Write::write` and `RawDevice::write_at` is to
+/// return the number of bytes consumed from the **user** buffer, never
+/// counting padding. This helper enforces that:
+///
+/// - If the kernel reported ≥ `buf_len` bytes written, all user bytes
+///   landed on the device and the helper returns `buf_len`.
+/// - If the kernel reported a *short* write (< `buf_len`), only the first
+///   `syscall_returned` user bytes made it; the helper returns that.
+///
+/// Returning the raw `syscall_returned` (which may be the aligned length)
+/// would over-report progress and mask short writes — the bug this helper
+/// exists to prevent.
+#[inline]
+pub fn bytes_consumed_from_aligned_write(syscall_returned: usize, buf_len: usize) -> usize {
+    syscall_returned.min(buf_len)
+}
+
 // Platform-specific implementations
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
@@ -511,5 +536,48 @@ mod tests {
 
         let opts = OpenOptions::new().block_size(4096);
         assert_eq!(opts.block_size, 4096);
+    }
+
+    // -------------------------------------------------------------------------
+    // bytes_consumed_from_aligned_write tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_bytes_consumed_full_aligned_write_caps_at_buf_len() {
+        // Kernel wrote the full padded slice (e.g. 4096) but the user only
+        // supplied 100 bytes. The user contract says "report user bytes
+        // consumed", which is 100 — NOT the aligned padding length.
+        assert_eq!(bytes_consumed_from_aligned_write(4096, 100), 100);
+    }
+
+    #[test]
+    fn test_bytes_consumed_short_write_within_user_data() {
+        // Kernel wrote less than the user buffer length (e.g. flaky USB).
+        // The helper must surface the truncation so the writer's retry
+        // logic can advance correctly instead of believing the write
+        // succeeded.
+        assert_eq!(bytes_consumed_from_aligned_write(50, 100), 50);
+    }
+
+    #[test]
+    fn test_bytes_consumed_short_write_at_user_boundary() {
+        // Kernel wrote exactly the user-data length — no padding was
+        // needed or it stopped exactly at the boundary. Either way the
+        // answer is buf_len.
+        assert_eq!(bytes_consumed_from_aligned_write(100, 100), 100);
+    }
+
+    #[test]
+    fn test_bytes_consumed_zero_write_is_zero() {
+        // No bytes committed at all — propagate zero so callers can
+        // distinguish "EOF / EOWOULDBLOCK" from "wrote everything".
+        assert_eq!(bytes_consumed_from_aligned_write(0, 100), 0);
+    }
+
+    #[test]
+    fn test_bytes_consumed_zero_user_buffer() {
+        // Degenerate but well-defined: empty user buffer means zero
+        // bytes consumed regardless of what the syscall reports.
+        assert_eq!(bytes_consumed_from_aligned_write(4096, 0), 0);
     }
 }
