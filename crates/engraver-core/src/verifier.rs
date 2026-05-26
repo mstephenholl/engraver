@@ -593,31 +593,26 @@ impl Verifier {
             let source_read = read_full(source, &mut source_buf[..to_read])?;
             let target_read = read_full(target, &mut target_buf[..to_read])?;
 
-            // Check for size mismatch
-            if source_read != target_read {
+            // Detect divergence. The two streams disagree if either their
+            // common prefix differs, or their lengths differ. The earlier
+            // of the two events — first differing byte vs. EOF boundary
+            // of the shorter stream — wins, because that is where the
+            // streams *first* failed to agree.
+            let common_len = source_read.min(target_read);
+            let prefix_diff_idx = source_buf[..common_len]
+                .iter()
+                .zip(target_buf[..common_len].iter())
+                .position(|(s, t)| s != t);
+            let lengths_differ = source_read != target_read;
+
+            if prefix_diff_idx.is_some() || lengths_differ {
                 mismatches += 1;
                 if first_mismatch.is_none() {
-                    first_mismatch = Some(bytes_verified);
-                }
-                if self.config.stop_on_mismatch {
-                    let elapsed = start.elapsed();
-                    return Ok(VerificationResult::failure(
-                        bytes_verified,
-                        mismatches,
-                        first_mismatch,
-                        elapsed,
-                    ));
-                }
-            } else if source_buf[..source_read] != target_buf[..target_read] {
-                mismatches += 1;
-                if first_mismatch.is_none() {
-                    // Find exact offset
-                    for i in 0..source_read {
-                        if source_buf[i] != target_buf[i] {
-                            first_mismatch = Some(bytes_verified + i as u64);
-                            break;
-                        }
-                    }
+                    // Use the prefix-difference offset when content diverged
+                    // within the common bytes; otherwise the divergence is
+                    // the EOF boundary of the shorter stream.
+                    let divergence_in_block = prefix_diff_idx.unwrap_or(common_len) as u64;
+                    first_mismatch = Some(bytes_verified + divergence_in_block);
                 }
                 if self.config.stop_on_mismatch {
                     let elapsed = start.elapsed();
@@ -1298,6 +1293,103 @@ mod tests {
         assert!(!result.success);
         assert!(result.mismatches > 0);
         assert!(result.first_mismatch_offset.is_some());
+    }
+
+    // -------------------------------------------------------------------------
+    // first_mismatch_offset accuracy tests
+    //
+    // The size-mismatch branch used to set `first_mismatch = bytes_verified`
+    // (the block's start), which could be off by an entire block. With
+    // a 1 MB block size, a 100-byte-difference report could land megabytes
+    // away from where the streams actually diverged — useless for `dd
+    // skip=` inspection. These tests lock in byte-accurate diagnostics.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_compare_length_mismatch_reports_eof_boundary() {
+        // Source has 1500 identical bytes; target has only the first 800.
+        // The common prefix matches; divergence is exactly where target
+        // ends (byte 800). The old code reported `bytes_verified`, which
+        // for a single-block read was 0 — off by 800.
+        let source_data = vec![0xABu8; 1500];
+        let target_data = vec![0xABu8; 800];
+        let mut source = Cursor::new(source_data);
+        let mut target = Cursor::new(target_data);
+
+        let config = VerifyConfig::new().stop_on_mismatch(true);
+        let mut verifier = Verifier::with_config(config);
+        let result = verifier.compare(&mut source, &mut target, 1500).unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.first_mismatch_offset,
+            Some(800),
+            "first_mismatch_offset must point at the byte where streams diverged, \
+             not the block's start"
+        );
+    }
+
+    #[test]
+    fn test_compare_length_mismatch_with_diverging_prefix() {
+        // Both length AND content differ. Content diverges at byte 50
+        // (within the common prefix); target also ends at byte 800. The
+        // earlier divergence point — 50 — wins.
+        let mut source_data = vec![0xABu8; 1500];
+        let mut target_data = vec![0xABu8; 800];
+        source_data[50] = 0x11;
+        target_data[50] = 0x22;
+        let mut source = Cursor::new(source_data);
+        let mut target = Cursor::new(target_data);
+
+        let config = VerifyConfig::new().stop_on_mismatch(true);
+        let mut verifier = Verifier::with_config(config);
+        let result = verifier.compare(&mut source, &mut target, 1500).unwrap();
+
+        assert!(!result.success);
+        assert_eq!(
+            result.first_mismatch_offset,
+            Some(50),
+            "byte-accurate divergence within common prefix should win over EOF boundary"
+        );
+    }
+
+    #[test]
+    fn test_compare_content_mismatch_byte_accurate_at_offset_5000() {
+        // Regression guard: content-only mismatch (no length difference)
+        // was already byte-accurate in the old code. Lock it in so the
+        // unified branch doesn't regress this path.
+        let source_data = vec![0xABu8; 8192];
+        let mut target_data = vec![0xABu8; 8192];
+        target_data[5000] = 0xCD;
+        let mut source = Cursor::new(source_data);
+        let mut target = Cursor::new(target_data);
+
+        let config = VerifyConfig::new()
+            .block_size(MIN_VERIFY_BLOCK_SIZE)
+            .stop_on_mismatch(true);
+        let mut verifier = Verifier::with_config(config);
+        let result = verifier.compare(&mut source, &mut target, 8192).unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.first_mismatch_offset, Some(5000));
+    }
+
+    #[test]
+    fn test_compare_length_mismatch_target_longer_than_source() {
+        // Symmetric case: target ends after source. Same EOF-boundary
+        // semantics, with the divergence at min(source_len, target_len)
+        // = source's end.
+        let source_data = vec![0xABu8; 600];
+        let target_data = vec![0xABu8; 1200];
+        let mut source = Cursor::new(source_data);
+        let mut target = Cursor::new(target_data);
+
+        let config = VerifyConfig::new().stop_on_mismatch(true);
+        let mut verifier = Verifier::with_config(config);
+        let result = verifier.compare(&mut source, &mut target, 1200).unwrap();
+
+        assert!(!result.success);
+        assert_eq!(result.first_mismatch_offset, Some(600));
     }
 
     #[test]
