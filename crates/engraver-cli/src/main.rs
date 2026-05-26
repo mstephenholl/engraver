@@ -283,19 +283,24 @@ fn run() -> Result<()> {
     // --silent implies --yes (skip confirmations)
     let silent = cli.silent;
 
-    // Set up Ctrl+C handler (suppress messages in silent mode)
-    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let r = running.clone();
+    // Set up Ctrl+C handler (suppress messages in silent mode).
+    //
+    // Convention: `true = cancel requested`. This matches the writer,
+    // verifier, and benchmark cancel handles in engraver-core, so the
+    // same Arc can be passed straight through via `.with_cancel_flag()`
+    // without an intermediate polling thread to invert the meaning.
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let c = cancel.clone();
     let silent_for_handler = silent;
     ctrlc::set_handler(move || {
-        if !r.load(std::sync::atomic::Ordering::SeqCst) {
-            // Second Ctrl+C, force exit
+        if c.load(std::sync::atomic::Ordering::SeqCst) {
+            // Second Ctrl+C — already cancelled once; force exit.
             if !silent_for_handler {
                 eprintln!("\n{}", style("Forced exit").red().bold());
             }
             std::process::exit(130);
         }
-        r.store(false, std::sync::atomic::Ordering::SeqCst);
+        c.store(true, std::sync::atomic::Ordering::SeqCst);
         if !silent_for_handler {
             eprintln!(
                 "\n{}",
@@ -342,7 +347,7 @@ fn run() -> Result<()> {
                 checksum_algo: effective_checksum_algo,
                 force,
                 no_unmount,
-                cancel_flag: running,
+                cancel_flag: cancel,
                 silent,
                 resume,
                 checkpoint: effective_checkpoint,
@@ -367,7 +372,7 @@ fn run() -> Result<()> {
                 block_size: effective_block_size,
                 force,
                 no_unmount,
-                cancel_flag: running,
+                cancel_flag: cancel,
                 silent,
             })
         }
@@ -375,7 +380,7 @@ fn run() -> Result<()> {
             source,
             target,
             block_size,
-        } => commands::verify::execute(&source, &target, &block_size, running, silent),
+        } => commands::verify::execute(&source, &target, &block_size, cancel, silent),
         Commands::Checksum { source, algorithm } => {
             let effective_algorithm =
                 algorithm.unwrap_or_else(|| settings.checksum.algorithm.clone());
@@ -479,7 +484,7 @@ fn run() -> Result<()> {
                 skip_confirm: effective_skip_confirm,
                 silent,
                 test_block_sizes,
-                cancel_flag: running,
+                cancel_flag: cancel,
             })
         }
     }

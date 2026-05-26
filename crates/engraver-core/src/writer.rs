@@ -331,6 +331,27 @@ impl Writer {
         Arc::clone(&self.cancel_flag)
     }
 
+    /// Adopt an externally provided cancel flag in place of the default
+    /// internal one.
+    ///
+    /// Convention: `true = cancel`. This is how the writer already
+    /// interprets its internal flag, and matches `Verifier` and
+    /// `BenchmarkRunner`. Callers that have a single program-wide
+    /// cancellation atomic (e.g. a CLI's Ctrl+C handler) can hand it to
+    /// every active component via this method and a single `store(true)`
+    /// will fan out — replacing the older pattern of spawning a polling
+    /// thread to bridge a separately-named "running" atomic.
+    ///
+    /// Note: `write_internal` resets the flag to `false` at the start of
+    /// each call. If the externally provided flag was already `true`
+    /// when the write begins, that prior cancellation is cleared. Set
+    /// the flag *after* calling into the writer, or before any prior
+    /// write reset it.
+    pub fn with_cancel_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancel_flag = flag;
+        self
+    }
+
     /// Write from source to target
     ///
     /// # Arguments
@@ -1934,6 +1955,53 @@ mod tests {
         }
         // Bytes that DID land are still intact — no duplication.
         assert_eq!(target.written, data[..40]);
+    }
+
+    #[test]
+    fn test_writer_with_external_cancel_flag_cancels_via_shared_arc() {
+        // The CLI passes a single program-wide cancel atomic to every
+        // active component instead of polling between a "running" atomic
+        // and a per-component "cancel" atomic. One store(true) on the
+        // shared Arc must fan out — no polling thread required.
+        let data_size = MIN_BLOCK_SIZE * 8;
+        let source_data = vec![0xCDu8; data_size];
+        let source = Cursor::new(source_data);
+        let target = Cursor::new(vec![0u8; data_size]);
+
+        let shared_cancel = Arc::new(AtomicBool::new(false));
+
+        let config = WriteConfig::new().block_size(MIN_BLOCK_SIZE);
+        let writer = Writer::with_config(config).with_cancel_flag(Arc::clone(&shared_cancel));
+
+        // Trip the cancel from outside the writer mid-stream by hooking
+        // into the progress callback — proves the writer reads the
+        // injected flag rather than its old internal one.
+        let cancel_trigger = Arc::clone(&shared_cancel);
+        let writer = writer.on_progress(move |progress| {
+            if progress.current_block >= 1 {
+                cancel_trigger.store(true, Ordering::SeqCst);
+            }
+        });
+
+        let mut writer = writer;
+        let result = writer.write(source, target, data_size as u64);
+        assert!(
+            matches!(result, Err(Error::Cancelled)),
+            "store(true) on the externally-supplied cancel Arc must cancel the write"
+        );
+    }
+
+    #[test]
+    fn test_writer_with_cancel_flag_replaces_internal_handle() {
+        // cancel_handle() should now return the externally provided
+        // Arc, not the original internal one. This is what lets a CLI
+        // call .with_cancel_flag(shared) before the write, then
+        // store(true) on `shared` from a signal handler.
+        let shared = Arc::new(AtomicBool::new(false));
+        let writer = Writer::new().with_cancel_flag(Arc::clone(&shared));
+
+        let handle = writer.cancel_handle();
+        assert!(Arc::ptr_eq(&handle, &shared));
     }
 
     #[test]

@@ -680,17 +680,12 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         }
     });
 
-    // Connect cancel flag
-    let writer_cancel = writer.cancel_handle();
-    let cancel_flag_for_thread = cancel_flag.clone();
-    std::thread::spawn(move || {
-        while cancel_flag_for_thread.load(Ordering::SeqCst) {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        writer_cancel.store(true, Ordering::SeqCst);
-    });
-
-    let mut writer = writer;
+    // Share the program-wide cancel flag directly with the writer.
+    // Convention is `true = cancel` on both sides, so a single
+    // store(true) from the Ctrl+C handler reaches the writer's loop on
+    // its next block boundary — no polling thread to bridge two
+    // separately-named atomics.
+    let mut writer = writer.with_cancel_flag(cancel_flag);
     let start_time = Instant::now();
 
     // Use write_and_verify for parallel verification, write_from_offset otherwise

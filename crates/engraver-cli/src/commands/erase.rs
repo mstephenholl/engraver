@@ -205,8 +205,9 @@ pub fn execute(args: EraseArgs) -> Result<()> {
     let mut bytes_written: u64 = 0;
 
     loop {
-        // Check cancellation
-        if !cancel_flag.load(Ordering::SeqCst) {
+        // Check cancellation. Convention: true = cancel requested
+        // (matches engraver-core's Writer / Verifier cancel handles).
+        if cancel_flag.load(Ordering::SeqCst) {
             pb.finish_and_clear();
             // Sync to flush any pending writes before returning
             if let Err(e) = target.sync() {

@@ -400,6 +400,14 @@ impl BenchmarkRunner {
         Arc::clone(&self.cancel_flag)
     }
 
+    /// Adopt an externally provided cancel flag in place of the default
+    /// internal one. See `Writer::with_cancel_flag` for the rationale.
+    /// Convention: `true = cancel`.
+    pub fn with_cancel_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancel_flag = flag;
+        self
+    }
+
     /// Run the benchmark on a writable target
     pub fn run<W, F>(
         &self,
@@ -828,6 +836,22 @@ mod tests {
         assert_eq!(result.passes.len(), 1);
         assert_eq!(result.passes[0].bytes_written, 64 * 1024);
         assert!(result.summary.average_speed_bps > 0);
+    }
+
+    #[test]
+    fn test_benchmark_runner_with_cancel_flag_replaces_internal_handle() {
+        // Lets the CLI inject a single program-wide cancel atomic so
+        // a Ctrl+C handler can fan out via one store(true).
+        let config = BenchmarkConfig {
+            test_size: 64 * 1024,
+            block_size: 4 * 1024,
+            pattern: DataPattern::Zeros,
+            passes: 1,
+        };
+        let shared = Arc::new(AtomicBool::new(false));
+        let runner = BenchmarkRunner::new(config).with_cancel_flag(Arc::clone(&shared));
+        let handle = runner.cancel_handle();
+        assert!(Arc::ptr_eq(&handle, &shared));
     }
 
     #[test]

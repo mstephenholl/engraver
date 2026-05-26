@@ -434,17 +434,11 @@ where
         pb
     };
 
-    let runner = BenchmarkRunner::new(config);
-
-    // Set up cancellation
-    let runner_cancel = runner.cancel_handle();
-    let cancel_flag_clone = Arc::clone(&cancel_flag);
-    std::thread::spawn(move || {
-        while !cancel_flag_clone.load(Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        runner_cancel.store(true, Ordering::Relaxed);
-    });
+    // Share the program-wide cancel flag directly with the benchmark
+    // runner. Both layers use `true = cancel` so a single store(true)
+    // from the Ctrl+C handler reaches the run loop without a polling
+    // thread to bridge two separate atomics.
+    let runner = BenchmarkRunner::new(config).with_cancel_flag(cancel_flag);
 
     let pb_clone = pb.clone();
     let result = runner.run(

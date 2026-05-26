@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use engraver_core::{
@@ -101,9 +101,6 @@ pub fn execute(
 
     println_if!(silent, "\n{}", style("Verifying...").bold());
 
-    // Set up cancel handler
-    let cancel_clone = cancel_flag.clone();
-
     if source_is_local {
         // Direct byte-by-byte comparison for local files
         let mut source_file = std::fs::File::open(source)
@@ -129,26 +126,18 @@ pub fn execute(
             );
         }
 
-        // Set up verifier
+        // Set up verifier. The CLI's cancel flag is shared directly
+        // with the verifier (same `true = cancel` convention), so a
+        // Ctrl+C from the signal handler reaches `compare`'s cancel
+        // check on the next block boundary — no polling thread.
         let config = VerifyConfig::new().block_size(block_size);
-        let verifier = Verifier::with_config(config);
-
-        // Connect cancel flag
-        let verifier_cancel = verifier.cancel_handle();
-        std::thread::spawn(move || {
-            while cancel_clone.load(Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            verifier_cancel.store(true, Ordering::SeqCst);
-        });
+        let verifier = Verifier::with_config(config).with_cancel_flag(cancel_flag);
 
         // Add progress callback
         let pb_clone = pb.clone();
-        let verifier = verifier.on_progress(move |progress| {
+        let mut verifier = verifier.on_progress(move |progress| {
             pb_clone.set_position(progress.bytes_processed);
         });
-
-        let mut verifier = verifier;
         let result = verifier.compare(&mut source_file, &mut *target_reader, total_size);
 
         pb.finish_and_clear();
