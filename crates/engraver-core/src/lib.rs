@@ -70,6 +70,8 @@ pub use settings::{
     SettingsError, WriteSettings, DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_DELAY_MS, DEFAULT_VALIDATION_TIMEOUT_SECS,
 };
+#[cfg(feature = "checksum")]
+pub use source::{compute_header_hash, compute_local_header_hash, SOURCE_HEADER_HASH_BYTES};
 pub use source::{
     detect_source_type, get_source_size, validate_source, validate_source_with_settings, Source,
     SourceInfo, SourceType, DEFAULT_READ_BUFFER_SIZE,

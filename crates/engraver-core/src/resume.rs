@@ -61,8 +61,20 @@ pub struct WriteCheckpoint {
     /// Size of the source in bytes (if known)
     pub source_size: Option<u64>,
 
-    /// SHA-256 hash of the first 1MB of the source (for quick verification)
+    /// SHA-256 hex digest of the first chunk of source content, computed
+    /// at checkpoint creation. `validate_checkpoint` compares this against
+    /// the current source's hash to detect when a user has replaced the
+    /// source file with a different image of the same size at the same
+    /// path. `None` when the caller did not provide a hash.
+    #[serde(default)]
     pub source_header_hash: Option<String>,
+
+    /// ETag captured from the source at checkpoint creation. Used to
+    /// detect upstream changes for remote sources (HTTP / cloud storage).
+    /// `None` when the source has no etag (local files, or the server
+    /// did not return one).
+    #[serde(default)]
+    pub etag: Option<String>,
 
     /// Whether the source is seekable
     pub source_seekable: bool,
@@ -169,7 +181,8 @@ impl WriteCheckpoint {
             source_path: source_info.path.clone(),
             source_type: source_info.source_type,
             source_size: source_info.size,
-            source_header_hash: None, // Set later after computing
+            source_header_hash: source_info.source_header_hash.clone(),
+            etag: source_info.etag.clone(),
             source_seekable,
             source_resumable,
             target_path: target_path.to_string(),
@@ -542,6 +555,40 @@ pub fn validate_checkpoint(
         }
     }
 
+    // Content identity: when both checkpoint and current source have a
+    // header-content hash, they must match. A mismatch means the user
+    // has pointed the writer at a different image (same path, same size,
+    // different bytes) — resuming would mix data from two images.
+    //
+    // When either side lacks a hash (old checkpoint, or HTTP source where
+    // computing it would require an extra range request), we skip this
+    // check rather than block resume — the path/size/etag checks remain.
+    if let (Some(cp_hash), Some(cur_hash)) = (
+        &checkpoint.source_header_hash,
+        &source_info.source_header_hash,
+    ) {
+        if cp_hash != cur_hash {
+            return CheckpointValidation::invalid(format!(
+                "Source content has changed (header hash mismatch): \
+                 checkpoint = {}, current = {}",
+                cp_hash, cur_hash
+            ));
+        }
+    }
+
+    // Etag identity: for remote sources, an upstream content change
+    // changes the etag. Mismatch means we'd be resuming a different
+    // remote object than the one we started from.
+    if let (Some(cp_etag), Some(cur_etag)) = (&checkpoint.etag, &source_info.etag) {
+        if cp_etag != cur_etag {
+            return CheckpointValidation::invalid(format!(
+                "Remote source has changed (etag mismatch): \
+                 checkpoint = {}, current = {}",
+                cp_etag, cur_etag
+            ));
+        }
+    }
+
     result
 }
 
@@ -559,6 +606,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         }
     }
 
@@ -629,6 +677,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint = WriteCheckpoint::new(&local_info, "/dev/sdb", 1024 * 1024, &config);
         assert!(checkpoint.can_resume());
@@ -643,6 +692,7 @@ mod tests {
             resumable: true,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint = WriteCheckpoint::new(&http_info, "/dev/sdb", 1024 * 1024, &config);
         assert!(checkpoint.can_resume());
@@ -657,6 +707,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint = WriteCheckpoint::new(&gzip_info, "/dev/sdb", 1024 * 1024, &config);
         assert!(!checkpoint.can_resume());
@@ -733,6 +784,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let config = create_test_config();
         let checkpoint = WriteCheckpoint::new(&gzip_info, "/dev/sdb", 1024 * 1024, &config);
@@ -858,6 +910,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint1 =
             WriteCheckpoint::new(&source_info1, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
@@ -872,6 +925,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint2 =
             WriteCheckpoint::new(&source_info2, "/dev/sdc", 64 * 1024 * 1024 * 1024, &config);
@@ -989,6 +1043,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
 
         let result = validate_checkpoint(&checkpoint, &different_source, 32 * 1024 * 1024 * 1024);
@@ -1074,6 +1129,7 @@ mod tests {
             resumable: true,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let mut checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
         checkpoint.bytes_written = 500;
@@ -1094,6 +1150,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
 
@@ -1112,6 +1169,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint =
             WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024 * 1024, &config);
@@ -1132,6 +1190,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint =
             WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024 * 1024, &config);
@@ -1162,6 +1221,7 @@ mod tests {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         };
         let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
 
@@ -1230,5 +1290,143 @@ mod tests {
         let config = WriteConfig::new().verify(false);
         let cp_config = WriteConfigCheckpoint::from(&config);
         assert!(!cp_config.verify);
+    }
+
+    // -------------------------------------------------------------------------
+    // Content-aware validation (header hash + etag)
+    //
+    // These guard against the scenario where a user resumes a write but
+    // the source image at `source_path` has been replaced by a different
+    // file of the same length. Path + size matching alone cannot detect
+    // this; a content hash or etag can.
+    // -------------------------------------------------------------------------
+
+    fn source_with_hash(hash: &str) -> SourceInfo {
+        let mut info = create_test_source_info();
+        info.source_header_hash = Some(hash.to_string());
+        info
+    }
+
+    fn source_with_etag(etag: &str) -> SourceInfo {
+        let mut info = create_test_source_info();
+        info.etag = Some(etag.to_string());
+        info
+    }
+
+    #[test]
+    fn test_validate_checkpoint_rejects_header_hash_mismatch() {
+        let original = source_with_hash("aaaa");
+        let config = create_test_config();
+        let checkpoint =
+            WriteCheckpoint::new(&original, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        assert_eq!(checkpoint.source_header_hash.as_deref(), Some("aaaa"));
+
+        let replaced = source_with_hash("bbbb");
+        let result = validate_checkpoint(&checkpoint, &replaced, 32 * 1024 * 1024 * 1024);
+
+        assert!(!result.valid, "must reject when source content differs");
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.contains("content") || m.contains("hash") || m.contains("header")),
+            "error message should explain the mismatch: {:?}",
+            result.messages
+        );
+    }
+
+    #[test]
+    fn test_validate_checkpoint_accepts_matching_header_hash() {
+        let info = source_with_hash("deadbeef");
+        let config = create_test_config();
+        let checkpoint = WriteCheckpoint::new(&info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+
+        let result = validate_checkpoint(&checkpoint, &info, 32 * 1024 * 1024 * 1024);
+        assert!(
+            result.valid,
+            "matching hashes must validate: {:?}",
+            result.messages
+        );
+    }
+
+    #[test]
+    fn test_validate_checkpoint_passes_when_checkpoint_lacks_hash() {
+        // Backwards-compat: a pre-existing checkpoint written before this
+        // feature shipped will have `source_header_hash: None`. Such a
+        // checkpoint should still validate (with at most a warning) so
+        // in-flight resumes don't break when users upgrade.
+        let info = create_test_source_info(); // no hash
+        let config = create_test_config();
+        let mut checkpoint =
+            WriteCheckpoint::new(&info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        checkpoint.source_header_hash = None;
+
+        // The current source happens to have a hash now (caller computed it).
+        let current = source_with_hash("anything");
+        let result = validate_checkpoint(&checkpoint, &current, 32 * 1024 * 1024 * 1024);
+        assert!(
+            result.valid,
+            "missing checkpoint hash must not block resume"
+        );
+    }
+
+    #[test]
+    fn test_validate_checkpoint_passes_when_current_lacks_hash() {
+        // Symmetric: caller couldn't compute the current hash (e.g. HTTP
+        // source where seeking is impossible). Don't fail loudly — fall
+        // back to the etag / size checks.
+        let original = source_with_hash("aaaa");
+        let config = create_test_config();
+        let checkpoint =
+            WriteCheckpoint::new(&original, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+
+        let mut current = original.clone();
+        current.source_header_hash = None;
+        let result = validate_checkpoint(&checkpoint, &current, 32 * 1024 * 1024 * 1024);
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn test_validate_checkpoint_rejects_etag_mismatch() {
+        let original = source_with_etag("v1");
+        let config = create_test_config();
+        let checkpoint =
+            WriteCheckpoint::new(&original, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        assert_eq!(checkpoint.etag.as_deref(), Some("v1"));
+
+        let updated = source_with_etag("v2");
+        let result = validate_checkpoint(&checkpoint, &updated, 32 * 1024 * 1024 * 1024);
+
+        assert!(!result.valid, "must reject when remote source etag differs");
+        assert!(
+            result.messages.iter().any(|m| m.contains("etag")),
+            "error message should mention etag: {:?}",
+            result.messages
+        );
+    }
+
+    #[test]
+    fn test_validate_checkpoint_accepts_matching_etag() {
+        let info = source_with_etag("abc123");
+        let config = create_test_config();
+        let checkpoint = WriteCheckpoint::new(&info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+
+        let result = validate_checkpoint(&checkpoint, &info, 32 * 1024 * 1024 * 1024);
+        assert!(
+            result.valid,
+            "matching etags must validate: {:?}",
+            result.messages
+        );
+    }
+
+    #[test]
+    fn test_write_checkpoint_carries_hash_and_etag_from_source_info() {
+        let mut info = create_test_source_info();
+        info.source_header_hash = Some("h".to_string());
+        info.etag = Some("e".to_string());
+        let config = create_test_config();
+        let cp = WriteCheckpoint::new(&info, "/dev/sdb", 1024, &config);
+        assert_eq!(cp.source_header_hash.as_deref(), Some("h"));
+        assert_eq!(cp.etag.as_deref(), Some("e"));
     }
 }

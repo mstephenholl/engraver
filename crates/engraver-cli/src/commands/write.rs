@@ -73,6 +73,40 @@ fn check_privileges() -> Result<()> {
     Ok(())
 }
 
+/// Populate `source_info.source_header_hash` for local sources.
+///
+/// Used by resume validation: a checkpoint stores this hash, and on
+/// resume the value is recomputed from the file currently at the same
+/// path. A mismatch means the user has replaced the image, and
+/// `validate_checkpoint` will refuse to resume.
+///
+/// Failures are non-fatal — a missing hash just falls back to the
+/// path/size/etag checks. We trace the error and continue.
+fn populate_source_header_hash(source_info: &mut engraver_core::SourceInfo, silent: bool) {
+    match engraver_core::compute_local_header_hash(&source_info.path) {
+        Ok(Some(hash)) => {
+            tracing::debug!("Source header hash: {}", hash);
+            source_info.source_header_hash = Some(hash);
+        }
+        Ok(None) => {
+            // Remote / cloud source — etag covers content identity.
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Could not compute source header hash (resume safety reduced): {}",
+                e
+            );
+            if !silent {
+                eprintln!(
+                    "  {} could not compute source content hash: {}",
+                    style("warning:").yellow(),
+                    e
+                );
+            }
+        }
+    }
+}
+
 /// Validate the source image and display info
 fn validate_source_info(
     source: &str,
@@ -478,7 +512,13 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     check_privileges()?;
 
     // Step 1: Validate source
-    let (source_info, source_size) = validate_source_info(&args.source, silent)?;
+    let (mut source_info, source_size) = validate_source_info(&args.source, silent)?;
+
+    // Compute a content fingerprint for resume validation. For local
+    // files we hash the first 1 MB so a later resume can detect when the
+    // file at `source_path` has been replaced. For remote / cloud
+    // sources, the etag stored in `source_info` already serves this role.
+    populate_source_header_hash(&mut source_info, silent);
 
     // Step 2: Validate target device
     let drives = list_drives().context("Failed to list drives")?;

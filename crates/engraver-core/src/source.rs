@@ -43,6 +43,70 @@ pub const DEFAULT_READ_BUFFER_SIZE: usize = 64 * 1024;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 pub const DEFAULT_CLOUD_CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
+/// Number of bytes from the start of a source that are hashed to produce
+/// `SourceInfo::source_header_hash`. One megabyte is large enough that two
+/// different images of the same size are overwhelmingly unlikely to share
+/// the same prefix, while small enough that the hash is cheap to recompute
+/// when validating a resume.
+#[cfg(feature = "checksum")]
+pub const SOURCE_HEADER_HASH_BYTES: u64 = 1024 * 1024;
+
+/// Compute the SHA-256 hex digest of up to `max_bytes` from `reader`.
+///
+/// Used by resume validation to detect when a user has replaced the source
+/// at a given path with a different image of the same size. Reads from the
+/// reader's current position; the caller is responsible for seeking back
+/// if the reader is intended for further use.
+///
+/// Returns the lowercase hex digest. If the reader yields fewer than
+/// `max_bytes` bytes, the hash covers exactly the bytes that were read.
+#[cfg(feature = "checksum")]
+pub fn compute_header_hash<R: Read>(reader: &mut R, max_bytes: u64) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut remaining = max_bytes;
+
+    while remaining > 0 {
+        let want = std::cmp::min(remaining as usize, buf.len());
+        let read = reader.read(&mut buf[..want])?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+        remaining -= read as u64;
+    }
+
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    use std::fmt::Write as _;
+    for b in digest.iter() {
+        let _ = write!(hex, "{:02x}", b);
+    }
+    Ok(hex)
+}
+
+/// Compute the header hash of a local file at `path`.
+///
+/// Convenience wrapper around `compute_header_hash` that opens the file
+/// itself. Returns `None` for paths that aren't local files (URLs, cloud
+/// URIs) — those are validated by etag instead.
+#[cfg(feature = "checksum")]
+pub fn compute_local_header_hash(path: &str) -> std::io::Result<Option<String>> {
+    if path.starts_with("http://")
+        || path.starts_with("https://")
+        || path.starts_with("s3://")
+        || path.starts_with("gs://")
+        || path.starts_with("azure://")
+    {
+        return Ok(None);
+    }
+    let mut file = File::open(path)?;
+    let hash = compute_header_hash(&mut file, SOURCE_HEADER_HASH_BYTES)?;
+    Ok(Some(hash))
+}
+
 /// Parse a size string (e.g., "64K", "4M") to bytes
 ///
 /// Returns the default value if parsing fails.
@@ -238,6 +302,14 @@ pub struct SourceInfo {
 
     /// ETag (for HTTP sources, used for resume validation)
     pub etag: Option<String>,
+
+    /// SHA-256 hex digest of the first chunk of source content (used for
+    /// resume validation on local files). `None` when not yet computed.
+    ///
+    /// This catches the case where a user replaces the source file with a
+    /// different image of the same size at the same path between writes
+    /// — path + size + etag alone cannot detect that for local files.
+    pub source_header_hash: Option<String>,
 }
 
 impl SourceInfo {
@@ -252,6 +324,7 @@ impl SourceInfo {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         }
     }
 
@@ -266,6 +339,7 @@ impl SourceInfo {
             resumable: false,
             content_type: None,
             etag: None,
+            source_header_hash: None,
         }
     }
 }
@@ -596,6 +670,7 @@ impl HttpSource {
             resumable: accept_ranges,
             content_type,
             etag,
+            source_header_hash: None,
         };
 
         Ok(Self {
@@ -742,6 +817,7 @@ impl CloudSource {
             resumable: true, // Cloud storage supports Range headers
             content_type: None,
             etag,
+            source_header_hash: None,
         };
 
         Ok(Self {
@@ -1422,6 +1498,7 @@ pub fn validate_source_with_settings(
                         .get("etag")
                         .and_then(|v| v.to_str().ok())
                         .map(String::from),
+                    source_header_hash: None,
                 })
             }
             #[cfg(not(feature = "remote"))]
@@ -1476,6 +1553,7 @@ fn validate_cloud_source(path: &str, source_type: SourceType) -> Result<SourceIn
         resumable: true,
         content_type: None,
         etag: meta.e_tag,
+        source_header_hash: None,
     })
 }
 
