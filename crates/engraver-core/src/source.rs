@@ -1345,11 +1345,17 @@ fn parse_azure_uri(uri: &str) -> Result<(String, String, String)> {
 }
 
 /// Open a file with buffered reading
+///
+/// Only callers are the `Source::open_with_offset` branches that build
+/// compression-decoder wrappers; gated on the `compression` feature to
+/// avoid a dead-code warning when that feature is disabled.
+#[cfg(feature = "compression")]
 fn open_file_buffered(path: &str) -> Result<BufReader<File>> {
     open_file_buffered_with_size(path, DEFAULT_READ_BUFFER_SIZE)
 }
 
 /// Open a file with buffered reading and custom buffer size
+#[cfg(feature = "compression")]
 fn open_file_buffered_with_size(path: &str, buffer_size: usize) -> Result<BufReader<File>> {
     let file = File::open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {

@@ -220,11 +220,17 @@ Planned features, improvements, and development roadmap for Engraver.
   - `tests/resume_integration.rs` covers end-to-end resume, content-hash
     validation against replaced sources, and CheckpointManager round-trip
 
-- [ ] **Integration tests for verify operations**
+- [x] **Integration tests for verify operations**
+  - `tests/verify_integration.rs` (16 tests): matching / mismatched files,
+    mismatch at varying offsets, stop-on-mismatch behaviour, partial reads
 
-- [ ] **HTTP source integration tests** (with mock server)
+- [x] **HTTP source integration tests** (with mock server)
+  - `tests/http_integration.rs` (15 tests): mock server driving HttpSource
+    through detection, content-length, seek-rejection, basic download paths
 
-- [ ] **Compression decompression tests** with real compressed images
+- [x] **Compression decompression tests** with real compressed images
+  - `tests/compression_integration.rs` (19 tests): gzip / xz / zstd / bzip2
+    real-decoder round-trips, magic-byte detection, extension detection
 
 - [x] **Expand fuzz targets**
   - Added additional coverage of edge cases (currently 18 targets)
