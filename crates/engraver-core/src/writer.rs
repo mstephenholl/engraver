@@ -716,6 +716,12 @@ impl Writer {
     /// Each retry waits `base_delay * 2^(attempt-1)`, capped at `8 * base_delay`.
     /// A small deterministic jitter derived from the offset is added to avoid
     /// thundering-herd effects in multi-device scenarios.
+    ///
+    /// Partial writes are recovered by advancing past the bytes that did
+    /// land and retrying only the remaining slice — the old behaviour of
+    /// rewinding to `offset` and rewriting the whole block double-wrote
+    /// the prefix, and exhausted the retry budget on workloads where the
+    /// kernel was draining a backed-up I/O queue a few bytes at a time.
     fn write_block_with_retry<W: Write + Seek>(
         &self,
         target: &mut W,
@@ -726,6 +732,9 @@ impl Writer {
         let mut last_error = None;
         let base_delay = self.config.retry_delay;
         let max_delay = base_delay.saturating_mul(8);
+
+        let total = data.len();
+        let mut written_so_far: usize = 0;
 
         for attempt in 0..=self.config.retry_attempts {
             if attempt > 0 {
@@ -741,17 +750,31 @@ impl Writer {
 
                 std::thread::sleep(delay);
 
-                // Seek back to the write position
-                target.seek(SeekFrom::Start(offset))?;
+                // Resume from where the previous attempt stopped. After
+                // `Err`, the writer's position is undefined; after `Ok(n)`
+                // it is already at `offset + written_so_far`. Seeking
+                // unconditionally normalises both cases.
+                target.seek(SeekFrom::Start(offset + written_so_far as u64))?;
             }
 
-            match target.write(data) {
-                Ok(n) if n == data.len() => return Ok(n),
-                Ok(n) => {
-                    // Partial write - this is an error for block devices
+            let remaining = &data[written_so_far..];
+            match target.write(remaining) {
+                Ok(0) => {
+                    // Zero progress — treat as a transient stall. Retry
+                    // with the same remaining slice.
                     last_error = Some(Error::PartialWrite {
-                        expected: data.len(),
-                        actual: n,
+                        expected: total,
+                        actual: written_so_far,
+                    });
+                }
+                Ok(n) => {
+                    written_so_far += n;
+                    if written_so_far == total {
+                        return Ok(total);
+                    }
+                    last_error = Some(Error::PartialWrite {
+                        expected: total,
+                        actual: written_so_far,
                     });
                 }
                 Err(e) => {
@@ -1777,5 +1800,162 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Io(_))));
         assert_eq!(retry_count, 2);
+    }
+
+    // -------------------------------------------------------------------------
+    // Partial-write recovery tests
+    //
+    // The old code reacted to `Ok(n)` with `n < data.len()` by recording an
+    // error and rewinding to `offset` on the next attempt — rewriting the
+    // first `n` bytes a second time and only making forward progress if
+    // some later attempt happened to return the full count in one shot.
+    // The fix keeps the partial bytes and writes only the remainder.
+    // -------------------------------------------------------------------------
+
+    /// A mock writer that returns a scripted sequence of partial write
+    /// counts and records exactly what bytes were appended, in order.
+    /// `seek` is a no-op — these tests check accumulated bytes, not
+    /// device positioning.
+    struct PartialWriter {
+        written: Vec<u8>,
+        schedule: std::collections::VecDeque<usize>,
+    }
+
+    impl PartialWriter {
+        fn new(schedule: Vec<usize>) -> Self {
+            Self {
+                written: Vec::new(),
+                schedule: schedule.into(),
+            }
+        }
+    }
+
+    impl Write for PartialWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            // Default to the full buf length if the schedule is exhausted —
+            // models a kernel that recovered after a streak of short writes.
+            let n = self
+                .schedule
+                .pop_front()
+                .unwrap_or(buf.len())
+                .min(buf.len());
+            self.written.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for PartialWriter {
+        fn seek(&mut self, _pos: SeekFrom) -> std::io::Result<u64> {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn test_partial_write_advances_instead_of_restarting() {
+        // REGRESSION: data = bytes 0..100, kernel returns 50 then 50.
+        // Old code: write(data) → 50 (bytes 0..50), seek to 0,
+        //           write(data) → 50 again (bytes 0..50 AGAIN).
+        //           Total recorded: [0..50, 0..50] — duplicated, never reaches 50..100.
+        // Old code with retry_attempts=1 would then exhaust and return Err.
+        // New code: write returns 50, advance slice, write(&data[50..]) returns
+        //           50, total exactly matches the input.
+        let config = WriteConfig::new()
+            .retry_attempts(1)
+            .retry_delay(Duration::from_millis(1));
+        let writer = Writer::with_config(config);
+
+        let data: Vec<u8> = (0u8..100).collect();
+        let mut target = PartialWriter::new(vec![50, 50]);
+        let mut retry_count = 0u32;
+
+        let result = writer.write_block_with_retry(&mut target, &data, 0, &mut retry_count);
+
+        assert_eq!(
+            result.ok(),
+            Some(data.len()),
+            "writer should report all bytes consumed after recovering from partial write"
+        );
+        assert_eq!(retry_count, 1, "one partial recovery consumes one retry");
+        assert_eq!(
+            target.written, data,
+            "recorded bytes must equal the input exactly — no duplication, no gaps"
+        );
+    }
+
+    #[test]
+    fn test_partial_write_recovery_three_chunks() {
+        // 30 + 30 + 40 = 100, three partial writes, two retries.
+        let config = WriteConfig::new()
+            .retry_attempts(3)
+            .retry_delay(Duration::from_millis(1));
+        let writer = Writer::with_config(config);
+
+        let data: Vec<u8> = (0u8..100).collect();
+        let mut target = PartialWriter::new(vec![30, 30, 40]);
+        let mut retry_count = 0u32;
+
+        let result = writer.write_block_with_retry(&mut target, &data, 0, &mut retry_count);
+
+        assert_eq!(result.ok(), Some(100));
+        assert_eq!(retry_count, 2);
+        assert_eq!(target.written, data);
+    }
+
+    #[test]
+    fn test_partial_write_exhausts_retries_returns_error() {
+        // Only enough budget for 1 initial + 1 retry = 2 attempts. Schedule
+        // says we'll write 20 bytes each call. After 2 attempts we've only
+        // written 40 of 100 — the function must report exhaustion rather
+        // than claim success.
+        let config = WriteConfig::new()
+            .retry_attempts(1)
+            .retry_delay(Duration::from_millis(1));
+        let writer = Writer::with_config(config);
+
+        let data: Vec<u8> = (0u8..100).collect();
+        let mut target = PartialWriter::new(vec![20, 20]);
+        let mut retry_count = 0u32;
+
+        let result = writer.write_block_with_retry(&mut target, &data, 0, &mut retry_count);
+
+        match result {
+            Err(Error::PartialWrite { expected, actual }) => {
+                assert_eq!(expected, 100);
+                assert_eq!(
+                    actual, 40,
+                    "should report cumulative progress, not last-attempt size"
+                );
+            }
+            other => panic!("expected PartialWrite error, got {:?}", other),
+        }
+        // Bytes that DID land are still intact — no duplication.
+        assert_eq!(target.written, data[..40]);
+    }
+
+    #[test]
+    fn test_zero_progress_write_is_treated_as_partial_and_retried() {
+        // A buggy/transient writer might return Ok(0) — no progress, no
+        // error. Old code recorded a partial-write error and rewrote
+        // from offset 0 (harmless when prior progress was 0, but the
+        // same code path also triggered duplication for nonzero progress).
+        // New code uniformly retries the remaining slice.
+        let config = WriteConfig::new()
+            .retry_attempts(2)
+            .retry_delay(Duration::from_millis(1));
+        let writer = Writer::with_config(config);
+
+        let data: Vec<u8> = (0u8..50).collect();
+        let mut target = PartialWriter::new(vec![0, 50]); // first stall, then full
+        let mut retry_count = 0u32;
+
+        let result = writer.write_block_with_retry(&mut target, &data, 0, &mut retry_count);
+
+        assert_eq!(result.ok(), Some(50));
+        assert_eq!(retry_count, 1);
+        assert_eq!(target.written, data);
     }
 }
