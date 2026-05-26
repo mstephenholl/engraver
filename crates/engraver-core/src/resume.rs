@@ -377,7 +377,7 @@ impl CheckpointManager {
         }
 
         // Sort by last update time (most recent first)
-        checkpoints.sort_by(|a, b| b.last_update.cmp(&a.last_update));
+        checkpoints.sort_by_key(|c| std::cmp::Reverse(c.last_update));
 
         Ok(checkpoints)
     }
