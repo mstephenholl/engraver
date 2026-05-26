@@ -757,25 +757,27 @@ fn parse_bsd_format(line: &str) -> Option<ChecksumEntry> {
 }
 
 fn parse_gnu_format(line: &str) -> Option<ChecksumEntry> {
-    // Format: checksum  filename or checksum *filename
-    // Find the first space followed by a space or asterisk
-    let mut split_idx = None;
-    let chars: Vec<char> = line.chars().collect();
+    // Format: "checksum  filename" or "checksum *filename".
+    // Find the byte index of the first ' ' followed by ' ' or '*'.
+    //
+    // The previous implementation collected `line.chars()` into a Vec
+    // (one allocation per line, plus UTF-8 decoding work) and indexed
+    // by char position — then sliced the &str by that index. char and
+    // byte positions diverge for non-ASCII input, so a stray multibyte
+    // character before the separator would panic with "byte index N is
+    // not a char boundary". `as_bytes().windows(2)` keeps everything
+    // in byte space, allocates nothing, and never panics on garbage.
+    let idx = line
+        .as_bytes()
+        .windows(2)
+        .position(|w| w[0] == b' ' && (w[1] == b' ' || w[1] == b'*'))?;
 
-    for i in 0..chars.len() {
-        if chars[i] == ' ' && i + 1 < chars.len() && (chars[i + 1] == ' ' || chars[i + 1] == '*') {
-            split_idx = Some(i);
-            break;
-        }
-    }
-
-    let idx = split_idx?;
     let checksum = line[..idx].trim().to_lowercase();
     let mut filename = line[idx..].trim();
 
     // Remove leading asterisk (binary mode indicator)
-    if filename.starts_with('*') {
-        filename = &filename[1..];
+    if let Some(rest) = filename.strip_prefix('*') {
+        filename = rest;
     }
 
     // Detect algorithm from checksum length
@@ -1573,6 +1575,43 @@ mod tests {
         let entries = parse_checksum_file(content);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].filename, "file.iso");
+    }
+
+    #[test]
+    fn test_parse_gnu_format_handles_non_ascii_filename() {
+        // REGRESSION: the previous implementation collected the line
+        // into a Vec<char> to find the separator index, then sliced
+        // the &str by that index. char-indices and byte-indices diverge
+        // for multibyte filenames; the subsequent `line[..idx]` could
+        // slice mid-codepoint and panic. The byte-iteration form keeps
+        // indexing in bytes throughout and parses cleanly.
+        let line = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ☃snow.iso\n";
+        let entries = parse_checksum_file(line);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].filename, "☃snow.iso");
+        assert_eq!(entries[0].algorithm, Some(ChecksumAlgorithm::Sha256));
+    }
+
+    #[test]
+    fn test_parse_gnu_format_handles_binary_marker_with_non_ascii_filename() {
+        let line = "d41d8cd98f00b204e9800998ecf8427e *☃snow.img\n";
+        let entries = parse_checksum_file(line);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].filename, "☃snow.img");
+        assert_eq!(entries[0].algorithm, Some(ChecksumAlgorithm::Md5));
+    }
+
+    #[test]
+    fn test_parse_gnu_format_no_panic_on_multibyte_before_separator() {
+        // REGRESSION: garbage input with a multibyte character *before*
+        // a double-space separator. The old code collected `chars`,
+        // found the space at char index 1, then sliced `line[..1]` —
+        // byte index 1 falls inside the 3-byte snowman, panicking with
+        // "byte index 1 is not a char boundary". The byte-iteration
+        // implementation uses the same index space throughout and
+        // returns a clean (possibly None) result instead of panicking.
+        let _ = parse_checksum_file("☃  filename");
+        let _ = parse_checksum_file("☃ *filename");
     }
 
     #[test]
