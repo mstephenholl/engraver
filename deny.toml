@@ -59,8 +59,12 @@ allow = []
 # Skip specific versions (for transitive dependencies that have multiple versions)
 # These are caused by different parts of the dependency tree requiring different versions
 skip = [
-    # ring requires 0.2.x, newer crates use 0.3.x
-    { crate = "getrandom@0.2", reason = "ring dependency uses older version" },
+    # getrandom appears at three majors transitively: 0.2 (held by older
+    # crates), 0.3 (held by ring's hashbrown chain), 0.4 (pulled in by
+    # tempfile 3.27). Drop these entries as the older transitives
+    # upgrade.
+    { crate = "getrandom@0.2", reason = "older transitive dependencies still on 0.2" },
+    { crate = "getrandom@0.3", reason = "ring dependency uses 0.3" },
     # Various crates in transition between windows-sys versions
     { crate = "windows-sys@0.60", reason = "transitive dependency version mismatch" },
 ]
