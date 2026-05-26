@@ -36,8 +36,18 @@ use object_store::ObjectStoreExt;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 use std::sync::Arc;
 
-/// Default read buffer size in bytes (64 KB)
-pub const DEFAULT_READ_BUFFER_SIZE: usize = 64 * 1024;
+/// Default read buffer size in bytes.
+///
+/// Matches the writer's default block size (4 MB) on purpose: when a
+/// compression decoder wraps `LocalFileSource`, the decoder issues
+/// reads in its own internal chunk size (~32 KB for gzip, ~16 KB for
+/// zstd) against this buffer. If the buffer is smaller than the
+/// writer's block size, each decoder fill drains the buffer often and
+/// the OS sees a `read()` syscall every few iterations; matching the
+/// block size amortises the syscall cost across the whole write
+/// block. Plain (non-compressed) sources are unaffected — `BufReader`
+/// bypasses its own buffer when the caller's read is >= capacity.
+pub const DEFAULT_READ_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 
 /// Default cloud chunk size in bytes (4 MB)
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
@@ -396,6 +406,16 @@ impl LocalFileSource {
     /// Get source info
     pub fn info(&self) -> &SourceInfo {
         &self.info
+    }
+
+    /// Capacity of the underlying `BufReader` (for tests and benchmarks).
+    ///
+    /// The buffer matters most when this `LocalFileSource` is wrapped
+    /// by a compression decoder: each decoder read fills from the
+    /// `BufReader`, and the OS only sees a `read()` syscall when the
+    /// buffer drains. A larger buffer means fewer syscalls.
+    pub fn buffer_capacity(&self) -> usize {
+        self.file.capacity()
     }
 }
 
@@ -1888,6 +1908,48 @@ mod tests {
         let mut buffer = vec![0u8; data.len()];
         source.read_exact(&mut buffer).unwrap();
         assert_eq!(&buffer, data);
+    }
+
+    #[test]
+    fn test_local_file_source_default_buffer_capacity_matches_default_block_size() {
+        // The default read buffer should be sized so a compression
+        // decoder (which wraps this BufReader<File> and issues smaller
+        // reads internally) drains the OS read every block_size, not
+        // every 64 KB. Anything smaller multiplies syscalls.
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b"contents").unwrap();
+        let source = LocalFileSource::open(temp.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            source.buffer_capacity(),
+            DEFAULT_READ_BUFFER_SIZE,
+            "buffer should match the documented default"
+        );
+        assert_eq!(
+            DEFAULT_READ_BUFFER_SIZE,
+            crate::writer::DEFAULT_BLOCK_SIZE,
+            "default read buffer must equal default write block size — \
+             keeping them aligned prevents one-syscall-per-decoder-read \
+             pathologies"
+        );
+    }
+
+    #[test]
+    fn test_local_file_source_buffer_capacity_honours_custom_settings() {
+        use crate::settings::WriteSettings;
+
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b"contents").unwrap();
+
+        let settings = WriteSettings {
+            read_buffer_size: "1M".to_string(),
+            ..WriteSettings::default()
+        };
+        let source =
+            LocalFileSource::open_with_settings(temp.path().to_str().unwrap(), Some(&settings))
+                .unwrap();
+
+        assert_eq!(source.buffer_capacity(), 1024 * 1024);
     }
 
     #[test]

@@ -12,7 +12,7 @@
 //! verify = true
 //! retry_attempts = 3
 //! retry_delay_ms = 100
-//! read_buffer_size = "64K"
+//! read_buffer_size = "4M"
 //!
 //! [checksum]
 //! algorithm = "sha256"
@@ -52,8 +52,10 @@ pub const DEFAULT_RETRY_ATTEMPTS: u32 = 3;
 /// Default retry delay in milliseconds
 pub const DEFAULT_RETRY_DELAY_MS: u64 = 100;
 
-/// Default read buffer size string
-const DEFAULT_READ_BUFFER_SIZE_STR: &str = "64K";
+/// Default read buffer size string. Matches `DEFAULT_BLOCK_SIZE_STR`
+/// so a compression-decoded source drains the kernel read in chunks
+/// the writer's block size, not 64-KB-at-a-time.
+const DEFAULT_READ_BUFFER_SIZE_STR: &str = "4M";
 
 /// Default cloud chunk size string
 const DEFAULT_CLOUD_CHUNK_SIZE_STR: &str = "4M";
@@ -335,7 +337,7 @@ mod tests {
         assert!(!settings.write.checkpoint);
         assert_eq!(settings.write.retry_attempts, 3);
         assert_eq!(settings.write.retry_delay_ms, 100);
-        assert_eq!(settings.write.read_buffer_size, "64K");
+        assert_eq!(settings.write.read_buffer_size, "4M");
         assert_eq!(settings.checksum.algorithm, "sha256");
         assert!(!settings.checksum.auto_detect);
         assert!(!settings.behavior.skip_confirmation);
@@ -499,7 +501,7 @@ verify = true
         assert!(!write.checkpoint);
         assert_eq!(write.retry_attempts, 3);
         assert_eq!(write.retry_delay_ms, 100);
-        assert_eq!(write.read_buffer_size, "64K");
+        assert_eq!(write.read_buffer_size, "4M");
     }
 
     #[test]
