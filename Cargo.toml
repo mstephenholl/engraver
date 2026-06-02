@@ -50,8 +50,8 @@ zstd = "0.13"
 bzip2 = "0.6"
 
 # Checksums/Verification
-sha2 = "0.10"
-md-5 = "0.10"
+sha2 = "0.11"
+md-5 = "0.11"
 crc32fast = "1"
 
 # Cross-platform
