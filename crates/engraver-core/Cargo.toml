@@ -40,13 +40,13 @@ reqwest = { version = "0.12", features = ["blocking", "stream", "rustls-tls"], d
 url = { version = "2", optional = true }
 
 # Checksums (optional)
-sha2 = { version = "0.10", optional = true }
-md-5 = { version = "0.10", optional = true }
+sha2 = { version = "0.11", optional = true }
+md-5 = { version = "0.11", optional = true }
 crc32fast = { version = "1", optional = true }
 
 # Cloud storage (optional) - unified interface via object_store
 # Supports S3, GCS, Azure, and S3-compatible services (MinIO, DigitalOcean Spaces, etc.)
-object_store = { version = "0.13", optional = true, default-features = false }
+object_store = { version = "0.14", optional = true, default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 
 # Partition table parsing (optional)
@@ -56,7 +56,7 @@ bootsector = { version = "0.2", optional = true }
 tempfile = "3"
 criterion = { workspace = true }
 tiny_http = "0.12"
-rand = "0.9"
+rand = "0.10"
 
 [[bench]]
 name = "checksums"
