@@ -50,15 +50,15 @@ zstd = "0.13"
 bzip2 = "0.6"
 
 # Checksums/Verification
-sha2 = "0.10"
-md-5 = "0.10"
+sha2 = "0.11"
+md-5 = "0.11"
 crc32fast = "1"
 
 # Cross-platform
 cfg-if = "1"
 
 # Testing
-mockall = "0.14"
+mockall = "0.15"
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
