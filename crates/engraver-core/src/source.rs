@@ -560,6 +560,26 @@ impl<R: Read> Read for Bzip2Source<R> {
 // HTTP/HTTPS Source
 // ============================================================================
 
+/// reqwest 0.13 bundles no root certificates and verifies against the OS
+/// trust store, which minimal live and recovery environments may not have.
+#[cfg(feature = "remote")]
+fn http_client_builder() -> reqwest::blocking::ClientBuilder {
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let mut tls = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring supports rustls' default protocol versions")
+        .with_root_certificates(
+            webpki_roots::TLS_SERVER_ROOTS
+                .iter()
+                .cloned()
+                .collect::<rustls::RootCertStore>(),
+        )
+        .with_no_client_auth();
+    // reqwest sets ALPN only on configs it builds itself.
+    tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+    reqwest::blocking::Client::builder().tls_backend_preconfigured(tls)
+}
+
 /// HTTP source with resume support
 #[cfg(feature = "remote")]
 pub struct HttpSource {
@@ -606,7 +626,7 @@ impl HttpSource {
         }
 
         // Build request
-        let client = reqwest::blocking::Client::builder()
+        let client = http_client_builder()
             .user_agent(concat!("engraver/", env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .build()
@@ -1384,7 +1404,10 @@ pub fn get_source_size(path: &str) -> Result<Option<u64>> {
             #[cfg(feature = "remote")]
             {
                 // Do a HEAD request to get size
-                let client = reqwest::blocking::Client::new();
+                let client = http_client_builder().build().map_err(|e| Error::Network {
+                    message: "Failed to create HTTP client".to_string(),
+                    source: Some(Box::new(e)),
+                })?;
                 let response = client.head(path).send().map_err(|e| Error::Network {
                     message: "HEAD request failed".to_string(),
                     source: Some(Box::new(e)),
@@ -1462,7 +1485,7 @@ pub fn validate_source_with_settings(
                 })?;
 
                 // Do a HEAD request to check availability
-                let client = reqwest::blocking::Client::builder()
+                let client = http_client_builder()
                     .timeout(std::time::Duration::from_secs(timeout_secs))
                     .build()
                     .map_err(|e| Error::Network {
