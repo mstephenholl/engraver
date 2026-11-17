@@ -2,6 +2,7 @@
 name = "engraver-core"
 version = "0.1.0"
 edition = "2021"
+rust-version.workspace = true
 authors = ["Engraver Contributors"]
 license = "MIT"
 description = "Core library for Engraver disk imaging tool"
