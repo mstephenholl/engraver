@@ -433,7 +433,7 @@ Engraver includes multiple safety mechanisms:
 
 ### Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) 1.87+ (MSRV)
+- [Rust](https://www.rust-lang.org/tools/install) 1.89+ (MSRV)
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh

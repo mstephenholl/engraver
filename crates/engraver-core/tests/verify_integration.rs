@@ -500,7 +500,7 @@ fn verify_auto_detect_checksum_file() {
 #[cfg(feature = "checksum")]
 #[test]
 fn verify_full_write_and_verify_pipeline() {
-    use rand::Rng;
+    use rand::RngExt;
 
     let size = 1024 * 1024; // 1 MB
     let mut rng = rand::rng();
