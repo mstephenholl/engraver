@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -42,6 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
+        if: github.event_name == 'pull_request'
         id: filter
         with:
           filters: |
@@ -62,7 +66,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -78,7 +82,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     needs: [changes, fmt]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -91,7 +95,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     needs: [changes, fmt]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -102,7 +106,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     needs: [changes, fmt]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     permissions:
       checks: write
       contents: read
@@ -116,7 +120,7 @@ jobs:
     name: Cargo Deny
     runs-on: ubuntu-latest
     needs: [changes, fmt]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
@@ -125,7 +129,7 @@ jobs:
     name: MSRV (1.89)
     runs-on: ubuntu-latest
     needs: [changes, fmt]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.89
@@ -142,7 +146,7 @@ jobs:
   test-unit:
     name: Unit Tests
     needs: [changes, clippy, check]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     uses: ./.github/workflows/_test.yml
     with:
       test-type: Unit
@@ -151,7 +155,7 @@ jobs:
   test-integration:
     name: Integration Tests
     needs: [changes, clippy, check]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     uses: ./.github/workflows/_test.yml
     with:
       test-type: Integration
@@ -166,7 +170,7 @@ jobs:
     name: Code Coverage
     runs-on: ubuntu-latest
     needs: [changes, clippy, check]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -195,7 +199,7 @@ jobs:
   build-musl:
     name: Build (musl)
     needs: [changes, clippy, check]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     uses: ./.github/workflows/_build.yml
     with:
       target: x86_64-unknown-linux-musl
@@ -211,7 +215,7 @@ jobs:
     name: Sanitizers (ASAN)
     runs-on: ubuntu-latest
     needs: [changes, clippy, check]
-    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
@@ -237,7 +241,7 @@ jobs:
     name: Docs
     runs-on: ubuntu-latest
     needs: [changes, fmt]
-    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.docs == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.docs == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -250,7 +254,7 @@ jobs:
     name: ShellCheck
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.scripts == 'true' || github.event_name == 'push'
+    if: needs.changes.outputs.scripts == 'true' || github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
       - name: Install ShellCheck
