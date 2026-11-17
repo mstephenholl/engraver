@@ -52,6 +52,10 @@ pub enum PlatformError {
     /// Alignment error for direct I/O
     #[error("Alignment error: {0}")]
     AlignmentError(String),
+
+    /// io_uring error (Linux only)
+    #[error("io_uring error: {0}")]
+    IoUringError(String),
 }
 
 /// Result type for platform operations
@@ -293,6 +297,11 @@ cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
         mod linux;
         pub use linux::LinuxPlatform as Platform;
+
+        #[cfg(feature = "io_uring")]
+        mod linux_uring;
+        #[cfg(feature = "io_uring")]
+        pub use linux_uring::{IoUringDevice, BatchWriteResult, is_io_uring_available, is_kernel_supported};
     } else if #[cfg(target_os = "macos")] {
         mod macos;
         pub use macos::MacOSPlatform as Platform;
