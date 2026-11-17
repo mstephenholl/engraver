@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779829461908,
+  "lastUpdate": 1794947905849,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -429,6 +429,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 97.26,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "34bf55d8e9daccc5aedcf55441cf1b7badebad82",
+          "message": "deps: bump rust-dependencies group, raise MSRV to 1.89 (#36)\n\n* deps: bump rust-dependencies group, raise MSRV to 1.89\n\nThis is Dependabot's batch update from PR 36, rebuilt on current main.\nIt also fixes the Clippy, Cargo Deny and Security Audit failures that\nmain has today.\n\nBumped (15):\n- thiserror 2.0.18 -> 2.0.21\n- anyhow 1.0.102 -> 1.0.104\n- clap 4.6.1 -> 4.6.8\n- indicatif 0.18.4 -> 0.18.6\n- serde 1.0.228 -> 1.0.229\n- serde_json 1.0.150 -> 1.0.154\n- toml 1.1.2+spec-1.1.0 -> 1.2.1+spec-1.1.0\n- sha2 0.10.9 -> 0.11.1\n- md-5 0.10.6 -> 0.11.0\n- mockall 0.14.0 -> 0.15.0\n- object_store 0.13.1 -> 0.14.2\n- rand 0.9.4 -> 0.10.4\n- clap_complete 4.6.5 -> 4.6.12\n- clap_mangen 0.3.0 -> 0.3.4\n- libc 0.2.186 -> 0.2.191\n\nOther changes:\n- MSRV 1.87 -> 1.89. object_store 0.14 needs crc-fast 1.10, which\n  requires rustc 1.89. Staying on 1.87 would leave two quick-xml\n  advisories (RUSTSEC-2026-0194, -0195) that only object_store 0.14\n  fixes.\n- Cargo.lock regenerated with cargo +1.89 update and\n  CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback. This clears the\n  22 advisories cargo audit reports on main's lockfile.\n- rand 0.10 renamed the Rng extension trait to RngExt. Two integration\n  tests now import it.\n- Rust 1.100 added clippy::assert_is_empty. Two engraver-detect tests\n  now use assert_eq!.\n- deny.toml: allow BSD-2-Clause (zstd-sys 2.1), skip syn@2 and\n  base64@0.22, and drop the getrandom@0.3 and windows-sys@0.60 skips\n  that no longer match anything.\n\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\n\n* deps(deny): skip digest, crypto-common and reqwest duplicates\n\ncargo-deny-action runs with --all-features, so its graph includes the\noptional cloud feature. There, object_store 0.14 pulls in crc-fast 1.10\n(digest 0.10, crypto-common 0.1) and reqwest 0.13, next to sha2/md-5\n0.11 and engraver-core's own reqwest 0.12. No newer crc-fast exists.\nMoving engraver-core to reqwest 0.13 is a separate change.\n\n---------\n\nCo-authored-by: Michael Holland <m.stephen.holland@gmail.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-17T15:32:21-05:00",
+          "tree_id": "2b54aa9d59c9d394ddaa9bb7ba54ee8597a17ac1",
+          "url": "https://github.com/mstephenholl/engraver/commit/34bf55d8e9daccc5aedcf55441cf1b7badebad82"
+        },
+        "date": 1794947905552,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 104.98,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 103.82,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 97.52,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 108.27,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 105.28,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 36.28,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 578.57,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 8111.63,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 53497.22,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 1150.38,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 16198.06,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 52733.39,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 59051.04,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 104.14,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1642.35,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 18838.1,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 56043.64,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 42.35,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 678,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 9418.05,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 54086.16,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 124.36,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1745.92,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 14873.39,
             "unit": "iter/sec"
           }
         ]
