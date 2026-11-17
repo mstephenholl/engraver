@@ -2,6 +2,7 @@
 # https://embarkstudios.github.io/cargo-deny/
 
 [graph]
+all-features = true
 # Targets to check (all platforms we support)
 targets = [
     "x86_64-unknown-linux-gnu",
