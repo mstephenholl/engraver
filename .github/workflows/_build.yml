@@ -42,7 +42,7 @@ jobs:
     name: Build (${{ inputs.target }})
     runs-on: ${{ inputs.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
