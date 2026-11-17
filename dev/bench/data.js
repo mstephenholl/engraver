@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794953706124,
+  "lastUpdate": 1794953731045,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -717,6 +717,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/64KB",
             "value": 14864.23,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2ac2537063b117329a6b452d646b724f0d4cb046",
+          "message": "deps(engraver-core): bump reqwest 0.12 -> 0.13 (#40)\n\nGives the workspace a single reqwest major. object_store 0.14 already\nuses 0.13, so the reqwest@0.12 and base64@0.22 skips in deny.toml go\naway.\n\nTLS behavior is unchanged. reqwest 0.13 drops its bundled webpki roots\nand verifies through the OS trust store. Its `rustls` feature also\nselects aws-lc-rs, which would add aws-lc-sys (a C/cmake build) to the\ndefault and static musl release builds. The crate instead enables\n`rustls-no-provider` and passes reqwest a rustls ClientConfig through\n`tls_backend_preconfigured`. The config uses the ring provider, the\nsafe default protocol versions (TLS 1.2 and 1.3), the Mozilla roots\nfrom webpki-roots and ALPN http/1.1, as reqwest 0.12 did. HTTPS keeps\nworking on hosts with no system CA certificates, such as minimal live\nor recovery images.\n\nNothing installs a process-wide default crypto provider, so object_store\nwith the cloud features keeps choosing its own.\n\nwebpki-roots is used rather than webpki-root-certs. The latter is not\ncompiled on Linux targets here and its README tells rustls users to\nprefer webpki-roots. CDLA-Permissive-2.0 stays in the license allowlist\nfor it.\n\nget_source_size now builds its client with a builder and maps failure to\nError::Network instead of panicking in Client::new().",
+          "timestamp": "2026-11-17T17:09:35-05:00",
+          "tree_id": "f9ba913b15cdc3c964c35f8bfe73482b4e12c2ea",
+          "url": "https://github.com/mstephenholl/engraver/commit/2ac2537063b117329a6b452d646b724f0d4cb046"
+        },
+        "date": 1794953730745,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 104.38,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 103.48,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 97.2,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 106.62,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 104.42,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 35.57,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 573.95,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 8130.21,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 53627.82,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 1194.65,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 16863.34,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 52614.37,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 59108.58,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 103.25,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1639.64,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 18848.04,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 57379.48,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 40.73,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 670.05,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 9433.94,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 54029.04,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 124.46,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1736.42,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 15443.97,
             "unit": "iter/sec"
           }
         ]
