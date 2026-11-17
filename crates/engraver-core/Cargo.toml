@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "filesystem"]
 default = ["compression", "remote", "checksum", "partition-info"]
 compression = ["flate2", "xz2", "zstd", "bzip2"]
 partition-info = ["bootsector"]
-remote = ["reqwest", "url"]
+remote = ["reqwest", "dep:rustls", "dep:webpki-roots", "url"]
 checksum = ["sha2", "md-5", "crc32fast"]
 # Cloud storage providers (S3-compatible, GCS, Azure)
 s3 = ["dep:object_store", "object_store/aws", "dep:tokio"]
@@ -36,7 +36,10 @@ zstd = { version = "0.13", optional = true }
 bzip2 = { version = "0.6", optional = true }
 
 # HTTP client (optional) - uses rustls for cross-compilation support
-reqwest = { version = "0.12", features = ["blocking", "stream", "rustls-tls"], default-features = false, optional = true }
+# `rustls-no-provider` keeps aws-lc-sys (C/cmake) out of the static musl build.
+reqwest = { version = "0.13", features = ["blocking", "stream", "rustls-no-provider"], default-features = false, optional = true }
+rustls = { version = "0.23", features = ["ring", "std", "tls12"], default-features = false, optional = true }
+webpki-roots = { version = "1", optional = true }
 url = { version = "2", optional = true }
 
 # Checksums (optional)
