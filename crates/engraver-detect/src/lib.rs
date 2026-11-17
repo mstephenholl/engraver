@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn test_drive_default() {
         let drive = Drive::default();
-        assert!(drive.path.is_empty());
+        assert_eq!(drive.path, "");
         assert_eq!(drive.size, 0);
         assert!(!drive.removable);
         assert!(!drive.is_system);
@@ -740,7 +740,7 @@ mod tests {
     #[test]
     fn test_partition_default() {
         let part = Partition::default();
-        assert!(part.path.is_empty());
+        assert_eq!(part.path, "");
         assert!(part.label.is_none());
         assert!(part.filesystem.is_none());
         assert_eq!(part.size, 0);

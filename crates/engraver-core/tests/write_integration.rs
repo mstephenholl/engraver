@@ -424,7 +424,7 @@ fn write_from_file_source_to_file_device() {
 
 #[test]
 fn write_large_random_data() {
-    use rand::Rng;
+    use rand::RngExt;
 
     let size = 4 * 1024 * 1024; // 4 MB
     let mut rng = rand::rng();

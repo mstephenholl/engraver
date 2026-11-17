@@ -37,6 +37,8 @@ allow = [
     "CDLA-Permissive-2.0",
     # libbz2-rs-sys uses this permissive bzip2 license
     "bzip2-1.0.6",
+    # zstd-sys 2.1 bundles zstd sources under BSD-2-Clause
+    "BSD-2-Clause",
 ]
 # Confidence threshold for license detection
 confidence-threshold = 0.8
@@ -59,14 +61,9 @@ allow = []
 # Skip specific versions (for transitive dependencies that have multiple versions)
 # These are caused by different parts of the dependency tree requiring different versions
 skip = [
-    # getrandom appears at three majors transitively: 0.2 (held by older
-    # crates), 0.3 (held by ring's hashbrown chain), 0.4 (pulled in by
-    # tempfile 3.27). Drop these entries as the older transitives
-    # upgrade.
-    { crate = "getrandom@0.2", reason = "older transitive dependencies still on 0.2" },
-    { crate = "getrandom@0.3", reason = "ring dependency uses 0.3" },
-    # Various crates in transition between windows-sys versions
-    { crate = "windows-sys@0.60", reason = "transitive dependency version mismatch" },
+    { crate = "getrandom@0.2", reason = "ring and redox_users still on 0.2; tempfile, rand 0.10 and jobserver use 0.4" },
+    { crate = "syn@2", reason = "mockall_derive, thiserror 1, tracing-attributes and zerocopy-derive still on syn 2; most derives moved to syn 3" },
+    { crate = "base64@0.22", reason = "reqwest 0.12 holds 0.22; hyper-util 0.1.21 moved to 0.23" },
 ]
 # Skip checking tree for these crates
 skip-tree = []
