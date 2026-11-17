@@ -64,6 +64,9 @@ skip = [
     { crate = "getrandom@0.2", reason = "ring and redox_users still on 0.2; tempfile, rand 0.10 and jobserver use 0.4" },
     { crate = "syn@2", reason = "mockall_derive, thiserror 1, tracing-attributes and zerocopy-derive still on syn 2; most derives moved to syn 3" },
     { crate = "base64@0.22", reason = "reqwest 0.12 holds 0.22; hyper-util 0.1.21 moved to 0.23" },
+    { crate = "digest@0.10", reason = "crc-fast 1.10 (via object_store 0.14) still on digest 0.10; sha2 and md-5 0.11 use 0.11" },
+    { crate = "crypto-common@0.1", reason = "held by digest 0.10 through crc-fast" },
+    { crate = "reqwest@0.12", reason = "engraver-core remote feature on 0.12; object_store 0.14 uses 0.13" },
 ]
 # Skip checking tree for these crates
 skip-tree = []
