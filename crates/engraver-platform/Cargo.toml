@@ -2,6 +2,7 @@
 name = "engraver-platform"
 version = "0.1.0"
 edition = "2021"
+rust-version.workspace = true
 authors = ["Engraver Contributors"]
 license = "MIT"
 description = "Platform-specific raw device I/O for Engraver"
