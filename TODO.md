@@ -176,19 +176,16 @@ Planned features, improvements, and development roadmap for Engraver.
   - `IoUringDevice` in `engraver-platform`, behind its `io_uring` feature (Linux 5.6+)
   - Batched write operations to reduce syscall overhead
   - `is_io_uring_available()` lets callers fall back when the kernel lacks io_uring
-  - Not used by the Writer or the CLI yet (no CLI flag)
+  - Not used by the Writer or the CLI
 
-- [ ] **io_uring Writer integration**
-  - Wire IoUringDevice into the Writer for automatic use when available
-  - Runtime detection and graceful fallback to sync I/O
-  - Transparent to CLI users
-
-- [ ] **io_uring benchmarks**
-  - Add benchmark suite to measure io_uring vs sync performance
-  - Compare throughput on USB 3.0, NVMe, and SATA devices
-  - Measure CPU usage reduction
+- [x] **io_uring benchmarks**
+  - The `uring_bench` example in `engraver-platform` compares sync writes with `IoUringDevice`
+  - io_uring was no faster on NVMe or tmpfs, so Writer integration is not planned
+  - Results and how to rerun them: `docs/benchmarks/io-uring.md`
+  - Still to run on a USB 3 stick
 
 - [ ] **Direct I/O optimizations**
+  - Align the Writer's buffer so direct I/O skips the bounce-buffer copy, which takes 1.5 to 1.9x the CPU per GiB
   - Tunable buffer sizes for different device speeds
   - Adaptive block sizing based on device performance
 
