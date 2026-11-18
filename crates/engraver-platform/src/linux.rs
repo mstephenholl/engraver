@@ -13,10 +13,6 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::process::Command;
 
-/// Linux O_DIRECT flag
-#[cfg(target_os = "linux")]
-const O_DIRECT: i32 = 0o40000;
-
 /// Linux platform implementation
 pub struct LinuxPlatform;
 
@@ -114,7 +110,7 @@ impl LinuxDevice {
         // Add O_DIRECT for direct I/O if requested
         #[cfg(target_os = "linux")]
         if options.direct_io {
-            std_options.custom_flags(O_DIRECT);
+            std_options.custom_flags(libc::O_DIRECT);
         }
 
         // Try to open the device
@@ -514,6 +510,31 @@ mod tests {
 
         // Should succeed on regular files without O_DIRECT
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_open_regular_file_with_direct_io_writes_through() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0u8; 8192]).unwrap();
+
+        let options = OpenOptions::new().direct_io(true).block_size(4096);
+        let mut device = match LinuxDevice::open(temp.path().to_str().unwrap(), options) {
+            Ok(device) => device,
+            // tmpfs before Linux 6.6 rejects O_DIRECT.
+            Err(PlatformError::Io(e)) if e.raw_os_error() == Some(libc::EINVAL) => {
+                eprintln!("skipped: the temp filesystem does not support O_DIRECT");
+                return;
+            }
+            Err(e) => panic!("open with direct I/O failed: {e}"),
+        };
+
+        assert!(device.info().direct_io);
+        assert_eq!(device.write_at(4096, &[0x5A; 4096]).unwrap(), 4096);
+        drop(device);
+
+        let contents = std::fs::read(temp.path()).unwrap();
+        assert!(contents[..4096].iter().all(|&b| b == 0));
+        assert!(contents[4096..].iter().all(|&b| b == 0x5A));
     }
 
     #[test]
