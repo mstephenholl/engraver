@@ -86,6 +86,9 @@ impl AlignedBuffer {
     }
 
     fn as_aligned_slice_mut(&mut self, len: usize) -> &mut [u8] {
+        if self.data.len() < len + self.alignment {
+            self.data = vec![0u8; len + self.alignment];
+        }
         let ptr = self.data.as_ptr();
         let aligned_ptr = align_up(ptr as usize, self.alignment) as *mut u8;
         let offset = aligned_ptr as usize - ptr as usize;
@@ -512,20 +515,35 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    fn open_direct_io_or_skip(temp: &NamedTempFile) -> Option<LinuxDevice> {
+        let options = OpenOptions::new().direct_io(true).block_size(4096);
+        match LinuxDevice::open(temp.path().to_str().unwrap(), options) {
+            Ok(device) => Some(device),
+            // tmpfs before Linux 6.6 rejects O_DIRECT.
+            Err(PlatformError::Io(e)) if e.raw_os_error() == Some(libc::EINVAL) => {
+                eprintln!("skipped: the temp filesystem does not support O_DIRECT");
+                None
+            }
+            Err(e) => panic!("open with direct I/O failed: {e}"),
+        }
+    }
+
+    /// `len` bytes of `storage` starting one byte past a 4096-byte boundary.
+    fn misaligned_range(storage: &[u8], len: usize) -> std::ops::Range<usize> {
+        let start = storage.as_ptr().align_offset(4096) + 1;
+        start..start + len
+    }
+
+    fn pattern(len: usize) -> Vec<u8> {
+        (0..len).map(|i| (i % 251) as u8).collect()
+    }
+
     #[test]
     fn test_open_regular_file_with_direct_io_writes_through() {
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(&[0u8; 8192]).unwrap();
-
-        let options = OpenOptions::new().direct_io(true).block_size(4096);
-        let mut device = match LinuxDevice::open(temp.path().to_str().unwrap(), options) {
-            Ok(device) => device,
-            // tmpfs before Linux 6.6 rejects O_DIRECT.
-            Err(PlatformError::Io(e)) if e.raw_os_error() == Some(libc::EINVAL) => {
-                eprintln!("skipped: the temp filesystem does not support O_DIRECT");
-                return;
-            }
-            Err(e) => panic!("open with direct I/O failed: {e}"),
+        let Some(mut device) = open_direct_io_or_skip(&temp) else {
+            return;
         };
 
         assert!(device.info().direct_io);
@@ -535,6 +553,56 @@ mod tests {
         let contents = std::fs::read(temp.path()).unwrap();
         assert!(contents[..4096].iter().all(|&b| b == 0));
         assert!(contents[4096..].iter().all(|&b| b == 0x5A));
+    }
+
+    #[test]
+    fn test_direct_io_write_at_and_read_at_with_buffers_over_two_blocks() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0xFF; 6 * 4096]).unwrap();
+        let Some(mut device) = open_direct_io_or_skip(&temp) else {
+            return;
+        };
+        let data = pattern(2 * 4096 + 1000);
+
+        assert_eq!(device.write_at(4096, &data).unwrap(), data.len());
+
+        let contents = std::fs::read(temp.path()).unwrap();
+        let end = 4096 + data.len();
+        assert!(contents[..4096].iter().all(|&b| b == 0xFF));
+        assert_eq!(&contents[4096..end], &data[..]);
+        assert!(contents[end..4 * 4096].iter().all(|&b| b == 0));
+        assert!(contents[4 * 4096..].iter().all(|&b| b == 0xFF));
+
+        let mut storage = vec![0u8; data.len() + 4097];
+        let range = misaligned_range(&storage, data.len());
+        assert_eq!(
+            device.read_at(4096, &mut storage[range.clone()]).unwrap(),
+            data.len()
+        );
+        assert_eq!(&storage[range], &data[..]);
+    }
+
+    #[test]
+    fn test_direct_io_write_and_read_traits_with_a_misaligned_4mib_block() {
+        // `engraver benchmark` opens with the default 4096 block size and
+        // writes 4 MiB blocks from a plain Vec.
+        let len = 4 * 1024 * 1024;
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&vec![0u8; len]).unwrap();
+        let Some(mut device) = open_direct_io_or_skip(&temp) else {
+            return;
+        };
+        let mut storage = pattern(len + 4097);
+        let range = misaligned_range(&storage, len);
+        let data = storage[range.clone()].to_vec();
+
+        device.write_all(&storage[range.clone()]).unwrap();
+        assert_eq!(std::fs::read(temp.path()).unwrap(), data);
+
+        storage.fill(0);
+        device.seek(SeekFrom::Start(0)).unwrap();
+        device.read_exact(&mut storage[range.clone()]).unwrap();
+        assert_eq!(&storage[range], &data[..]);
     }
 
     #[test]
