@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794953731045,
+  "lastUpdate": 1794964152295,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -861,6 +861,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/64KB",
             "value": 15443.97,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6428a5a8d9d398d186d523d5807dded8a95ccc7d",
+          "message": "feat(platform): add io_uring raw device writer for Linux (#41)\n\nPort d33a3f6 from feature/io-uring onto main. That branch shares no\nhistory with main, so the work is recreated here instead of merged.\n\nengraver-platform gains an `io_uring` feature that exports\nIoUringDevice, BatchWriteResult, is_io_uring_available and\nis_kernel_supported, plus a PlatformError::IoUringError variant. It\nuses io-uring 0.7.16, which declares rust-version 1.63.\n\nAdapted to main:\n- The BLKGETSIZE64 request has type libc::Ioctl, as in linux.rs. The\n  original c_ulong does not build on musl, where ioctl takes a c_int.\n- O_DIRECT comes from libc. The hard-coded 0o40000 is O_DIRECTORY on\n  aarch64.\n- write_at returns its count through bytes_consumed_from_aligned_write.\n  The original always returned data.len(), even after a short write.\n- sync calls File::sync_all, and the size fallback seeks with std. Two\n  unsafe blocks go away.\n\nDropped:\n- The engraver-core and engraver-cli `io_uring` features and the core\n  dependency on engraver-platform. Neither crate calls the io_uring code,\n  and CI already builds it with --all-features.\n- The \"Parallel verification\" TODO item. Main already lists it as done.\n\nSoundness findings. A submission entry holds a raw pointer into the\nbuffer it writes. The original could return while the kernel still had\nsuch an entry:\n- write_batch returned AlignmentError after it had pushed earlier\n  entries. They stayed in the submission queue, and the next submit sent\n  them to the kernel with pointers into buffers the caller had freed. A\n  new test fails on the original because the next write carries the\n  rejected entry to disk.\n- Each `?` after a push or submit_and_wait returned with entries queued\n  or in flight.\n- submit_and_wait(1) returns Ok with no completion when a signal\n  interrupts the wait. It also returns at once if an earlier call left a\n  completion behind. write_at could then take the wrong completion, or\n  none, and return while its own write was still in flight.\n- write_batch reaped by spinning on the completion queue without\n  entering the kernel. Once the 128-entry completion queue is full, the\n  kernel parks further completions in an overflow list that only a\n  kernel entry flushes, so the loop can spin forever. On Linux 7.0,\n  batches of 160 to 320 writes hung the original in every run. Batches\n  of 128 and 129 passed.\n\nThe fix routes every write through one function, submit_all. It keeps\nat most 64 entries pending, so the completion queue cannot overflow. It\nretries EINTR, EAGAIN and EBUSY, and it returns only after it reaps a\ncompletion for every entry it pushed. Any other io_uring_enter error\nmeans the ring is broken while the kernel may still read the buffers, so\nit aborts instead of returning. write_batch checks every offset before\nit queues anything.\nA guard aborts if a panic unwinds out of submit_all, so the no-unwind\nrequirement does not rest on review.\n\nAlignedBuffer was sound, because its slicing is bounds checked. The\nioctl was sound, because it writes one u64 into a u64.\n\nOther fixes:\n- Write::write never advanced the file position, so each write\n  overwrote the one before it.\n- write_at under direct I/O panicked on data longer than two blocks. The\n  aligned buffer now grows to fit.\n- write_batch counted short writes as complete. They now fail the batch.\n- open rejects a block size that is not a power of two under direct I/O.\n\nThe new tests run the real io_uring path against temp files. They skip\nwith a message when the host has no io_uring.",
+          "timestamp": "2026-11-17T20:03:55-05:00",
+          "tree_id": "813d29ce78bd81c8bb478303f4861dd1abc3334e",
+          "url": "https://github.com/mstephenholl/engraver/commit/6428a5a8d9d398d186d523d5807dded8a95ccc7d"
+        },
+        "date": 1794964151705,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 83.8,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 45806.26,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1323.53,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 15065.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 1076.38,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 47150.69,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 14229.24,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 42094.59,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 29.02,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 42924.96,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 462.84,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 6483.17,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 30.97,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 42817.04,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 494.71,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 6903.07,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 106.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1524.2,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 12758.13,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 79.7,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 84.3,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 86.4,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 83.55,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 84.54,
             "unit": "iter/sec"
           }
         ]
