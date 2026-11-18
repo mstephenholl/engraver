@@ -2,7 +2,7 @@
 
 Planned features, improvements, and development roadmap for Engraver.
 
-**Last updated**: 2026-03-10
+**Last updated**: 2026-11-18
 
 ---
 
@@ -100,14 +100,14 @@ Planned features, improvements, and development roadmap for Engraver.
 - [x] **Dependabot configuration** - `.github/dependabot.yml` created
 - [x] **cargo-audit in CI** - Security vulnerability scanning active
 
-- [x] **Code coverage with Codecov** - tarpaulin + codecov.io integration
-- [x] **MSRV validation job** - Testing against Rust 1.87
+- [x] **Code coverage with Codecov** - cargo-llvm-cov + codecov.io integration, 75% line gate
+- [x] **MSRV validation job** - Testing against Rust 1.89
 - [x] **cargo-deny for license compliance** - `deny.toml` created with license allowlist
 
 ### High Priority
 
 - [x] **Add sanitizer testing to CI**
-  - ASAN/MSAN jobs for engraver-platform unsafe code
+  - ASAN job for engraver-platform unsafe code
   - Catches memory safety issues
 
 - [x] **Add supply chain security**
@@ -165,7 +165,7 @@ Planned features, improvements, and development roadmap for Engraver.
 - [x] **Audit and remediate unmaintained dependencies**
   - Advisory-db ignore list is empty — no ignored advisories
   - `cargo deny check advisories` passes clean
-  - Only duplicate deps: `getrandom` 0.2/0.3 (ring), `windows-sys` 0.60/0.61 — both in `skip`
+  - Known duplicate deps are listed, each with its reason, in `deny.toml`'s `skip`
   - Periodic review should continue as part of CI (cargo-deny runs in CI pipeline)
 
 ---
@@ -216,11 +216,10 @@ Planned features, improvements, and development roadmap for Engraver.
 - [ ] **Windows-specific optimizations**
   - [ ] `get_block_size()` — query actual device sector size via `IOCTL_DISK_GET_DRIVE_GEOMETRY`
     - Currently hardcoded to 512 bytes; important for 4Kn Advanced Format drives
-  - [ ] `sync_all()` — implement device-level flush via `FlushFileBuffers`
-    - Currently a no-op; ensures data is committed to physical media before safe eject
+    - Nothing calls `get_block_size()` yet on any platform, so this matters only once a caller does
   - [ ] Drive detection — populate `vendor` field from WMI `Win32_DiskDrive.Manufacturer`
     - Currently always `None`; helps distinguish identically-sized drives in `engraver list`
-- [ ] **macOS-specific optimizations**
+- [x] **macOS-specific optimizations**
   - [x] `get_block_size()` — use `DKIOCGETBLOCKSIZE` ioctl instead of `diskutil` output parsing
     - Implemented with direct ioctl; falls back to 512 if ioctl fails
   - [x] `sync()` — use `F_FULLFSYNC` instead of `fsync` for guaranteed physical media flush
@@ -235,7 +234,7 @@ Planned features, improvements, and development roadmap for Engraver.
 ## Testing
 
 - [x] **CLI unit tests** - Comprehensive test coverage across all crates
-  - 782+ unit tests across the codebase (based on `#[test]` count)
+  - About 700 unit tests and 250 integration tests (based on `#[test]` count)
   - Integration tests in cli, core, detect, and platform crates
   - Added tests for list.rs, benchmark.rs, checksum.rs utility functions
 
