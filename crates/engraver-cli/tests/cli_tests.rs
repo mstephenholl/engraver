@@ -579,6 +579,61 @@ fn test_verify_missing_target() {
 }
 
 // ============================================================================
+// Block Size Validation Tests
+// ============================================================================
+//
+// A block size that is not a power of 2 breaks the alignment arithmetic used by
+// direct I/O, so write, erase and verify must reject it before doing any work.
+
+#[test]
+fn test_write_block_size_not_power_of_2() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.iso");
+    fs::write(&test_file, "test").unwrap();
+
+    engraver()
+        .args([
+            "write",
+            test_file.to_str().unwrap(),
+            "/dev/nonexistent",
+            "--block-size",
+            "3M",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be a power of 2"));
+}
+
+#[test]
+fn test_erase_block_size_not_power_of_2() {
+    engraver()
+        .args(["erase", "/dev/nonexistent", "--block-size", "3M", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be a power of 2"));
+}
+
+#[test]
+fn test_verify_block_size_not_power_of_2() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("test.iso");
+    fs::write(&test_file, "test").unwrap();
+
+    engraver()
+        .args([
+            "verify",
+            test_file.to_str().unwrap(),
+            "/dev/nonexistent",
+            "--block-size",
+            "3M",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must be a power of 2"));
+}
+
+// ============================================================================
 // Invalid Subcommand Tests
 // ============================================================================
 
