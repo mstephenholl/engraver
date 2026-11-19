@@ -51,9 +51,9 @@ pub mod writer;
 
 pub use benchmark::{
     format_duration as benchmark_format_duration, format_size,
-    format_speed as benchmark_format_speed, is_power_of_two, parse_block_sizes, parse_size,
-    BenchmarkConfig, BenchmarkError, BenchmarkProgress, BenchmarkResult, BenchmarkRunner,
-    BenchmarkSummary, BlockSizeTestResult, DataPattern, PassResult,
+    format_speed as benchmark_format_speed, is_power_of_two, parse_block_size, parse_block_sizes,
+    parse_size, BenchmarkConfig, BenchmarkError, BenchmarkProgress, BenchmarkResult,
+    BenchmarkRunner, BenchmarkSummary, BlockSizeTestResult, DataPattern, PassResult,
 };
 pub use config::Config;
 pub use error::{Error, Result};
