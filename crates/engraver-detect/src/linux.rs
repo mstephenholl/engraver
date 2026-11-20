@@ -1,6 +1,7 @@
 //! Linux drive detection implementation
 //!
-//! Uses /sys/block for device enumeration and /proc/mounts for mount point detection.
+//! Uses /sys/block for device enumeration and for the device-mapper and md devices stacked
+//! on a disk (`holders/`), and /proc/mounts for mount point detection.
 
 use super::{is_system_mount_point, DetectError, Drive, DriveType, Partition, Result, UsbSpeed};
 use std::collections::HashMap;
@@ -13,6 +14,19 @@ use tracing::{debug, trace, warn};
 pub(crate) struct MountInfo {
     pub mount_point: String,
     pub filesystem: Option<String>,
+}
+
+/// A device-mapper or md device stacked on a disk or one of its partitions
+///
+/// `LUKS`, `LVM` and software RAID mount their filesystems from `/dev/mapper/*`,
+/// `/dev/dm-N` or `/dev/mdN`, so no mount entry names the underlying partition.
+/// The kernel records the stacking in sysfs `holders/` directories instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Holder {
+    /// The held block device: the disk itself or one of its partitions, such as `sda2`
+    pub held: String,
+    /// The device stacked on it, such as `dm-0` or `md0`
+    pub by: String,
 }
 
 /// List all drives on Linux
@@ -118,7 +132,10 @@ fn parse_block_device(
         .filter_map(|p| p.mount_point.clone())
         .collect();
 
-    let (is_system, system_reason) = check_if_system_drive(name, &mount_points, removable);
+    let holders = read_holders(Path::new(&sys_path), name);
+
+    let (is_system, system_reason) =
+        check_if_system_drive(name, &mount_points, &holders, removable);
 
     // Detect USB speed for USB drives
     let usb_speed = if drive_type == DriveType::Usb {
@@ -265,6 +282,54 @@ fn decode_label(label: &str) -> String {
     result
 }
 
+/// Check whether a `/sys/block/<disk>` entry is one of the disk's partitions
+///
+/// Partitions are the entries named after the disk, such as `sda1` or `nvme0n1p2`.
+fn is_partition_entry(device_name: &str, entry_name: &str) -> bool {
+    entry_name.starts_with(device_name) && entry_name != device_name
+}
+
+/// List the entry names in a sysfs directory, sorted. A missing directory is empty.
+fn sorted_entry_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// Read the device-mapper and md devices stacked on a disk or any of its partitions
+///
+/// `sys_path` is the disk's sysfs node, such as `/sys/block/sda`. A device stacked
+/// on the whole disk is listed under `<disk>/holders/`, and one stacked on a
+/// partition under `<disk>/<partition>/holders/`. The disk comes first, then its
+/// partitions by name. A node with no `holders/` directory holds nothing.
+pub(crate) fn read_holders(sys_path: &Path, device_name: &str) -> Vec<Holder> {
+    let mut nodes = vec![(device_name.to_string(), sys_path.to_path_buf())];
+    for name in sorted_entry_names(sys_path) {
+        if is_partition_entry(device_name, &name) {
+            let dir = sys_path.join(&name);
+            nodes.push((name, dir));
+        }
+    }
+
+    let mut holders = Vec::new();
+    for (held, dir) in nodes {
+        for by in sorted_entry_names(&dir.join("holders")) {
+            holders.push(Holder {
+                held: held.clone(),
+                by,
+            });
+        }
+    }
+    holders
+}
+
 /// Get partitions for a device
 fn get_partitions(
     device_name: &str,
@@ -280,7 +345,7 @@ fn get_partitions(
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if name.starts_with(device_name) && name != device_name {
+            if is_partition_entry(device_name, &name) {
                 let part_path = format!("/dev/{name}");
                 let part_sys_path = format!("{sys_path}/{name}");
 
@@ -359,9 +424,13 @@ pub(crate) fn detect_drive_type(name: &str, sys_path: &str) -> DriveType {
 }
 
 /// Check if a drive is a system drive
+///
+/// Checks run from the most specific reason to the most general one: a system
+/// mount point, a stacked device-mapper or md device, then the non-removable rule.
 pub(crate) fn check_if_system_drive(
     name: &str,
     mount_points: &[String],
+    holders: &[Holder],
     removable: bool,
 ) -> (bool, Option<String>) {
     // Check mount points for system paths
@@ -369,6 +438,19 @@ pub(crate) fn check_if_system_drive(
         if is_system_mount_point(mp) {
             return (true, Some(format!("Contains system mount point: {mp}")));
         }
+    }
+
+    // A filesystem on LUKS, LVM or md is mounted from the stacked device, not from
+    // the partition, so the mount check above cannot see it. Writing under an open
+    // device-mapper or md device is unsafe whether it holds `/` or data.
+    if let Some(Holder { held, by }) = holders.first() {
+        let kind = if held == name { "Disk" } else { "Partition" };
+        return (
+            true,
+            Some(format!(
+                "{kind} {held} is in use by {by} (device-mapper or md, such as LUKS or LVM)"
+            )),
+        );
     }
 
     // Non-removable drives are likely system drives
@@ -704,34 +786,35 @@ mod tests {
 
     #[test]
     fn test_check_if_system_drive_root() {
-        let (is_system, reason) = check_if_system_drive("sda", &["/".to_string()], false);
+        let (is_system, reason) = check_if_system_drive("sda", &["/".to_string()], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("system mount point"));
     }
 
     #[test]
     fn test_check_if_system_drive_home() {
-        let (is_system, reason) = check_if_system_drive("sda", &["/home".to_string()], false);
+        let (is_system, reason) = check_if_system_drive("sda", &["/home".to_string()], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("/home"));
     }
 
     #[test]
     fn test_check_if_system_drive_boot() {
-        let (is_system, _reason) = check_if_system_drive("sda", &["/boot".to_string()], false);
+        let (is_system, _reason) = check_if_system_drive("sda", &["/boot".to_string()], &[], false);
         assert!(is_system);
     }
 
     #[test]
     fn test_check_if_system_drive_non_removable() {
-        let (is_system, reason) = check_if_system_drive("sda", &[], false);
+        let (is_system, reason) = check_if_system_drive("sda", &[], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("Non-removable"));
     }
 
     #[test]
     fn test_check_if_system_drive_removable_no_system_mounts() {
-        let (is_system, reason) = check_if_system_drive("sdb", &["/mnt/usb".to_string()], true);
+        let (is_system, reason) =
+            check_if_system_drive("sdb", &["/mnt/usb".to_string()], &[], true);
         assert!(!is_system);
         assert!(reason.is_none());
     }
@@ -739,7 +822,7 @@ mod tests {
     #[test]
     fn test_check_if_system_drive_nvme_non_removable_allowed() {
         // External NVMe drives report as non-removable but aren't system drives
-        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], false);
+        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], &[], false);
         assert!(!is_system);
         assert!(reason.is_none());
     }
@@ -750,8 +833,169 @@ mod tests {
             "/media/user/USB".to_string(),
             "/run/media/user/disk".to_string(),
         ];
-        let (is_system, _) = check_if_system_drive("sdc", &mount_points, true);
+        let (is_system, _) = check_if_system_drive("sdc", &mount_points, &[], true);
         assert!(!is_system);
+    }
+
+    #[test]
+    fn test_check_if_system_drive_held_partition_on_removable_disk() {
+        // A USB SSD whose root is on LUKS or LVM: no mount names the partition
+        let holders = [Holder {
+            held: "sda2".to_string(),
+            by: "dm-0".to_string(),
+        }];
+        let (is_system, reason) = check_if_system_drive("sda", &[], &holders, true);
+        assert!(is_system);
+        assert_eq!(
+            reason.unwrap(),
+            "Partition sda2 is in use by dm-0 (device-mapper or md, such as LUKS or LVM)"
+        );
+    }
+
+    #[test]
+    fn test_check_if_system_drive_held_whole_disk() {
+        let holders = [Holder {
+            held: "sdb".to_string(),
+            by: "md0".to_string(),
+        }];
+        let (is_system, reason) = check_if_system_drive("sdb", &[], &holders, true);
+        assert!(is_system);
+        let reason = reason.unwrap();
+        assert!(reason.starts_with("Disk sdb "), "{reason}");
+        assert!(reason.contains("md0"), "{reason}");
+    }
+
+    #[test]
+    fn test_check_if_system_drive_held_nvme_without_mounts() {
+        // The non-removable rule exempts external NVMe drives, the holders rule must not
+        let holders = [Holder {
+            held: "nvme1n1p1".to_string(),
+            by: "dm-0".to_string(),
+        }];
+        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], &holders, false);
+        assert!(is_system);
+        assert!(reason.unwrap().contains("nvme1n1p1"));
+    }
+
+    #[test]
+    fn test_check_if_system_drive_no_holders_unchanged() {
+        let (is_system, reason) = check_if_system_drive("sdb", &[], &[], true);
+        assert!(!is_system);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn test_check_if_system_drive_system_mount_wins_over_holders() {
+        let holders = [Holder {
+            held: "sda2".to_string(),
+            by: "dm-0".to_string(),
+        }];
+        let (is_system, reason) =
+            check_if_system_drive("sda", &["/boot".to_string()], &holders, true);
+        assert!(is_system);
+        let reason = reason.unwrap();
+        assert!(reason.contains("system mount point"), "{reason}");
+        assert!(!reason.contains("dm-0"), "{reason}");
+    }
+
+    #[test]
+    fn test_check_if_system_drive_holders_win_over_non_removable() {
+        let holders = [Holder {
+            held: "sda2".to_string(),
+            by: "dm-0".to_string(),
+        }];
+        let (_, reason) = check_if_system_drive("sda", &[], &holders, false);
+        assert!(reason.unwrap().contains("dm-0"));
+    }
+
+    // -------------------------------------------------------------------------
+    // read_holders tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_read_holders_finds_device_stacked_on_partition() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/sda");
+        fs::create_dir_all(disk.join("sda1/holders")).unwrap();
+        fs::create_dir_all(disk.join("sda2/holders/dm-0")).unwrap();
+        fs::create_dir_all(disk.join("holders")).unwrap();
+
+        assert_eq!(
+            read_holders(&disk, "sda"),
+            vec![Holder {
+                held: "sda2".to_string(),
+                by: "dm-0".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_read_holders_finds_device_stacked_on_whole_disk() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/sdb");
+        fs::create_dir_all(disk.join("holders/md0")).unwrap();
+
+        assert_eq!(
+            read_holders(&disk, "sdb"),
+            vec![Holder {
+                held: "sdb".to_string(),
+                by: "md0".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_read_holders_reads_nvme_partitions() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/nvme0n1");
+        fs::create_dir_all(disk.join("nvme0n1p3/holders/dm-1")).unwrap();
+
+        assert_eq!(
+            read_holders(&disk, "nvme0n1"),
+            vec![Holder {
+                held: "nvme0n1p3".to_string(),
+                by: "dm-1".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_read_holders_empty_when_nothing_is_stacked() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/sda");
+        fs::create_dir_all(disk.join("sda1/holders")).unwrap();
+        fs::create_dir_all(disk.join("sda2")).unwrap();
+
+        assert_eq!(read_holders(&disk, "sda"), Vec::<Holder>::new());
+    }
+
+    #[test]
+    fn test_read_holders_missing_disk_is_empty() {
+        let root = TempDir::new().unwrap();
+
+        assert_eq!(
+            read_holders(&root.path().join("block/sdz"), "sdz"),
+            Vec::<Holder>::new()
+        );
+    }
+
+    #[test]
+    fn test_read_holders_orders_disk_before_partitions() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/sda");
+        fs::create_dir_all(disk.join("sda2/holders/dm-1")).unwrap();
+        fs::create_dir_all(disk.join("sda1/holders/dm-0")).unwrap();
+        fs::create_dir_all(disk.join("holders/md0")).unwrap();
+
+        let held: Vec<(String, String)> = read_holders(&disk, "sda")
+            .into_iter()
+            .map(|h| (h.held, h.by))
+            .collect();
+        assert_eq!(
+            held,
+            [("sda", "md0"), ("sda1", "dm-0"), ("sda2", "dm-1")]
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        );
     }
 
     // -------------------------------------------------------------------------
