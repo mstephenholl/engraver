@@ -5,7 +5,7 @@
 use super::{is_system_mount_point, DetectError, Drive, DriveType, Partition, Result, UsbSpeed};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{debug, trace, warn};
 
 /// Mount information for a device
@@ -93,8 +93,6 @@ fn parse_block_device(
         return None;
     }
 
-    let removable = read_sys_value(&format!("{sys_path}/removable")).is_ok_and(|s| s.trim() == "1");
-
     let vendor = read_sys_value(&format!("{sys_path}/device/vendor"))
         .ok()
         .map(|s| s.trim().to_string())
@@ -106,6 +104,13 @@ fn parse_block_device(
         .filter(|s| !s.is_empty());
 
     let drive_type = detect_drive_type(name, &sys_path);
+
+    // Many USB bridges report `removable` as 0 for fixed media such as USB SSDs.
+    // A USB-attached disk is external, so count it as removable. This matches
+    // macOS (ejectable) and Windows (external media).
+    let removable = drive_type == DriveType::Usb
+        || read_sys_value(&format!("{sys_path}/removable")).is_ok_and(|s| s.trim() == "1");
+
     let partitions = get_partitions(name, mount_map, label_map);
 
     let mount_points: Vec<String> = partitions
@@ -327,13 +332,16 @@ pub(crate) fn detect_drive_type(name: &str, sys_path: &str) -> DriveType {
         return DriveType::SdCard;
     }
 
-    // Check USB via device subsystem
+    // USB disks reach the block layer through SCSI (usb-storage and uas), so the
+    // disk's own subsystem is `scsi`. The `usb` bus only shows up further up.
+    if is_usb_attached(sys_path) {
+        return DriveType::Usb;
+    }
+
+    // Check the device's own subsystem
     if let Ok(subsystem_link) = fs::read_link(format!("{sys_path}/device/subsystem")) {
         if let Some(subsystem_name) = subsystem_link.file_name() {
             let sub = subsystem_name.to_string_lossy();
-            if sub == "usb" || sub == "usb-storage" {
-                return DriveType::Usb;
-            }
             if sub == "ata" || sub == "scsi" {
                 return DriveType::Sata;
             }
@@ -372,6 +380,32 @@ pub(crate) fn check_if_system_drive(
     (false, None)
 }
 
+/// Walk up the sysfs device tree from a block device, nearest ancestor first
+///
+/// Starts at the canonicalized `{sys_path}/device` node and stops at `/sys` or
+/// `/`, or after 15 levels so a malformed tree cannot loop. Yields nothing if
+/// the device link cannot be resolved.
+fn device_ancestors(sys_path: &str) -> impl Iterator<Item = PathBuf> {
+    let device = Path::new(sys_path).join("device").canonicalize().ok();
+    std::iter::successors(device, |dir| {
+        dir.parent()
+            .filter(|parent| *parent != Path::new("/sys") && *parent != Path::new("/"))
+            .map(Path::to_path_buf)
+    })
+    .take(15)
+}
+
+/// Check whether a block device hangs off the USB bus
+///
+/// USB disks reach the block layer through SCSI, so the `usb` subsystem is
+/// only found on an ancestor of the device node.
+fn is_usb_attached(sys_path: &str) -> bool {
+    device_ancestors(sys_path).any(|dir| {
+        fs::read_link(dir.join("subsystem"))
+            .is_ok_and(|link| link.file_name().is_some_and(|subsystem| subsystem == "usb"))
+    })
+}
+
 /// Detect USB connection speed for a block device
 ///
 /// Traverses the sysfs device hierarchy upward from the block device
@@ -379,43 +413,21 @@ pub(crate) fn check_if_system_drive(
 ///
 /// Returns `None` for non-USB devices or if speed cannot be determined.
 pub(crate) fn detect_usb_speed(sys_path: &str) -> Option<UsbSpeed> {
-    // Get the real device path by following the device symlink
-    let device_link = format!("{sys_path}/device");
-    let device_path = fs::read_link(&device_link).ok()?;
-
-    // Resolve to absolute path
-    let sys_block = Path::new(sys_path);
-    let absolute_device = sys_block.join(&device_path).canonicalize().ok()?;
-
-    // Walk up the directory tree looking for a USB speed file
     // USB devices have a "speed" file containing the connection speed in Mbps
-    let mut current = absolute_device.as_path();
-
-    // Limit traversal depth to avoid infinite loops
-    for _ in 0..15 {
-        let speed_file = current.join("speed");
-        if speed_file.exists() {
-            if let Ok(speed_str) = fs::read_to_string(&speed_file) {
-                match speed_str.trim().parse::<u32>() {
-                    Ok(mbps) => return Some(UsbSpeed::from_mbps(mbps)),
-                    Err(e) => trace!(
-                        "Failed to parse USB speed from {}: {e}",
-                        speed_file.display()
-                    ),
-                }
+    device_ancestors(sys_path).find_map(|dir| {
+        let speed_file = dir.join("speed");
+        let speed_str = fs::read_to_string(&speed_file).ok()?;
+        match speed_str.trim().parse::<u32>() {
+            Ok(mbps) => Some(UsbSpeed::from_mbps(mbps)),
+            Err(e) => {
+                trace!(
+                    "Failed to parse USB speed from {}: {e}",
+                    speed_file.display()
+                );
+                None
             }
         }
-
-        // Move up one directory
-        match current.parent() {
-            Some(parent) if parent != Path::new("/sys") && parent != Path::new("/") => {
-                current = parent;
-            }
-            _ => break,
-        }
-    }
-
-    None
+    })
 }
 
 /// Read a value from sysfs
@@ -671,7 +683,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fails until detect_drive_type looks for a usb bus in the device ancestry"]
     fn test_detect_drive_type_usb_disk_behind_scsi() {
         let root = TempDir::new().unwrap();
         let sys_path = usb_attached_disk(root.path());
