@@ -63,6 +63,55 @@ pub const MIN_BLOCK_SIZE: usize = 4 * 1024;
 /// Maximum block size (64 MB)
 pub const MAX_BLOCK_SIZE: usize = 64 * 1024 * 1024;
 
+/// Alignment of the chunk buffer the Writer hands to its target.
+///
+/// A direct-I/O device skips its bounce-buffer copy only when a buffer's
+/// address and length are both multiples of the device alignment. The CLI
+/// leaves that alignment at the platform default of 4096, so a chunk of any
+/// 4096-multiple size can go straight to the device from a buffer that
+/// starts on this boundary.
+const CHUNK_BUFFER_ALIGNMENT: usize = 4096;
+
+/// A zeroed buffer of `len` bytes that starts on a [`CHUNK_BUFFER_ALIGNMENT`]
+/// boundary.
+///
+/// The allocator only guarantees 16-byte alignment, and places large
+/// allocations 16 bytes past a page boundary, so this over-allocates by one
+/// alignment unit and exposes the slice that starts at the first aligned
+/// address. The heap block never moves, so the offset stays valid.
+struct AlignedBuf {
+    backing: Vec<u8>,
+    start: usize,
+    len: usize,
+}
+
+impl AlignedBuf {
+    fn new(len: usize) -> Self {
+        let backing = vec![0u8; len + CHUNK_BUFFER_ALIGNMENT];
+        let misalignment = backing.as_ptr() as usize % CHUNK_BUFFER_ALIGNMENT;
+        let start = (CHUNK_BUFFER_ALIGNMENT - misalignment) % CHUNK_BUFFER_ALIGNMENT;
+        Self {
+            backing,
+            start,
+            len,
+        }
+    }
+}
+
+impl std::ops::Deref for AlignedBuf {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.backing[self.start..self.start + self.len]
+    }
+}
+
+impl std::ops::DerefMut for AlignedBuf {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        &mut self.backing[self.start..self.start + self.len]
+    }
+}
+
 /// Phase of the write operation (used for progress reporting)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -458,7 +507,7 @@ impl Writer {
         };
 
         let block_size = self.config.block_size;
-        let mut buffer = vec![0u8; block_size];
+        let mut buffer = AlignedBuf::new(block_size);
         let mut bytes_read_total = 0u64;
 
         // Progress tracking for verification phase
@@ -520,7 +569,7 @@ impl Writer {
         let start_time = Instant::now();
         let block_size = self.config.block_size;
 
-        let mut buffer = vec![0u8; block_size];
+        let mut buffer = AlignedBuf::new(block_size);
         let mut progress = WriteProgress::new(source_size, block_size);
         let mut speed_tracker = SpeedTracker::new();
 
@@ -639,7 +688,7 @@ impl Writer {
         let start_time = Instant::now();
         let block_size = self.config.block_size;
 
-        let mut buffer = vec![0u8; block_size];
+        let mut buffer = AlignedBuf::new(block_size);
         let mut progress = WriteProgress::new(source_size, block_size);
         let mut speed_tracker = SpeedTracker::new();
 
@@ -2100,7 +2149,6 @@ mod tests {
     // CLI leaves at the 4096-byte default. The Writer owns the chunk buffer,
     // so it has to start every full chunk on that boundary.
     #[test]
-    #[ignore = "fails until the Writer aligns its chunk buffer"]
     fn test_writer_full_chunks_start_on_4096_byte_boundary() {
         const DIRECT_IO_ALIGNMENT: usize = 4096;
         // Large enough that the allocator maps it, which puts a plain `Vec`
