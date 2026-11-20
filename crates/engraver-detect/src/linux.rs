@@ -432,6 +432,83 @@ fn read_sys_value(path: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
+    use tempfile::TempDir;
+
+    // -------------------------------------------------------------------------
+    // Fake sysfs fixtures
+    // -------------------------------------------------------------------------
+
+    /// Create `dir` and point its `subsystem` link at `<root>/bus/<bus>`, as sysfs does.
+    fn add_node(root: &Path, dir: &Path, bus: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::create_dir_all(root.join("bus").join(bus)).unwrap();
+        symlink(root.join("bus").join(bus), dir.join("subsystem")).unwrap();
+    }
+
+    /// Expose a SCSI device's block node as `<root>/block/<name>` and return that path.
+    ///
+    /// Laid out like real sysfs: the block node lives under the SCSI device,
+    /// its `device` link is relative, and `/sys/block/<name>` is a symlink to it.
+    fn add_block_disk(root: &Path, name: &str, scsi_dev: &Path) -> String {
+        let node = scsi_dev.join("block").join(name);
+        fs::create_dir_all(&node).unwrap();
+        let scsi_name = scsi_dev.file_name().unwrap().to_str().unwrap();
+        symlink(format!("../../../{scsi_name}"), node.join("device")).unwrap();
+
+        fs::create_dir_all(root.join("block")).unwrap();
+        let link = root.join("block").join(name);
+        symlink(&node, &link).unwrap();
+        link.to_str().unwrap().to_string()
+    }
+
+    /// A disk behind a UAS bridge, with the ancestry of a real USB SSD enclosure.
+    ///
+    /// The disk's own subsystem is `scsi`. The `usb` bus only appears further up.
+    fn usb_attached_disk(root: &Path) -> String {
+        let pci = root.join("devices/pci0000:00/0000:00:0d.0");
+        let usb_root_hub = pci.join("usb2");
+        let usb_device = usb_root_hub.join("2-3");
+        let usb_interface = usb_device.join("2-3:1.0");
+        let host = usb_interface.join("host0");
+        let target = host.join("target0:0:0");
+        let scsi_dev = target.join("0:0:0:0");
+
+        for (dir, bus) in [
+            (&pci, "pci"),
+            (&usb_root_hub, "usb"),
+            (&usb_device, "usb"),
+            (&usb_interface, "usb"),
+            (&host, "scsi"),
+            (&target, "scsi"),
+            (&scsi_dev, "scsi"),
+        ] {
+            add_node(root, dir, bus);
+        }
+        fs::write(usb_root_hub.join("speed"), "20000\n").unwrap();
+        fs::write(usb_device.join("speed"), "10000\n").unwrap();
+
+        add_block_disk(root, "sda", &scsi_dev)
+    }
+
+    /// A disk on an internal SATA controller: `scsi` all the way up to the PCI device.
+    fn sata_attached_disk(root: &Path) -> String {
+        let pci = root.join("devices/pci0000:00/0000:00:17.0");
+        let host = pci.join("ata1/host0");
+        let target = host.join("target0:0:0");
+        let scsi_dev = target.join("0:0:0:0");
+
+        for (dir, bus) in [
+            (&pci, "pci"),
+            (&host, "scsi"),
+            (&target, "scsi"),
+            (&scsi_dev, "scsi"),
+        ] {
+            add_node(root, dir, bus);
+        }
+
+        add_block_disk(root, "sda", &scsi_dev)
+    }
 
     // -------------------------------------------------------------------------
     // should_skip_device tests
@@ -593,6 +670,23 @@ mod tests {
         assert_eq!(detect_drive_type("sda", "/nonexistent"), DriveType::Other);
     }
 
+    #[test]
+    #[ignore = "fails until detect_drive_type looks for a usb bus in the device ancestry"]
+    fn test_detect_drive_type_usb_disk_behind_scsi() {
+        let root = TempDir::new().unwrap();
+        let sys_path = usb_attached_disk(root.path());
+
+        assert_eq!(detect_drive_type("sda", &sys_path), DriveType::Usb);
+    }
+
+    #[test]
+    fn test_detect_drive_type_sata_without_usb_ancestor() {
+        let root = TempDir::new().unwrap();
+        let sys_path = sata_attached_disk(root.path());
+
+        assert_eq!(detect_drive_type("sda", &sys_path), DriveType::Sata);
+    }
+
     // -------------------------------------------------------------------------
     // check_if_system_drive tests
     // -------------------------------------------------------------------------
@@ -733,5 +827,14 @@ mod tests {
     fn test_detect_usb_speed_nonexistent() {
         // Non-existent path should return None
         assert!(detect_usb_speed("/sys/block/nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_detect_usb_speed_uses_nearest_usb_device() {
+        // The enclosure negotiated 10 Gbps. Its root hub advertises 20 Gbps.
+        let root = TempDir::new().unwrap();
+        let sys_path = usb_attached_disk(root.path());
+
+        assert_eq!(detect_usb_speed(&sys_path), Some(UsbSpeed::SuperSpeedPlus));
     }
 }
