@@ -54,8 +54,8 @@ impl SourceHasher {
     }
 }
 
-/// Default block size for write operations (4 MB)
-pub const DEFAULT_BLOCK_SIZE: usize = 4 * 1024 * 1024;
+/// Default block size for write operations (32 MB)
+pub const DEFAULT_BLOCK_SIZE: usize = 32 * 1024 * 1024;
 
 /// Minimum block size (4 KB)
 pub const MIN_BLOCK_SIZE: usize = 4 * 1024;

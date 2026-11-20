@@ -147,7 +147,7 @@ for partition in &info.partitions {
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `block_size` | 4 MB | Size of read/write blocks |
+| `block_size` | 32 MB | Size of read/write blocks |
 | `sync_each_block` | false | fsync after each block |
 | `sync_on_complete` | true | fsync when write completes |
 | `retry_attempts` | 3 | Number of retry attempts |

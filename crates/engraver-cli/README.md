@@ -115,7 +115,7 @@ engraver checksum ubuntu.iso --algorithm crc32
 ### Benchmark Drive Performance
 
 ```bash
-# Basic benchmark (256 MB test, 4 MB blocks)
+# Basic benchmark (32 MB blocks, 320 MB test: at least 10 blocks per pass)
 engraver benchmark /dev/sdb
 
 # Custom test size and pattern
@@ -139,7 +139,7 @@ engraver benchmark /dev/sdb -y
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--size` | Amount of data to write | `256M` |
-| `--block-size` | Block size for writes | `4M` |
+| `--block-size` | Block size for writes | `32M` |
 | `--pattern` | Data pattern: `zeros`, `random`, `sequential` | `zeros` |
 | `--passes` | Number of benchmark passes | `1` |
 | `--test-block-sizes` | Test multiple block sizes (comma-separated) | - |
@@ -200,7 +200,7 @@ Engraver supports a configuration file at `~/.config/engraver/engraver_config.to
 
 ```toml
 [write]
-block_size = "4M"     # Default block size
+block_size = "32M"    # Default block size
 verify = true         # Always verify writes
 checkpoint = false    # Enable checkpointing
 
