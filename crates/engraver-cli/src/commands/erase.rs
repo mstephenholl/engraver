@@ -189,10 +189,7 @@ pub fn execute(args: EraseArgs) -> Result<()> {
     );
 
     let device_path = get_raw_device_path(&target_drive.path);
-    let options = OpenOptions::new()
-        .write(true)
-        .direct_io(true)
-        .block_size(block_size);
+    let options = OpenOptions::new().write(true).direct_io(true);
 
     let mut target = open_device(&device_path, options)
         .with_context(|| format!("Failed to open device: {}", device_path))?;

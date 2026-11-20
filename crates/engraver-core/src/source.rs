@@ -38,15 +38,14 @@ use std::sync::Arc;
 
 /// Default read buffer size in bytes.
 ///
-/// Matches the writer's default block size (4 MB) on purpose: when a
-/// compression decoder wraps `LocalFileSource`, the decoder issues
-/// reads in its own internal chunk size (~32 KB for gzip, ~16 KB for
-/// zstd) against this buffer. If the buffer is smaller than the
-/// writer's block size, each decoder fill drains the buffer often and
-/// the OS sees a `read()` syscall every few iterations; matching the
-/// block size amortises the syscall cost across the whole write
-/// block. Plain (non-compressed) sources are unaffected — `BufReader`
-/// bypasses its own buffer when the caller's read is >= capacity.
+/// Sized well above a decoder's reads on purpose: when a compression
+/// decoder wraps `LocalFileSource`, the decoder issues reads in its own
+/// internal chunk size (~32 KB for gzip, ~16 KB for zstd) against this
+/// buffer. A small buffer drains on every few decoder fills and the OS
+/// sees a `read()` syscall each time; 4 MB amortises the syscall cost
+/// across many decoder fills. Plain (non-compressed) sources are
+/// unaffected — `BufReader` bypasses its own buffer when the caller's
+/// read is >= capacity.
 pub const DEFAULT_READ_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 
 /// Default cloud chunk size in bytes (4 MB)
@@ -1940,11 +1939,11 @@ mod tests {
     }
 
     #[test]
-    fn test_local_file_source_default_buffer_capacity_matches_default_block_size() {
-        // The default read buffer should be sized so a compression
+    fn test_local_file_source_default_buffer_capacity_is_default_read_buffer_size() {
+        // The default read buffer should be large so a compression
         // decoder (which wraps this BufReader<File> and issues smaller
-        // reads internally) drains the OS read every block_size, not
-        // every 64 KB. Anything smaller multiplies syscalls.
+        // reads internally) drains the OS read once per buffer, not
+        // every 64 KB. Anything much smaller multiplies syscalls.
         let mut temp = NamedTempFile::new().unwrap();
         temp.write_all(b"contents").unwrap();
         let source = LocalFileSource::open(temp.path().to_str().unwrap()).unwrap();
@@ -1954,12 +1953,10 @@ mod tests {
             DEFAULT_READ_BUFFER_SIZE,
             "buffer should match the documented default"
         );
-        assert_eq!(
-            DEFAULT_READ_BUFFER_SIZE,
-            crate::writer::DEFAULT_BLOCK_SIZE,
-            "default read buffer must equal default write block size — \
-             keeping them aligned prevents one-syscall-per-decoder-read \
-             pathologies"
+        assert!(
+            source.buffer_capacity() >= 1024 * 1024,
+            "default read buffer must stay large enough to avoid \
+             one-syscall-per-decoder-read pathologies"
         );
     }
 

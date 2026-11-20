@@ -8,7 +8,7 @@
 //!
 //! ```toml
 //! [write]
-//! block_size = "4M"
+//! block_size = "32M"
 //! verify = true
 //! retry_attempts = 3
 //! retry_delay_ms = 100
@@ -22,7 +22,7 @@
 //! skip_confirmation = false
 //!
 //! [benchmark]
-//! block_size = "4M"
+//! block_size = "32M"
 //! test_size = "256M"
 //! pattern = "zeros"
 //! passes = 1
@@ -44,7 +44,7 @@ const CONFIG_FILE_NAME: &str = "engraver_config.toml";
 const APP_NAME: &str = "engraver";
 
 /// Default block size string
-const DEFAULT_BLOCK_SIZE_STR: &str = "4M";
+const DEFAULT_BLOCK_SIZE_STR: &str = "32M";
 
 /// Default retry attempts
 pub const DEFAULT_RETRY_ATTEMPTS: u32 = 3;
@@ -52,9 +52,9 @@ pub const DEFAULT_RETRY_ATTEMPTS: u32 = 3;
 /// Default retry delay in milliseconds
 pub const DEFAULT_RETRY_DELAY_MS: u64 = 100;
 
-/// Default read buffer size string. Matches `DEFAULT_BLOCK_SIZE_STR`
-/// so a compression-decoded source drains the kernel read in chunks
-/// the writer's block size, not 64-KB-at-a-time.
+/// Default read buffer size string. A fraction of `DEFAULT_BLOCK_SIZE_STR`,
+/// so a compression-decoded source drains the kernel read in 4 MB chunks,
+/// not 64-KB-at-a-time.
 const DEFAULT_READ_BUFFER_SIZE_STR: &str = "4M";
 
 /// Default cloud chunk size string
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let settings = Settings::default();
-        assert_eq!(settings.write.block_size, "4M");
+        assert_eq!(settings.write.block_size, "32M");
         assert!(!settings.write.verify);
         assert!(!settings.write.checkpoint);
         assert_eq!(settings.write.retry_attempts, 3);
@@ -343,7 +343,7 @@ mod tests {
         assert!(!settings.behavior.skip_confirmation);
         assert!(!settings.behavior.quiet);
         // Benchmark defaults
-        assert_eq!(settings.benchmark.block_size, "4M");
+        assert_eq!(settings.benchmark.block_size, "32M");
         assert_eq!(settings.benchmark.test_size, "256M");
         assert_eq!(settings.benchmark.pattern, "zeros");
         assert_eq!(settings.benchmark.passes, 1);
@@ -427,7 +427,7 @@ verify = true
         // Specified value should be set
         assert!(settings.write.verify);
         // Unspecified values should use defaults
-        assert_eq!(settings.write.block_size, "4M");
+        assert_eq!(settings.write.block_size, "32M");
         assert_eq!(settings.checksum.algorithm, "sha256");
     }
 
@@ -496,7 +496,7 @@ verify = true
     #[test]
     fn test_write_settings_default() {
         let write = WriteSettings::default();
-        assert_eq!(write.block_size, "4M");
+        assert_eq!(write.block_size, "32M");
         assert!(!write.verify);
         assert!(!write.checkpoint);
         assert_eq!(write.retry_attempts, 3);
@@ -514,7 +514,7 @@ verify = true
     #[test]
     fn test_benchmark_settings_default() {
         let benchmark = BenchmarkSettings::default();
-        assert_eq!(benchmark.block_size, "4M");
+        assert_eq!(benchmark.block_size, "32M");
         assert_eq!(benchmark.test_size, "256M");
         assert_eq!(benchmark.pattern, "zeros");
         assert_eq!(benchmark.passes, 1);
@@ -612,7 +612,7 @@ read_buffer_size = "128K"
         assert_eq!(settings.write.retry_delay_ms, 250);
         assert_eq!(settings.write.read_buffer_size, "128K");
         // Other values should use defaults
-        assert_eq!(settings.write.block_size, "4M");
+        assert_eq!(settings.write.block_size, "32M");
     }
 
     #[test]

@@ -88,11 +88,7 @@ pub fn execute(
 
     // Open target device for reading using platform layer
     let device_path = get_raw_device_path(target);
-    let options = OpenOptions::new()
-        .read(true)
-        .write(false)
-        .direct_io(false) // Don't need direct I/O for reading
-        .block_size(block_size);
+    let options = OpenOptions::new().read(true).write(false).direct_io(false); // Don't need direct I/O for reading
 
     let mut target_reader = open_device(&device_path, options)
         .with_context(|| format!("Failed to open device: {}", device_path))?;
