@@ -180,13 +180,14 @@ Planned features, improvements, and development roadmap for Engraver.
 
 - [x] **io_uring benchmarks**
   - The `uring_bench` example in `engraver-platform` compares sync writes with `IoUringDevice`
-  - io_uring was no faster on NVMe or tmpfs, so Writer integration is not planned
+  - io_uring was no faster on NVMe or tmpfs. On a USB SSD it was 7% faster with 4 MiB chunks, but sync writes of 32 MiB came within 1% of it
+  - Writer integration is not planned
   - Results and how to rerun them: `docs/benchmarks/io-uring.md`
   - Still to run on a USB 3 stick
 
 - [ ] **Direct I/O optimizations**
-  - Align the Writer's buffer so direct I/O skips the bounce-buffer copy, which takes 1.5 to 1.9x the CPU per GiB
-  - Tunable buffer sizes for different device speeds
+  - Align the Writer's buffer so direct I/O skips the bounce-buffer copy. The copy makes writes to a USB SSD 17% slower, and on NVMe it takes 1.5 to 1.9x the CPU per GiB
+  - Raise the default block size from 4M. On a USB SSD, aligned 32 MiB writes were 6% faster than 4 MiB ones. Measure on a USB stick first
   - Adaptive block sizing based on device performance
 
 ---
