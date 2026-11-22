@@ -38,6 +38,10 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 tempfile = "3"
 
+[[example]]
+name = "uring_bench"
+required-features = ["io_uring"]
+
 [lints.rust]
 unsafe_code = "warn"
 
