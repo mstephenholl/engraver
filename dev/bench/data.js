@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794964152295,
+  "lastUpdate": 1795360825086,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -1005,6 +1005,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "block_size/SHA-256/64KB",
             "value": 84.54,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "593cda87ce54046bb17d297b2e5b999b4e160b20",
+          "message": "fix(cli): reject block sizes that aren't a power of two (#47)\n\n* test(cli): cover non-power-of-two block sizes in write, erase and verify\n\nengraver benchmark rejects --block-size 3M with \"Size must be a power of\n2\". write, erase and verify accept it, because each has its own\nparse_block_size that checks only the range. These three integration\ntests pass --block-size 3M to each command and expect that same\nrejection.\n\nThey fail on this commit. Each command gets past argument parsing and\nstops at the root-privileges check instead. The next commit makes them\npass.\n\n* fix(cli): reject block sizes that aren't a power of two\n\nengraver write, erase and verify accepted any --block-size from 4K to\n64M, and verify did not check the range at all. Each command had its own\ncopy of parse_block_size. The block size is also the O_DIRECT alignment\nfor the device's bounce buffer, and align_up rounds with a mask, which\nonly works for a power of two. With --block-size 3M, align_up(3 MiB,\n3 MiB) returned 5 MiB, so the writer placed chunks at 0, 5, 10 and 15\nMiB. A 12 MiB image became a 20 MiB file with the data in the wrong\nplaces. Verification read the same wrong offsets and reported success\nwith no mismatches, so the corrupt image looked good.\n\nengraver benchmark already rejects such sizes through the shared parser\nin engraver-core. This adds parse_block_size there. It uses parse_size,\nwhich requires a power of two, and then checks the 4K to 64M range.\nparse_block_sizes now maps each part through it. write, erase and verify\ncall it, and the three private copies and their unit tests are removed.\nThe new core tests check which error variant each input produces.\n\nThe --block-size help text for the three commands now says the size must\nbe a power of 2 from 4K to 64M. Error messages for out-of-range and\nmalformed sizes change to the shared wording, for example \"Block size\n128M exceeds maximum of 64 MB\".",
+          "timestamp": "2026-11-22T10:13:57-05:00",
+          "tree_id": "e3e6e9e747c463c1b8bbacc5493dc59d75cf10a7",
+          "url": "https://github.com/mstephenholl/engraver/commit/593cda87ce54046bb17d297b2e5b999b4e160b20"
+        },
+        "date": 1795360824405,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 90.02,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 89.07,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 88.02,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 89.73,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 88.67,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 17108.81,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 50976.39,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1402.92,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 88.43,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 7009.43,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 46822.62,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 486.8,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 30.72,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 6954.5,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 47661.93,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 481.2,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 30.36,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 51220.83,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 57153.58,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 10670.4,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 789.69,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 15069.68,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1958.48,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 123.48,
             "unit": "iter/sec"
           }
         ]
