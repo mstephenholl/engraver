@@ -1,11 +1,12 @@
 //! Linux drive detection implementation
 //!
-//! Uses /sys/block for device enumeration and /proc/mounts for mount point detection.
+//! Uses /sys/block for device enumeration and for the device-mapper and md devices stacked
+//! on a disk (`holders/`), and /proc/mounts for mount point detection.
 
 use super::{is_system_mount_point, DetectError, Drive, DriveType, Partition, Result, UsbSpeed};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{debug, trace, warn};
 
 /// Mount information for a device
@@ -13,6 +14,19 @@ use tracing::{debug, trace, warn};
 pub(crate) struct MountInfo {
     pub mount_point: String,
     pub filesystem: Option<String>,
+}
+
+/// A device-mapper or md device stacked on a disk or one of its partitions
+///
+/// `LUKS`, `LVM` and software RAID mount their filesystems from `/dev/mapper/*`,
+/// `/dev/dm-N` or `/dev/mdN`, so no mount entry names the underlying partition.
+/// The kernel records the stacking in sysfs `holders/` directories instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Holder {
+    /// The held block device: the disk itself or one of its partitions, such as `sda2`
+    pub held: String,
+    /// The device stacked on it, such as `dm-0` or `md0`
+    pub by: String,
 }
 
 /// List all drives on Linux
@@ -93,8 +107,6 @@ fn parse_block_device(
         return None;
     }
 
-    let removable = read_sys_value(&format!("{sys_path}/removable")).is_ok_and(|s| s.trim() == "1");
-
     let vendor = read_sys_value(&format!("{sys_path}/device/vendor"))
         .ok()
         .map(|s| s.trim().to_string())
@@ -106,6 +118,13 @@ fn parse_block_device(
         .filter(|s| !s.is_empty());
 
     let drive_type = detect_drive_type(name, &sys_path);
+
+    // Many USB bridges report `removable` as 0 for fixed media such as USB SSDs.
+    // A USB-attached disk is external, so count it as removable. This matches
+    // macOS (ejectable) and Windows (external media).
+    let removable = drive_type == DriveType::Usb
+        || read_sys_value(&format!("{sys_path}/removable")).is_ok_and(|s| s.trim() == "1");
+
     let partitions = get_partitions(name, mount_map, label_map);
 
     let mount_points: Vec<String> = partitions
@@ -113,7 +132,10 @@ fn parse_block_device(
         .filter_map(|p| p.mount_point.clone())
         .collect();
 
-    let (is_system, system_reason) = check_if_system_drive(name, &mount_points, removable);
+    let holders = read_holders(Path::new(&sys_path), name);
+
+    let (is_system, system_reason) =
+        check_if_system_drive(name, &mount_points, &holders, removable);
 
     // Detect USB speed for USB drives
     let usb_speed = if drive_type == DriveType::Usb {
@@ -260,6 +282,54 @@ fn decode_label(label: &str) -> String {
     result
 }
 
+/// Check whether a `/sys/block/<disk>` entry is one of the disk's partitions
+///
+/// Partitions are the entries named after the disk, such as `sda1` or `nvme0n1p2`.
+fn is_partition_entry(device_name: &str, entry_name: &str) -> bool {
+    entry_name.starts_with(device_name) && entry_name != device_name
+}
+
+/// List the entry names in a sysfs directory, sorted. A missing directory is empty.
+fn sorted_entry_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// Read the device-mapper and md devices stacked on a disk or any of its partitions
+///
+/// `sys_path` is the disk's sysfs node, such as `/sys/block/sda`. A device stacked
+/// on the whole disk is listed under `<disk>/holders/`, and one stacked on a
+/// partition under `<disk>/<partition>/holders/`. The disk comes first, then its
+/// partitions by name. A node with no `holders/` directory holds nothing.
+pub(crate) fn read_holders(sys_path: &Path, device_name: &str) -> Vec<Holder> {
+    let mut nodes = vec![(device_name.to_string(), sys_path.to_path_buf())];
+    for name in sorted_entry_names(sys_path) {
+        if is_partition_entry(device_name, &name) {
+            let dir = sys_path.join(&name);
+            nodes.push((name, dir));
+        }
+    }
+
+    let mut holders = Vec::new();
+    for (held, dir) in nodes {
+        for by in sorted_entry_names(&dir.join("holders")) {
+            holders.push(Holder {
+                held: held.clone(),
+                by,
+            });
+        }
+    }
+    holders
+}
+
 /// Get partitions for a device
 fn get_partitions(
     device_name: &str,
@@ -275,7 +345,7 @@ fn get_partitions(
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if name.starts_with(device_name) && name != device_name {
+            if is_partition_entry(device_name, &name) {
                 let part_path = format!("/dev/{name}");
                 let part_sys_path = format!("{sys_path}/{name}");
 
@@ -327,13 +397,16 @@ pub(crate) fn detect_drive_type(name: &str, sys_path: &str) -> DriveType {
         return DriveType::SdCard;
     }
 
-    // Check USB via device subsystem
+    // USB disks reach the block layer through SCSI (usb-storage and uas), so the
+    // disk's own subsystem is `scsi`. The `usb` bus only shows up further up.
+    if is_usb_attached(sys_path) {
+        return DriveType::Usb;
+    }
+
+    // Check the device's own subsystem
     if let Ok(subsystem_link) = fs::read_link(format!("{sys_path}/device/subsystem")) {
         if let Some(subsystem_name) = subsystem_link.file_name() {
             let sub = subsystem_name.to_string_lossy();
-            if sub == "usb" || sub == "usb-storage" {
-                return DriveType::Usb;
-            }
             if sub == "ata" || sub == "scsi" {
                 return DriveType::Sata;
             }
@@ -351,9 +424,13 @@ pub(crate) fn detect_drive_type(name: &str, sys_path: &str) -> DriveType {
 }
 
 /// Check if a drive is a system drive
+///
+/// Checks run from the most specific reason to the most general one: a system
+/// mount point, a stacked device-mapper or md device, then the non-removable rule.
 pub(crate) fn check_if_system_drive(
     name: &str,
     mount_points: &[String],
+    holders: &[Holder],
     removable: bool,
 ) -> (bool, Option<String>) {
     // Check mount points for system paths
@@ -361,6 +438,19 @@ pub(crate) fn check_if_system_drive(
         if is_system_mount_point(mp) {
             return (true, Some(format!("Contains system mount point: {mp}")));
         }
+    }
+
+    // A filesystem on LUKS, LVM or md is mounted from the stacked device, not from
+    // the partition, so the mount check above cannot see it. Writing under an open
+    // device-mapper or md device is unsafe whether it holds `/` or data.
+    if let Some(Holder { held, by }) = holders.first() {
+        let kind = if held == name { "Disk" } else { "Partition" };
+        return (
+            true,
+            Some(format!(
+                "{kind} {held} is in use by {by} (device-mapper or md, such as LUKS or LVM)"
+            )),
+        );
     }
 
     // Non-removable drives are likely system drives
@@ -372,6 +462,32 @@ pub(crate) fn check_if_system_drive(
     (false, None)
 }
 
+/// Walk up the sysfs device tree from a block device, nearest ancestor first
+///
+/// Starts at the canonicalized `{sys_path}/device` node and stops at `/sys` or
+/// `/`, or after 15 levels so a malformed tree cannot loop. Yields nothing if
+/// the device link cannot be resolved.
+fn device_ancestors(sys_path: &str) -> impl Iterator<Item = PathBuf> {
+    let device = Path::new(sys_path).join("device").canonicalize().ok();
+    std::iter::successors(device, |dir| {
+        dir.parent()
+            .filter(|parent| *parent != Path::new("/sys") && *parent != Path::new("/"))
+            .map(Path::to_path_buf)
+    })
+    .take(15)
+}
+
+/// Check whether a block device hangs off the USB bus
+///
+/// USB disks reach the block layer through SCSI, so the `usb` subsystem is
+/// only found on an ancestor of the device node.
+fn is_usb_attached(sys_path: &str) -> bool {
+    device_ancestors(sys_path).any(|dir| {
+        fs::read_link(dir.join("subsystem"))
+            .is_ok_and(|link| link.file_name().is_some_and(|subsystem| subsystem == "usb"))
+    })
+}
+
 /// Detect USB connection speed for a block device
 ///
 /// Traverses the sysfs device hierarchy upward from the block device
@@ -379,43 +495,21 @@ pub(crate) fn check_if_system_drive(
 ///
 /// Returns `None` for non-USB devices or if speed cannot be determined.
 pub(crate) fn detect_usb_speed(sys_path: &str) -> Option<UsbSpeed> {
-    // Get the real device path by following the device symlink
-    let device_link = format!("{sys_path}/device");
-    let device_path = fs::read_link(&device_link).ok()?;
-
-    // Resolve to absolute path
-    let sys_block = Path::new(sys_path);
-    let absolute_device = sys_block.join(&device_path).canonicalize().ok()?;
-
-    // Walk up the directory tree looking for a USB speed file
     // USB devices have a "speed" file containing the connection speed in Mbps
-    let mut current = absolute_device.as_path();
-
-    // Limit traversal depth to avoid infinite loops
-    for _ in 0..15 {
-        let speed_file = current.join("speed");
-        if speed_file.exists() {
-            if let Ok(speed_str) = fs::read_to_string(&speed_file) {
-                match speed_str.trim().parse::<u32>() {
-                    Ok(mbps) => return Some(UsbSpeed::from_mbps(mbps)),
-                    Err(e) => trace!(
-                        "Failed to parse USB speed from {}: {e}",
-                        speed_file.display()
-                    ),
-                }
+    device_ancestors(sys_path).find_map(|dir| {
+        let speed_file = dir.join("speed");
+        let speed_str = fs::read_to_string(&speed_file).ok()?;
+        match speed_str.trim().parse::<u32>() {
+            Ok(mbps) => Some(UsbSpeed::from_mbps(mbps)),
+            Err(e) => {
+                trace!(
+                    "Failed to parse USB speed from {}: {e}",
+                    speed_file.display()
+                );
+                None
             }
         }
-
-        // Move up one directory
-        match current.parent() {
-            Some(parent) if parent != Path::new("/sys") && parent != Path::new("/") => {
-                current = parent;
-            }
-            _ => break,
-        }
-    }
-
-    None
+    })
 }
 
 /// Read a value from sysfs
@@ -432,6 +526,83 @@ fn read_sys_value(path: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
+    use tempfile::TempDir;
+
+    // -------------------------------------------------------------------------
+    // Fake sysfs fixtures
+    // -------------------------------------------------------------------------
+
+    /// Create `dir` and point its `subsystem` link at `<root>/bus/<bus>`, as sysfs does.
+    fn add_node(root: &Path, dir: &Path, bus: &str) {
+        fs::create_dir_all(dir).unwrap();
+        fs::create_dir_all(root.join("bus").join(bus)).unwrap();
+        symlink(root.join("bus").join(bus), dir.join("subsystem")).unwrap();
+    }
+
+    /// Expose a SCSI device's block node as `<root>/block/<name>` and return that path.
+    ///
+    /// Laid out like real sysfs: the block node lives under the SCSI device,
+    /// its `device` link is relative, and `/sys/block/<name>` is a symlink to it.
+    fn add_block_disk(root: &Path, name: &str, scsi_dev: &Path) -> String {
+        let node = scsi_dev.join("block").join(name);
+        fs::create_dir_all(&node).unwrap();
+        let scsi_name = scsi_dev.file_name().unwrap().to_str().unwrap();
+        symlink(format!("../../../{scsi_name}"), node.join("device")).unwrap();
+
+        fs::create_dir_all(root.join("block")).unwrap();
+        let link = root.join("block").join(name);
+        symlink(&node, &link).unwrap();
+        link.to_str().unwrap().to_string()
+    }
+
+    /// A disk behind a UAS bridge, with the ancestry of a real USB SSD enclosure.
+    ///
+    /// The disk's own subsystem is `scsi`. The `usb` bus only appears further up.
+    fn usb_attached_disk(root: &Path) -> String {
+        let pci = root.join("devices/pci0000:00/0000:00:0d.0");
+        let usb_root_hub = pci.join("usb2");
+        let usb_device = usb_root_hub.join("2-3");
+        let usb_interface = usb_device.join("2-3:1.0");
+        let host = usb_interface.join("host0");
+        let target = host.join("target0:0:0");
+        let scsi_dev = target.join("0:0:0:0");
+
+        for (dir, bus) in [
+            (&pci, "pci"),
+            (&usb_root_hub, "usb"),
+            (&usb_device, "usb"),
+            (&usb_interface, "usb"),
+            (&host, "scsi"),
+            (&target, "scsi"),
+            (&scsi_dev, "scsi"),
+        ] {
+            add_node(root, dir, bus);
+        }
+        fs::write(usb_root_hub.join("speed"), "20000\n").unwrap();
+        fs::write(usb_device.join("speed"), "10000\n").unwrap();
+
+        add_block_disk(root, "sda", &scsi_dev)
+    }
+
+    /// A disk on an internal SATA controller: `scsi` all the way up to the PCI device.
+    fn sata_attached_disk(root: &Path) -> String {
+        let pci = root.join("devices/pci0000:00/0000:00:17.0");
+        let host = pci.join("ata1/host0");
+        let target = host.join("target0:0:0");
+        let scsi_dev = target.join("0:0:0:0");
+
+        for (dir, bus) in [
+            (&pci, "pci"),
+            (&host, "scsi"),
+            (&target, "scsi"),
+            (&scsi_dev, "scsi"),
+        ] {
+            add_node(root, dir, bus);
+        }
+
+        add_block_disk(root, "sda", &scsi_dev)
+    }
 
     // -------------------------------------------------------------------------
     // should_skip_device tests
@@ -593,40 +764,57 @@ mod tests {
         assert_eq!(detect_drive_type("sda", "/nonexistent"), DriveType::Other);
     }
 
+    #[test]
+    fn test_detect_drive_type_usb_disk_behind_scsi() {
+        let root = TempDir::new().unwrap();
+        let sys_path = usb_attached_disk(root.path());
+
+        assert_eq!(detect_drive_type("sda", &sys_path), DriveType::Usb);
+    }
+
+    #[test]
+    fn test_detect_drive_type_sata_without_usb_ancestor() {
+        let root = TempDir::new().unwrap();
+        let sys_path = sata_attached_disk(root.path());
+
+        assert_eq!(detect_drive_type("sda", &sys_path), DriveType::Sata);
+    }
+
     // -------------------------------------------------------------------------
     // check_if_system_drive tests
     // -------------------------------------------------------------------------
 
     #[test]
     fn test_check_if_system_drive_root() {
-        let (is_system, reason) = check_if_system_drive("sda", &["/".to_string()], false);
+        let (is_system, reason) = check_if_system_drive("sda", &["/".to_string()], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("system mount point"));
     }
 
     #[test]
     fn test_check_if_system_drive_home() {
-        let (is_system, reason) = check_if_system_drive("sda", &["/home".to_string()], false);
+        let (is_system, reason) = check_if_system_drive("sda", &["/home".to_string()], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("/home"));
     }
 
     #[test]
     fn test_check_if_system_drive_boot() {
-        let (is_system, _reason) = check_if_system_drive("sda", &["/boot".to_string()], false);
+        let (is_system, _reason) = check_if_system_drive("sda", &["/boot".to_string()], &[], false);
         assert!(is_system);
     }
 
     #[test]
     fn test_check_if_system_drive_non_removable() {
-        let (is_system, reason) = check_if_system_drive("sda", &[], false);
+        let (is_system, reason) = check_if_system_drive("sda", &[], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("Non-removable"));
     }
 
     #[test]
     fn test_check_if_system_drive_removable_no_system_mounts() {
-        let (is_system, reason) = check_if_system_drive("sdb", &["/mnt/usb".to_string()], true);
+        let (is_system, reason) =
+            check_if_system_drive("sdb", &["/mnt/usb".to_string()], &[], true);
         assert!(!is_system);
         assert!(reason.is_none());
     }
@@ -634,7 +822,7 @@ mod tests {
     #[test]
     fn test_check_if_system_drive_nvme_non_removable_allowed() {
         // External NVMe drives report as non-removable but aren't system drives
-        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], false);
+        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], &[], false);
         assert!(!is_system);
         assert!(reason.is_none());
     }
@@ -645,8 +833,169 @@ mod tests {
             "/media/user/USB".to_string(),
             "/run/media/user/disk".to_string(),
         ];
-        let (is_system, _) = check_if_system_drive("sdc", &mount_points, true);
+        let (is_system, _) = check_if_system_drive("sdc", &mount_points, &[], true);
         assert!(!is_system);
+    }
+
+    #[test]
+    fn test_check_if_system_drive_held_partition_on_removable_disk() {
+        // A USB SSD whose root is on LUKS or LVM: no mount names the partition
+        let holders = [Holder {
+            held: "sda2".to_string(),
+            by: "dm-0".to_string(),
+        }];
+        let (is_system, reason) = check_if_system_drive("sda", &[], &holders, true);
+        assert!(is_system);
+        assert_eq!(
+            reason.unwrap(),
+            "Partition sda2 is in use by dm-0 (device-mapper or md, such as LUKS or LVM)"
+        );
+    }
+
+    #[test]
+    fn test_check_if_system_drive_held_whole_disk() {
+        let holders = [Holder {
+            held: "sdb".to_string(),
+            by: "md0".to_string(),
+        }];
+        let (is_system, reason) = check_if_system_drive("sdb", &[], &holders, true);
+        assert!(is_system);
+        let reason = reason.unwrap();
+        assert!(reason.starts_with("Disk sdb "), "{reason}");
+        assert!(reason.contains("md0"), "{reason}");
+    }
+
+    #[test]
+    fn test_check_if_system_drive_held_nvme_without_mounts() {
+        // The non-removable rule exempts external NVMe drives, the holders rule must not
+        let holders = [Holder {
+            held: "nvme1n1p1".to_string(),
+            by: "dm-0".to_string(),
+        }];
+        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], &holders, false);
+        assert!(is_system);
+        assert!(reason.unwrap().contains("nvme1n1p1"));
+    }
+
+    #[test]
+    fn test_check_if_system_drive_no_holders_unchanged() {
+        let (is_system, reason) = check_if_system_drive("sdb", &[], &[], true);
+        assert!(!is_system);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn test_check_if_system_drive_system_mount_wins_over_holders() {
+        let holders = [Holder {
+            held: "sda2".to_string(),
+            by: "dm-0".to_string(),
+        }];
+        let (is_system, reason) =
+            check_if_system_drive("sda", &["/boot".to_string()], &holders, true);
+        assert!(is_system);
+        let reason = reason.unwrap();
+        assert!(reason.contains("system mount point"), "{reason}");
+        assert!(!reason.contains("dm-0"), "{reason}");
+    }
+
+    #[test]
+    fn test_check_if_system_drive_holders_win_over_non_removable() {
+        let holders = [Holder {
+            held: "sda2".to_string(),
+            by: "dm-0".to_string(),
+        }];
+        let (_, reason) = check_if_system_drive("sda", &[], &holders, false);
+        assert!(reason.unwrap().contains("dm-0"));
+    }
+
+    // -------------------------------------------------------------------------
+    // read_holders tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_read_holders_finds_device_stacked_on_partition() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/sda");
+        fs::create_dir_all(disk.join("sda1/holders")).unwrap();
+        fs::create_dir_all(disk.join("sda2/holders/dm-0")).unwrap();
+        fs::create_dir_all(disk.join("holders")).unwrap();
+
+        assert_eq!(
+            read_holders(&disk, "sda"),
+            vec![Holder {
+                held: "sda2".to_string(),
+                by: "dm-0".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_read_holders_finds_device_stacked_on_whole_disk() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/sdb");
+        fs::create_dir_all(disk.join("holders/md0")).unwrap();
+
+        assert_eq!(
+            read_holders(&disk, "sdb"),
+            vec![Holder {
+                held: "sdb".to_string(),
+                by: "md0".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_read_holders_reads_nvme_partitions() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/nvme0n1");
+        fs::create_dir_all(disk.join("nvme0n1p3/holders/dm-1")).unwrap();
+
+        assert_eq!(
+            read_holders(&disk, "nvme0n1"),
+            vec![Holder {
+                held: "nvme0n1p3".to_string(),
+                by: "dm-1".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_read_holders_empty_when_nothing_is_stacked() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/sda");
+        fs::create_dir_all(disk.join("sda1/holders")).unwrap();
+        fs::create_dir_all(disk.join("sda2")).unwrap();
+
+        assert_eq!(read_holders(&disk, "sda"), Vec::<Holder>::new());
+    }
+
+    #[test]
+    fn test_read_holders_missing_disk_is_empty() {
+        let root = TempDir::new().unwrap();
+
+        assert_eq!(
+            read_holders(&root.path().join("block/sdz"), "sdz"),
+            Vec::<Holder>::new()
+        );
+    }
+
+    #[test]
+    fn test_read_holders_orders_disk_before_partitions() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/sda");
+        fs::create_dir_all(disk.join("sda2/holders/dm-1")).unwrap();
+        fs::create_dir_all(disk.join("sda1/holders/dm-0")).unwrap();
+        fs::create_dir_all(disk.join("holders/md0")).unwrap();
+
+        let held: Vec<(String, String)> = read_holders(&disk, "sda")
+            .into_iter()
+            .map(|h| (h.held, h.by))
+            .collect();
+        assert_eq!(
+            held,
+            [("sda", "md0"), ("sda1", "dm-0"), ("sda2", "dm-1")]
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -733,5 +1082,14 @@ mod tests {
     fn test_detect_usb_speed_nonexistent() {
         // Non-existent path should return None
         assert!(detect_usb_speed("/sys/block/nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_detect_usb_speed_uses_nearest_usb_device() {
+        // The enclosure negotiated 10 Gbps. Its root hub advertises 20 Gbps.
+        let root = TempDir::new().unwrap();
+        let sys_path = usb_attached_disk(root.path());
+
+        assert_eq!(detect_usb_speed(&sys_path), Some(UsbSpeed::SuperSpeedPlus));
     }
 }
