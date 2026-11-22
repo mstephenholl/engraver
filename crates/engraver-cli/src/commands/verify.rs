@@ -21,7 +21,7 @@ pub fn execute(
     silent: bool,
 ) -> Result<()> {
     // Parse block size
-    let block_size = parse_block_size(block_size_str)?;
+    let block_size = engraver_core::parse_block_size(block_size_str)? as usize;
 
     // Check for elevated privileges (needed for raw device access)
     if !has_elevated_privileges() {
@@ -288,25 +288,6 @@ fn get_raw_device_path(path: &str) -> String {
     path.to_string()
 }
 
-/// Parse a human-readable block size
-fn parse_block_size(s: &str) -> Result<usize> {
-    let s = s.trim().to_uppercase();
-
-    let (num_str, multiplier) = if s.ends_with('K') {
-        (&s[..s.len() - 1], 1024)
-    } else if s.ends_with('M') {
-        (&s[..s.len() - 1], 1024 * 1024)
-    } else {
-        (s.as_str(), 1)
-    };
-
-    let num: usize = num_str
-        .parse()
-        .with_context(|| format!("Invalid block size: {}", s))?;
-
-    Ok(num * multiplier)
-}
-
 /// Format size for display
 fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -327,46 +308,6 @@ fn format_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -------------------------------------------------------------------------
-    // parse_block_size tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_parse_block_size_bytes() {
-        assert_eq!(parse_block_size("4096").unwrap(), 4096);
-        assert_eq!(parse_block_size("8192").unwrap(), 8192);
-        assert_eq!(parse_block_size("1048576").unwrap(), 1048576);
-    }
-
-    #[test]
-    fn test_parse_block_size_kilobytes() {
-        assert_eq!(parse_block_size("4K").unwrap(), 4096);
-        assert_eq!(parse_block_size("4k").unwrap(), 4096);
-        assert_eq!(parse_block_size("8K").unwrap(), 8192);
-        assert_eq!(parse_block_size("512K").unwrap(), 512 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_megabytes() {
-        assert_eq!(parse_block_size("1M").unwrap(), 1024 * 1024);
-        assert_eq!(parse_block_size("4M").unwrap(), 4 * 1024 * 1024);
-        assert_eq!(parse_block_size("16M").unwrap(), 16 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_with_whitespace() {
-        assert_eq!(parse_block_size("  4K  ").unwrap(), 4096);
-        assert_eq!(parse_block_size("\t1M\n").unwrap(), 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_invalid() {
-        assert!(parse_block_size("abc").is_err());
-        assert!(parse_block_size("").is_err());
-        assert!(parse_block_size("K").is_err());
-        assert!(parse_block_size("-1K").is_err());
-    }
 
     // -------------------------------------------------------------------------
     // format_size tests

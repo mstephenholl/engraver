@@ -657,23 +657,25 @@ pub fn parse_size(s: &str) -> Result<u64> {
     Ok(result)
 }
 
+/// Parse a block size like "4K" or "4M" and check it is a power of 2 between
+/// 4 KB and 64 MB.
+///
+/// A block size that is not a power of 2 breaks the alignment arithmetic used
+/// by direct I/O, so every command that takes `--block-size` must use this.
+pub fn parse_block_size(s: &str) -> Result<u64> {
+    let size = parse_size(s)?;
+    if size > MAX_BLOCK_SIZE {
+        return Err(BenchmarkError::BlockSizeTooLarge(s.trim().to_string()));
+    }
+    if size < MIN_BLOCK_SIZE {
+        return Err(BenchmarkError::BlockSizeTooSmall(s.trim().to_string()));
+    }
+    Ok(size)
+}
+
 /// Parse a comma-separated list of block sizes
 pub fn parse_block_sizes(s: &str) -> Result<Vec<u64>> {
-    let sizes: Result<Vec<u64>> = s
-        .split(',')
-        .map(|part| {
-            let size = parse_size(part.trim())?;
-            if size > MAX_BLOCK_SIZE {
-                return Err(BenchmarkError::BlockSizeTooLarge(part.trim().to_string()));
-            }
-            if size < MIN_BLOCK_SIZE {
-                return Err(BenchmarkError::BlockSizeTooSmall(part.trim().to_string()));
-            }
-            Ok(size)
-        })
-        .collect();
-
-    sizes
+    s.split(',').map(parse_block_size).collect()
 }
 
 /// Format bytes as human-readable size
@@ -777,6 +779,76 @@ mod tests {
 
         // Too large
         assert!(parse_block_sizes("128M").is_err());
+    }
+
+    #[test]
+    fn test_parse_block_size_accepts_powers_of_two_in_range() {
+        for (input, expected) in [
+            ("4096", 4096),
+            ("4K", 4096),
+            ("4k", 4096),
+            ("  4K  ", 4096),
+            ("\t1M\n", 1024 * 1024),
+            ("1M", 1024 * 1024),
+            ("4M", 4 * 1024 * 1024),
+            ("64M", 64 * 1024 * 1024),
+        ] {
+            assert_eq!(parse_block_size(input).unwrap(), expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_block_size_rejects_below_minimum() {
+        for input in ["2K", "1K", "512"] {
+            assert!(
+                matches!(
+                    parse_block_size(input),
+                    Err(BenchmarkError::BlockSizeTooSmall(_))
+                ),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_block_size_rejects_above_maximum() {
+        for input in ["128M", "1G"] {
+            assert!(
+                matches!(
+                    parse_block_size(input),
+                    Err(BenchmarkError::BlockSizeTooLarge(_))
+                ),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_block_size_rejects_non_power_of_two() {
+        // 3M and 65M are in range, 100 is below it, and 0 is no size at all.
+        // None is a power of 2.
+        for input in ["3M", "65M", "100", "0"] {
+            assert!(
+                matches!(
+                    parse_block_size(input),
+                    Err(BenchmarkError::NotPowerOfTwo(_))
+                ),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_block_size_rejects_invalid_format() {
+        for input in ["abc", "", "K", "-4K"] {
+            assert!(
+                matches!(
+                    parse_block_size(input),
+                    Err(BenchmarkError::InvalidSizeFormat(_))
+                ),
+                "{input:?}"
+            );
+        }
     }
 
     #[test]
