@@ -1,6 +1,6 @@
 //! Integration tests for the Writer's source-length contract
 
-use engraver_core::{WriteConfig, Writer, MIN_BLOCK_SIZE};
+use engraver_core::{Error, WriteConfig, Writer, MIN_BLOCK_SIZE};
 use std::io::Cursor;
 
 // ============================================================================
@@ -50,8 +50,12 @@ fn short_source_is_an_error() {
         let result = multi_block_writer().write(Cursor::new(data), &mut target, expected as u64);
 
         assert!(
-            result.is_err(),
-            "source of {actual} bytes with source_size {expected} must fail, got {result:?}"
+            matches!(
+                result,
+                Err(Error::SourceTooShort { expected: e, actual: a })
+                    if e == expected as u64 && a == actual as u64
+            ),
+            "source of {actual} bytes with source_size {expected} must fail as too short, got {result:?}"
         );
     }
 }
@@ -75,8 +79,8 @@ fn long_source_is_an_error() {
         let result = multi_block_writer().write(Cursor::new(data), &mut target, expected as u64);
 
         assert!(
-            result.is_err(),
-            "source of {actual} bytes with source_size {expected} must fail, got {result:?}"
+            matches!(result, Err(Error::SourceTooLong { expected: e }) if e == expected as u64),
+            "source of {actual} bytes with source_size {expected} must fail as too long, got {result:?}"
         );
     }
 }
@@ -181,8 +185,8 @@ fn resumed_source_ending_early_is_an_error() {
     );
 
     assert!(
-        result.is_err(),
-        "truncated resume must fail, got {result:?}"
+        matches!(result, Err(Error::SourceTooShort { expected, .. }) if expected == IMAGE_LEN as u64),
+        "truncated resume must fail as too short, got {result:?}"
     );
 }
 
@@ -200,7 +204,10 @@ fn resumed_source_running_past_the_end_is_an_error() {
         RESUME_AT as u64,
     );
 
-    assert!(result.is_err(), "overlong resume must fail, got {result:?}");
+    assert!(
+        matches!(result, Err(Error::SourceTooLong { expected }) if expected == IMAGE_LEN as u64),
+        "overlong resume must fail as too long, got {result:?}"
+    );
     assert_untouched_from(&target, IMAGE_LEN);
 }
 
@@ -217,8 +224,8 @@ fn resume_from_a_server_that_ignores_range_is_an_error() {
     );
 
     assert!(
-        result.is_err(),
-        "a source that ignored Range must fail, got {result:?}"
+        matches!(result, Err(Error::SourceTooLong { expected }) if expected == IMAGE_LEN as u64),
+        "a source that ignored Range must fail as too long, got {result:?}"
     );
     assert_untouched_from(&target, IMAGE_LEN);
 }
@@ -278,7 +285,10 @@ mod verify {
             4 * MIN_BLOCK_SIZE as u64,
         );
 
-        assert!(result.is_err(), "short source must fail, got {result:?}");
+        assert!(
+            matches!(result, Err(Error::SourceTooShort { .. })),
+            "short source must fail as too short, got {result:?}"
+        );
     }
 }
 

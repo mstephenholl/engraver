@@ -559,9 +559,10 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         setup_checkpoint(&args, &source_info, target_drive)?;
 
     // Step 7: Open source and target device
-    let total_blocks = source_size
-        .map(|s| s.div_ceil(block_size as u64))
-        .unwrap_or(0);
+    let image_size = source_info.size;
+    let total_blocks = image_size
+        .map(|s| s.div_ceil(block_size as u64).to_string())
+        .unwrap_or_else(|| "unknown".to_string());
     println_if!(silent, "\n{}", style("Writing image...").bold());
     println_if!(
         silent,
@@ -612,7 +613,8 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     // Step 9: Write with progress and checkpointing
     let total_size = source_size.unwrap_or(0);
-    let pb = create_write_progress_bar(total_size, silent);
+    let write_size = image_size.unwrap_or(0);
+    let pb = create_write_progress_bar(write_size, silent);
     if resume_offset > 0 {
         pb.set_position(resume_offset);
     }
@@ -694,9 +696,9 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     // Use write_and_verify for parallel verification, write_from_offset otherwise
     let write_result = if use_parallel_verify {
-        writer.write_and_verify(&mut source, &mut *target, total_size)
+        writer.write_and_verify(&mut source, &mut *target, write_size)
     } else {
-        writer.write_from_offset(&mut source, &mut *target, total_size, resume_offset)
+        writer.write_from_offset(&mut source, &mut *target, write_size, resume_offset)
     };
 
     pb.finish_and_clear();
@@ -1177,6 +1179,24 @@ fn format_write_error(error: &engraver_core::Error) -> String {
                  • Try a smaller block size: --block-size 1M\n\
                  • Check dmesg/system logs for device errors",
                 expected, actual
+            )
+        }
+        Error::SourceTooShort { .. } | Error::SourceTooLong { .. } => {
+            format!(
+                "{}\n\
+                 \n\
+                 The source did not match its expected length.\n\
+                 \n\
+                 This usually indicates:\n\
+                 • A truncated or incomplete download\n\
+                 • The source file changed while it was being written\n\
+                 • The server returned a different file than the one that was checked\n\
+                 \n\
+                 Suggestions:\n\
+                 • Download the image again and compare its checksum\n\
+                 • Make sure nothing is modifying the source file\n\
+                 • Start a fresh write instead of resuming",
+                error
             )
         }
         Error::DeviceNotFound(path) => {
