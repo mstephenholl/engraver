@@ -142,6 +142,17 @@ fn test_non_system_mount_points() {
     }
 }
 
+#[test]
+fn test_efi_system_partition_mount_is_system() {
+    // systemd mounts the ESP at /efi, and paths under a system mount count as system
+    for mount in ["/efi", "/efi/EFI"] {
+        assert!(
+            is_system_mount_point(mount),
+            "{mount} should be detected as system mount"
+        );
+    }
+}
+
 // ============================================================================
 // DriveType tests
 // ============================================================================

@@ -450,3 +450,62 @@ fn test_direct_io_on_device() {
     // Sync should work
     assert!(dev.sync().is_ok(), "sync() should succeed on real device");
 }
+
+// ============================================================================
+// Exclusive open of a block device (Linux)
+// ============================================================================
+
+/// A write open of a block device is refused while one of its partitions is mounted.
+///
+/// This needs root and a loop device, so it is ignored by default. Point
+/// `ENGRAVER_TEST_LOOP_DEVICE` at a loop device that has a mounted partition.
+/// Set it up as root, mounting at a path with a space so the unmount step also
+/// covers the `\040` escape in `/proc/mounts`:
+///
+/// ```text
+/// truncate -s 64M /tmp/engraver-excl.img
+/// LOOP=$(losetup --find --show --partscan /tmp/engraver-excl.img)
+/// echo 'type=83' | sfdisk "$LOOP"
+/// udevadm settle
+/// mkfs.ext4 -q "${LOOP}p1"
+/// mkdir -p "/mnt/engraver excl"
+/// mount "${LOOP}p1" "/mnt/engraver excl"
+/// ```
+///
+/// Run the test as root. Tear down with `umount "${LOOP}p1"` (the test already
+/// unmounts when it passes), `losetup -d "$LOOP"` and `rm /tmp/engraver-excl.img`.
+///
+/// The test expects `DeviceBusy` for a write open and a successful read-only
+/// open of the same device. It then unmounts the device and expects the write
+/// open to succeed.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs root and a loop device with a mounted partition: ENGRAVER_TEST_LOOP_DEVICE=/dev/loopN"]
+fn test_write_open_of_loop_device_with_mounted_partition_is_busy() {
+    let Ok(device) = std::env::var("ENGRAVER_TEST_LOOP_DEVICE") else {
+        eprintln!("Skipped: set ENGRAVER_TEST_LOOP_DEVICE");
+        return;
+    };
+
+    let mounts = std::fs::read_to_string("/proc/mounts").unwrap();
+    assert!(
+        mounts
+            .lines()
+            .any(|line| line.starts_with(&format!("{device}p"))),
+        "no partition of {device} is mounted, see the setup steps in this test's doc comment"
+    );
+
+    let write = OpenOptions::new().read(true).write(true).direct_io(false);
+    match open_device(&device, write.clone()) {
+        Err(PlatformError::DeviceBusy(_)) => {}
+        Err(PlatformError::PermissionDenied(msg)) => panic!("run as root: {msg}"),
+        Err(e) => panic!("expected DeviceBusy, got {e}"),
+        Ok(_) => panic!("a write open of {device} succeeded while a partition is mounted"),
+    }
+
+    let read_only = OpenOptions::new().read(true).write(false).direct_io(false);
+    open_device(&device, read_only).expect("a read-only open must not be refused");
+
+    unmount_device(&device).expect("unmount_device must unmount every partition");
+    open_device(&device, write).expect("a write open must succeed once nothing is mounted");
+}
