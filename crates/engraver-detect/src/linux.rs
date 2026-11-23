@@ -1,11 +1,13 @@
 //! Linux drive detection implementation
 //!
 //! Uses /sys/block for device enumeration and for the device-mapper and md devices stacked
-//! on a disk (`holders/`), and /proc/mounts for mount point detection.
+//! on a disk (`holders/`), /proc/mounts for mount point detection and /proc/swaps for
+//! swap partitions.
 
 use super::{is_system_mount_point, DetectError, Drive, DriveType, Partition, Result, UsbSpeed};
 use std::collections::HashMap;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use tracing::{debug, trace, warn};
 
@@ -40,6 +42,7 @@ pub(crate) struct Holder {
 pub fn list_drives() -> Result<Vec<Drive>> {
     let mut drives = Vec::new();
     let mount_map = get_mount_info()?;
+    let swap_devices = get_swap_devices();
     let label_map = get_partition_labels();
 
     let block_dir = Path::new("/sys/block");
@@ -59,7 +62,7 @@ pub fn list_drives() -> Result<Vec<Drive>> {
             continue;
         }
 
-        if let Some(drive) = parse_block_device(&name, &mount_map, &label_map) {
+        if let Some(drive) = parse_block_device(&name, &mount_map, &swap_devices, &label_map) {
             drives.push(drive);
         }
     }
@@ -80,7 +83,8 @@ pub(crate) fn should_skip_device(name: &str) -> bool {
 /// Parse a block device from /sys/block
 fn parse_block_device(
     name: &str,
-    mount_map: &HashMap<String, MountInfo>,
+    mount_map: &HashMap<String, Vec<MountInfo>>,
+    swap_devices: &[String],
     label_map: &HashMap<String, String>,
 ) -> Option<Drive> {
     let sys_path = format!("/sys/block/{name}");
@@ -127,15 +131,13 @@ fn parse_block_device(
 
     let partitions = get_partitions(name, mount_map, label_map);
 
-    let mount_points: Vec<String> = partitions
-        .iter()
-        .filter_map(|p| p.mount_point.clone())
-        .collect();
+    let mount_points = disk_mount_points(&dev_path, &partitions, mount_map);
+    let swaps = swap_names(&dev_path, &partitions, swap_devices);
 
     let holders = read_holders(Path::new(&sys_path), name);
 
     let (is_system, system_reason) =
-        check_if_system_drive(name, &mount_points, &holders, removable);
+        check_if_system_drive(name, &mount_points, &holders, &swaps, removable);
 
     // Detect USB speed for USB drives
     let usb_speed = if drive_type == DriveType::Usb {
@@ -169,36 +171,73 @@ fn parse_block_device(
     })
 }
 
-/// Get mount info from /proc/mounts (mount point and filesystem type)
+/// Get every mount from /proc/mounts, keyed by device
+///
+/// A device can be mounted more than once, such as a btrfs partition at `/` and at
+/// `/.snapshots`, so each device maps to all of its mounts in file order.
 ///
 /// # Errors
 ///
 /// Returns an error if `/proc/mounts` cannot be read.
-pub(crate) fn get_mount_info() -> Result<HashMap<String, MountInfo>> {
-    let mut mounts = HashMap::new();
-
+pub(crate) fn get_mount_info() -> Result<HashMap<String, Vec<MountInfo>>> {
     let content =
         fs::read_to_string("/proc/mounts").map_err(|e| DetectError::EnumerationFailed {
             message: "Failed to read /proc/mounts".to_string(),
             source: Some(e),
         })?;
 
-    for line in content.lines() {
-        if let Some((device, info)) = parse_mount_line(line) {
-            mounts.insert(device, info);
-        }
+    Ok(parse_mounts(&content, Path::new("/sys")))
+}
+
+/// Group the lines of /proc/mounts by device
+///
+/// A `/dev/root` source is the kernel's name for a root filesystem mounted without an
+/// initramfs, so it is replaced by the partition that `resolve_dev_root` finds under
+/// `sysfs_root`. It stays `/dev/root` when that fails.
+pub(crate) fn parse_mounts(content: &str, sysfs_root: &Path) -> HashMap<String, Vec<MountInfo>> {
+    let mut mounts: HashMap<String, Vec<MountInfo>> = HashMap::new();
+
+    for (device, info) in content.lines().filter_map(parse_mount_line) {
+        let device = if device == "/dev/root" {
+            resolve_dev_root(Path::new(&info.mount_point), sysfs_root)
+                .map_or(device, |name| format!("/dev/{name}"))
+        } else {
+            device
+        };
+        mounts.entry(device).or_default().push(info);
     }
 
-    Ok(mounts)
+    mounts
+}
+
+/// Find the block device behind a `/dev/root` mount
+///
+/// Reads the device number of the filesystem at `mount_point`, then follows the
+/// `dev/block/MAJOR:MINOR` symlink under `sysfs_root` (`/sys` on a real system) and
+/// returns its last component, such as `mmcblk0p2`.
+pub(crate) fn resolve_dev_root(mount_point: &Path, sysfs_root: &Path) -> Option<String> {
+    let dev = fs::metadata(mount_point).ok()?.dev();
+    let link =
+        sysfs_root
+            .join("dev/block")
+            .join(format!("{}:{}", libc::major(dev), libc::minor(dev)));
+
+    fs::read_link(link)
+        .ok()?
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
 }
 
 /// Parse a single line from /proc/mounts
 /// Format: device `mount_point` filesystem options dump pass
+///
+/// The kernel escapes a space, tab, newline or backslash in the device and the mount
+/// point as an octal escape such as `\040`. Both come back decoded.
 pub(crate) fn parse_mount_line(line: &str) -> Option<(String, MountInfo)> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.len() >= 3 {
-        let device = parts[0].to_string();
-        let mount_point = parts[1].to_string();
+        let device = unescape_mount_field(parts[0]);
+        let mount_point = unescape_mount_field(parts[1]);
         let filesystem = parts[2].to_string();
 
         // Filter out pseudo filesystems
@@ -224,6 +263,86 @@ pub(crate) fn parse_mount_line(line: &str) -> Option<(String, MountInfo)> {
     } else {
         None
     }
+}
+
+/// Decode the octal escapes in a `/proc/mounts` or `/proc/swaps` field
+///
+/// The kernel writes a space, tab, newline or backslash as `\040`, `\011`, `\012` or
+/// `\134`. Anything other than a backslash and an octal byte from `\000` to `\377` is
+/// kept as it is.
+fn unescape_mount_field(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some([b'\\', d0 @ b'0'..=b'3', d1 @ b'0'..=b'7', d2 @ b'0'..=b'7']) =
+            bytes.get(i..i + 4)
+        {
+            decoded.push(((d0 - b'0') << 6) | ((d1 - b'0') << 3) | (d2 - b'0'));
+            i += 4;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// Get the block devices in use as swap from /proc/swaps
+///
+/// An unreadable file means no swap is reported, which is logged because it leaves a
+/// gap in the protection. The kernel's exclusive open still refuses a swap device.
+pub(crate) fn get_swap_devices() -> Vec<String> {
+    match fs::read_to_string("/proc/swaps") {
+        Ok(content) => parse_swaps(&content),
+        Err(e) => {
+            warn!("Failed to read /proc/swaps, swap partitions will not be detected: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Parse /proc/swaps into the paths of the swap partitions
+///
+/// Each line is `Filename Type Size Used Priority`. Swap files are skipped. They live on
+/// a mounted filesystem, which the mount check covers. The header line is skipped
+/// because its type column is not `partition`.
+pub(crate) fn parse_swaps(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let path = fields.next()?;
+            (fields.next()? == "partition").then(|| unescape_mount_field(path))
+        })
+        .collect()
+}
+
+/// Every mount point of a disk and its partitions
+///
+/// A filesystem can sit on the whole disk with no partition table. A partition counts
+/// as system when any of its mount points does, so the list keeps them all.
+fn disk_mount_points(
+    disk_path: &str,
+    partitions: &[Partition],
+    mount_map: &HashMap<String, Vec<MountInfo>>,
+) -> Vec<String> {
+    std::iter::once(disk_path)
+        .chain(partitions.iter().map(|p| p.path.as_str()))
+        .filter_map(|path| mount_map.get(path))
+        .flatten()
+        .map(|mount| mount.mount_point.clone())
+        .collect()
+}
+
+/// Names of a disk and its partitions that are active swap, such as `sda3`
+fn swap_names(disk_path: &str, partitions: &[Partition], swap_devices: &[String]) -> Vec<String> {
+    std::iter::once(disk_path)
+        .chain(partitions.iter().map(|p| p.path.as_str()))
+        .filter(|path| swap_devices.iter().any(|swap| swap == path))
+        .filter_map(|path| path.strip_prefix("/dev/"))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Get partition labels from /dev/disk/by-label/
@@ -333,7 +452,7 @@ pub(crate) fn read_holders(sys_path: &Path, device_name: &str) -> Vec<Holder> {
 /// Get partitions for a device
 fn get_partitions(
     device_name: &str,
-    mount_map: &HashMap<String, MountInfo>,
+    mount_map: &HashMap<String, Vec<MountInfo>>,
     label_map: &HashMap<String, String>,
 ) -> Vec<Partition> {
     let mut partitions = Vec::new();
@@ -363,7 +482,7 @@ fn get_partitions(
                     .map_or(0, |sectors| sectors * 512);
 
                 // Get mount info (mount point and filesystem)
-                let mount_info = mount_map.get(&part_path);
+                let mount_info = mount_map.get(&part_path).and_then(|mounts| mounts.first());
                 let mount_point = mount_info.map(|m| m.mount_point.clone());
                 let filesystem = mount_info.and_then(|m| m.filesystem.clone());
 
@@ -425,12 +544,13 @@ pub(crate) fn detect_drive_type(name: &str, sys_path: &str) -> DriveType {
 
 /// Check if a drive is a system drive
 ///
-/// Checks run from the most specific reason to the most general one: a system
-/// mount point, a stacked device-mapper or md device, then the non-removable rule.
+/// The first rule that matches gives the reason. `swaps` names the disk or
+/// partitions in use as swap.
 pub(crate) fn check_if_system_drive(
     name: &str,
     mount_points: &[String],
     holders: &[Holder],
+    swaps: &[String],
     removable: bool,
 ) -> (bool, Option<String>) {
     // Check mount points for system paths
@@ -453,9 +573,14 @@ pub(crate) fn check_if_system_drive(
         );
     }
 
+    // Swap holds memory contents, so writing under it corrupts a running system
+    if let Some(held) = swaps.first() {
+        let kind = if held == name { "Disk" } else { "Partition" };
+        return (true, Some(format!("{kind} {held} is active swap space")));
+    }
+
     // Non-removable drives are likely system drives
-    // Exception: some external NVMe drives report as non-removable
-    if !removable && !name.starts_with("nvme") {
+    if !removable {
         return (true, Some("Non-removable internal drive".to_string()));
     }
 
@@ -669,7 +794,7 @@ mod tests {
         assert!(result.is_some());
         let (device, info) = result.unwrap();
         assert_eq!(device, "/dev/sdb1");
-        assert_eq!(info.mount_point, "/mnt/my\\040drive");
+        assert_eq!(info.mount_point, "/mnt/my drive");
         assert_eq!(info.filesystem, Some("vfat".to_string()));
     }
 
@@ -702,6 +827,276 @@ mod tests {
         // Two fields is not enough (need at least device, mount_point, filesystem)
         let result = parse_mount_line("/dev/sda1 /");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_mount_line_decodes_tab_newline_and_backslash() {
+        let line = "/dev/sdb1 /mnt/a\\011b\\012c\\134d ext4 rw 0 0";
+        let (_, info) = parse_mount_line(line).unwrap();
+        assert_eq!(info.mount_point, "/mnt/a\tb\nc\\d");
+    }
+
+    #[test]
+    fn test_parse_mount_line_decodes_each_escape_once() {
+        // `\134040` is an escaped backslash followed by the text `040`, not a space
+        let (_, info) = parse_mount_line("/dev/sdb1 /mnt/x\\134040y ext4 rw 0 0").unwrap();
+        assert_eq!(info.mount_point, "/mnt/x\\040y");
+    }
+
+    #[test]
+    fn test_parse_mount_line_keeps_text_that_is_not_an_octal_escape() {
+        for path in [
+            "/mnt/plain",
+            "/mnt/a\\b",
+            "/mnt/a\\04",
+            "/mnt/a\\0x0",
+            "/mnt/a\\400",
+        ] {
+            let line = format!("/dev/sdb1 {path} ext4 rw 0 0");
+            assert_eq!(parse_mount_line(&line).unwrap().1.mount_point, path);
+        }
+    }
+
+    #[test]
+    fn test_parse_mount_line_decodes_device() {
+        let (device, _) =
+            parse_mount_line("/dev/disk/by-label/My\\040Disk /mnt/disk ext4 rw 0 0").unwrap();
+        assert_eq!(device, "/dev/disk/by-label/My Disk");
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_mounts tests
+    // -------------------------------------------------------------------------
+
+    /// Mount points of `sda` and its partitions in `mounts`, as `parse_block_device` sees them
+    fn sda_mount_points(mounts: &HashMap<String, Vec<MountInfo>>) -> Vec<String> {
+        let partitions: Vec<Partition> = ["/dev/sda1", "/dev/sda2"]
+            .map(|path| Partition {
+                path: path.to_string(),
+                ..Partition::default()
+            })
+            .into();
+        disk_mount_points("/dev/sda", &partitions, mounts)
+    }
+
+    #[test]
+    fn test_parse_mounts_keeps_every_mount_of_a_device() {
+        let mounts = parse_mounts(
+            "/dev/sda1 /boot/efi vfat rw 0 0\n\
+             /dev/sda2 / btrfs rw,subvol=/@ 0 0\n\
+             /dev/sda2 /.snapshots btrfs rw,subvol=/@/.snapshots 0 0\n",
+            Path::new("/nonexistent"),
+        );
+
+        let root: Vec<&str> = mounts["/dev/sda2"]
+            .iter()
+            .map(|m| m.mount_point.as_str())
+            .collect();
+        assert_eq!(root, ["/", "/.snapshots"]);
+    }
+
+    #[test]
+    fn test_disk_with_root_remounted_at_snapshots_is_system() {
+        // The later mount of the same partition must not hide `/`
+        let mounts = parse_mounts(
+            "/dev/sda2 / btrfs rw 0 0\n/dev/sda2 /.snapshots btrfs rw 0 0\n",
+            Path::new("/nonexistent"),
+        );
+
+        let (is_system, reason) =
+            check_if_system_drive("sda", &sda_mount_points(&mounts), &[], &[], true);
+
+        assert!(is_system);
+        assert_eq!(reason.unwrap(), "Contains system mount point: /");
+    }
+
+    #[test]
+    fn test_filesystem_on_the_whole_disk_is_system() {
+        // A filesystem made on `/dev/sda` itself, with no partition table
+        let mounts = parse_mounts("/dev/sda / ext4 rw 0 0\n", Path::new("/nonexistent"));
+
+        let (is_system, reason) =
+            check_if_system_drive("sda", &sda_mount_points(&mounts), &[], &[], true);
+
+        assert!(is_system);
+        assert_eq!(reason.unwrap(), "Contains system mount point: /");
+    }
+
+    #[test]
+    fn test_disk_with_only_a_snapshots_mount_is_not_system() {
+        let mounts = parse_mounts(
+            "/dev/sda2 /.snapshots btrfs rw 0 0\n",
+            Path::new("/nonexistent"),
+        );
+
+        let (is_system, _) =
+            check_if_system_drive("sda", &sda_mount_points(&mounts), &[], &[], true);
+
+        assert!(!is_system);
+    }
+
+    #[test]
+    fn test_disk_with_efi_partition_mounted_at_efi_is_system() {
+        let mounts = parse_mounts("/dev/sda1 /efi vfat rw 0 0\n", Path::new("/nonexistent"));
+
+        let (is_system, reason) =
+            check_if_system_drive("sda", &sda_mount_points(&mounts), &[], &[], true);
+
+        assert!(is_system);
+        assert_eq!(reason.unwrap(), "Contains system mount point: /efi");
+    }
+
+    #[test]
+    fn test_disk_mounted_under_a_path_with_a_space_lists_the_decoded_path() {
+        let mounts = parse_mounts(
+            "/dev/sda1 /media/user/My\\040Backup ext4 rw 0 0\n",
+            Path::new("/nonexistent"),
+        );
+
+        assert_eq!(sda_mount_points(&mounts), ["/media/user/My Backup"]);
+    }
+
+    // -------------------------------------------------------------------------
+    // /dev/root resolution tests
+    // -------------------------------------------------------------------------
+
+    /// A fake sysfs whose `dev/block` entry for the filesystem holding `mount_point`
+    /// links to a partition named `partition`.
+    fn sysfs_with_root_on(root: &Path, mount_point: &Path, partition: &str) -> PathBuf {
+        let dev = fs::metadata(mount_point).unwrap().dev();
+        let sysfs = root.join("sys");
+        let block = sysfs.join("dev/block");
+        fs::create_dir_all(&block).unwrap();
+        symlink(
+            format!("../../devices/platform/soc/mmc0/block/mmcblk0/{partition}"),
+            block.join(format!("{}:{}", libc::major(dev), libc::minor(dev))),
+        )
+        .unwrap();
+        sysfs
+    }
+
+    #[test]
+    fn test_resolve_dev_root_reads_the_partition_name_from_sysfs() {
+        let root = TempDir::new().unwrap();
+        let sysfs = sysfs_with_root_on(root.path(), root.path(), "mmcblk0p2");
+
+        assert_eq!(
+            resolve_dev_root(root.path(), &sysfs),
+            Some("mmcblk0p2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_dev_root_without_a_sysfs_entry_is_none() {
+        let root = TempDir::new().unwrap();
+        let empty_sysfs = root.path().join("sys");
+        fs::create_dir_all(empty_sysfs.join("dev/block")).unwrap();
+
+        assert_eq!(resolve_dev_root(root.path(), &empty_sysfs), None);
+    }
+
+    #[test]
+    fn test_resolve_dev_root_for_a_missing_mount_point_is_none() {
+        let root = TempDir::new().unwrap();
+
+        assert_eq!(
+            resolve_dev_root(&root.path().join("missing"), root.path()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_mounts_attributes_dev_root_to_its_partition() {
+        let root = TempDir::new().unwrap();
+        let mount_point = root.path().join("rootfs");
+        fs::create_dir_all(&mount_point).unwrap();
+        let sysfs = sysfs_with_root_on(root.path(), &mount_point, "mmcblk0p2");
+
+        let mounts = parse_mounts(
+            &format!("/dev/root {} ext4 rw 0 0\n", mount_point.display()),
+            &sysfs,
+        );
+
+        assert!(!mounts.contains_key("/dev/root"));
+        assert_eq!(
+            mounts["/dev/mmcblk0p2"][0].mount_point,
+            mount_point.to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_parse_mounts_keeps_dev_root_when_it_cannot_be_resolved() {
+        let root = TempDir::new().unwrap();
+        let mounts = parse_mounts("/dev/root / ext4 rw 0 0\n", &root.path().join("sys"));
+
+        assert_eq!(mounts["/dev/root"][0].mount_point, "/");
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_swaps tests
+    // -------------------------------------------------------------------------
+
+    const SWAPS: &str = "\
+Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
+/dev/nvme0n1p3                          partition\t8388604\t\t0\t\t-2
+/swapfile                               file\t\t2097148\t\t0\t\t-3
+/dev/disk/by-label/swap\\040two          partition\t1048572\t\t0\t\t-4
+";
+
+    #[test]
+    fn test_parse_swaps_lists_partitions_and_skips_swap_files() {
+        assert_eq!(
+            parse_swaps(SWAPS),
+            ["/dev/nvme0n1p3", "/dev/disk/by-label/swap two"]
+        );
+    }
+
+    #[test]
+    fn test_parse_swaps_with_no_swap_is_empty() {
+        assert_eq!(
+            parse_swaps("Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"),
+            Vec::<String>::new()
+        );
+        assert_eq!(parse_swaps(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_swap_names_pick_the_disk_and_partitions_in_use() {
+        let partitions: Vec<Partition> = ["/dev/sda1", "/dev/sda3"]
+            .map(|path| Partition {
+                path: path.to_string(),
+                ..Partition::default()
+            })
+            .into();
+        let swap_devices = parse_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/sda3 partition 1024 0 -2\n\
+             /dev/sdab1 partition 1024 0 -3\n",
+        );
+
+        assert_eq!(swap_names("/dev/sda", &partitions, &swap_devices), ["sda3"]);
+        assert_eq!(
+            swap_names("/dev/sdb", &[], &swap_devices),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn test_check_if_system_drive_swap_partition_on_removable_disk() {
+        let (is_system, reason) =
+            check_if_system_drive("sdb", &[], &[], &["sdb2".to_string()], true);
+
+        assert!(is_system);
+        assert_eq!(reason.unwrap(), "Partition sdb2 is active swap space");
+    }
+
+    #[test]
+    fn test_check_if_system_drive_whole_disk_swap() {
+        let (is_system, reason) =
+            check_if_system_drive("sdb", &[], &[], &["sdb".to_string()], true);
+
+        assert!(is_system);
+        assert_eq!(reason.unwrap(), "Disk sdb is active swap space");
     }
 
     // -------------------------------------------------------------------------
@@ -786,27 +1181,29 @@ mod tests {
 
     #[test]
     fn test_check_if_system_drive_root() {
-        let (is_system, reason) = check_if_system_drive("sda", &["/".to_string()], &[], false);
+        let (is_system, reason) = check_if_system_drive("sda", &["/".to_string()], &[], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("system mount point"));
     }
 
     #[test]
     fn test_check_if_system_drive_home() {
-        let (is_system, reason) = check_if_system_drive("sda", &["/home".to_string()], &[], false);
+        let (is_system, reason) =
+            check_if_system_drive("sda", &["/home".to_string()], &[], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("/home"));
     }
 
     #[test]
     fn test_check_if_system_drive_boot() {
-        let (is_system, _reason) = check_if_system_drive("sda", &["/boot".to_string()], &[], false);
+        let (is_system, _reason) =
+            check_if_system_drive("sda", &["/boot".to_string()], &[], &[], false);
         assert!(is_system);
     }
 
     #[test]
     fn test_check_if_system_drive_non_removable() {
-        let (is_system, reason) = check_if_system_drive("sda", &[], &[], false);
+        let (is_system, reason) = check_if_system_drive("sda", &[], &[], &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("Non-removable"));
     }
@@ -814,17 +1211,17 @@ mod tests {
     #[test]
     fn test_check_if_system_drive_removable_no_system_mounts() {
         let (is_system, reason) =
-            check_if_system_drive("sdb", &["/mnt/usb".to_string()], &[], true);
+            check_if_system_drive("sdb", &["/mnt/usb".to_string()], &[], &[], true);
         assert!(!is_system);
         assert!(reason.is_none());
     }
 
     #[test]
-    fn test_check_if_system_drive_nvme_non_removable_allowed() {
-        // External NVMe drives report as non-removable but aren't system drives
-        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], &[], false);
-        assert!(!is_system);
-        assert!(reason.is_none());
+    fn test_check_if_system_drive_nvme_non_removable_is_system() {
+        // An internal NVMe disk, the boot disk included, reports as non-removable
+        let (is_system, reason) = check_if_system_drive("nvme0n1", &[], &[], &[], false);
+        assert!(is_system);
+        assert!(reason.unwrap().contains("Non-removable"));
     }
 
     #[test]
@@ -833,7 +1230,7 @@ mod tests {
             "/media/user/USB".to_string(),
             "/run/media/user/disk".to_string(),
         ];
-        let (is_system, _) = check_if_system_drive("sdc", &mount_points, &[], true);
+        let (is_system, _) = check_if_system_drive("sdc", &mount_points, &[], &[], true);
         assert!(!is_system);
     }
 
@@ -844,7 +1241,7 @@ mod tests {
             held: "sda2".to_string(),
             by: "dm-0".to_string(),
         }];
-        let (is_system, reason) = check_if_system_drive("sda", &[], &holders, true);
+        let (is_system, reason) = check_if_system_drive("sda", &[], &holders, &[], true);
         assert!(is_system);
         assert_eq!(
             reason.unwrap(),
@@ -858,7 +1255,7 @@ mod tests {
             held: "sdb".to_string(),
             by: "md0".to_string(),
         }];
-        let (is_system, reason) = check_if_system_drive("sdb", &[], &holders, true);
+        let (is_system, reason) = check_if_system_drive("sdb", &[], &holders, &[], true);
         assert!(is_system);
         let reason = reason.unwrap();
         assert!(reason.starts_with("Disk sdb "), "{reason}");
@@ -867,19 +1264,19 @@ mod tests {
 
     #[test]
     fn test_check_if_system_drive_held_nvme_without_mounts() {
-        // The non-removable rule exempts external NVMe drives, the holders rule must not
+        // A held NVMe partition is reported by the holders rule before the non-removable one
         let holders = [Holder {
             held: "nvme1n1p1".to_string(),
             by: "dm-0".to_string(),
         }];
-        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], &holders, false);
+        let (is_system, reason) = check_if_system_drive("nvme1n1", &[], &holders, &[], false);
         assert!(is_system);
         assert!(reason.unwrap().contains("nvme1n1p1"));
     }
 
     #[test]
     fn test_check_if_system_drive_no_holders_unchanged() {
-        let (is_system, reason) = check_if_system_drive("sdb", &[], &[], true);
+        let (is_system, reason) = check_if_system_drive("sdb", &[], &[], &[], true);
         assert!(!is_system);
         assert!(reason.is_none());
     }
@@ -891,7 +1288,7 @@ mod tests {
             by: "dm-0".to_string(),
         }];
         let (is_system, reason) =
-            check_if_system_drive("sda", &["/boot".to_string()], &holders, true);
+            check_if_system_drive("sda", &["/boot".to_string()], &holders, &[], true);
         assert!(is_system);
         let reason = reason.unwrap();
         assert!(reason.contains("system mount point"), "{reason}");
@@ -904,7 +1301,7 @@ mod tests {
             held: "sda2".to_string(),
             by: "dm-0".to_string(),
         }];
-        let (_, reason) = check_if_system_drive("sda", &[], &holders, false);
+        let (_, reason) = check_if_system_drive("sda", &[], &holders, &[], false);
         assert!(reason.unwrap().contains("dm-0"));
     }
 
@@ -1011,11 +1408,17 @@ mod tests {
         let mounts = mounts.unwrap();
         // There should be at least the root mount
         assert!(
-            mounts.values().any(|info| info.mount_point == "/"),
+            mounts
+                .values()
+                .flatten()
+                .any(|info| info.mount_point == "/"),
             "Should find root mount point"
         );
         // Root should have a filesystem
-        let root_info = mounts.values().find(|info| info.mount_point == "/");
+        let root_info = mounts
+            .values()
+            .flatten()
+            .find(|info| info.mount_point == "/");
         assert!(root_info.is_some());
         assert!(root_info.unwrap().filesystem.is_some());
     }
