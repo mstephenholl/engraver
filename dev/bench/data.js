@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795443406295,
+  "lastUpdate": 1795447165008,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -1293,6 +1293,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 142.67,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "02b894536365ef5891c68c1ad8cc21f907c65d11",
+          "message": "perf(core): align the Writer buffer and raise the default block size to 32M (#49)\n\n* test(core): require Writer chunks to start on a 4096-byte boundary\n\nDirect-I/O devices skip their bounce-buffer copy only when the buffer\naddress and length are both aligned. The Writer's chunk buffer is a\nplain Vec, which the allocator places 16 bytes past a page boundary, so\nevery chunk takes the copy. Record the address of each write the Writer\nissues and require full chunks to start on a 4096-byte boundary.\n\nThe test is ignored so this commit stays green; the next commit fixes\nthe buffer and removes the attribute. Run it on this commit with\n`cargo test -p engraver-core --lib -- --ignored test_writer_full_chunks`\nto see it fail.\n\n* perf(core): align the Writer buffer so direct I/O skips the bounce copy\n\nLinuxDevice writes a chunk straight from the caller's buffer only when\nthe buffer address and length are both multiples of the device alignment.\nOtherwise it copies the chunk into its own aligned buffer first. Neither\ncondition held for `engraver write`:\n\n- The CLI passed the chunk size (4 MiB) as the device alignment, a value\n  no buffer address satisfies.\n- The Writer's chunk buffer was a plain `Vec`, which glibc places 16\n  bytes past a page boundary, so it is not even 4096-aligned.\n\nAllocate the Writer's chunk buffer on a 4096-byte boundary by\nover-allocating the `Vec` and slicing from the aligned offset, and use it\nin both `write_internal` variants and in the read-back of\n`write_and_verify`. Stop passing the chunk size as the device alignment\nin write, erase and verify so devices open at the 4096 default. Chunk\nsizing is unchanged. Windows and macOS only store the value in\n`DeviceInfo`, and verify opens without direct I/O.\n\nThe test added in the previous commit now passes, so drop its `ignore`.\n\n* perf(core): raise the default block size from 4M to 32M\n\nWith the Writer buffer and device alignment fixed, larger chunks no\nlonger pay for a bounce-buffer copy, so the chunk size sets how many\nsyscalls and USB transfers a write needs. On a 10 Gbps USB SSD a\n4096-aligned buffer measured 875 MiB/s at 4 MiB and 927 MiB/s at 32 MiB.\n\n`DEFAULT_BLOCK_SIZE` in the Writer and `DEFAULT_BLOCK_SIZE_STR` in the\nsettings change together. The settings constant also feeds the `erase`\nand `benchmark` defaults, so those move to 32M as well; the default\nbenchmark test grows from 256 MB to 320 MB to keep ten blocks per pass.\n\nLeft at 4M on purpose: the `verify` subcommand's own default,\n`read_buffer_size` and `cloud_chunk_size`. The read buffer no longer\nmatches the block size, so fix the comments that claimed it did and\nreplace the test that pinned the two together with one that keeps the\nread buffer large.\n\nUpdate the help texts, config example, READMEs and man pages that state\nthe default.",
+          "timestamp": "2026-11-23T10:14:04-05:00",
+          "tree_id": "427e72a3f390a0d0c2d92056eab013ab092f9226",
+          "url": "https://github.com/mstephenholl/engraver/commit/02b894536365ef5891c68c1ad8cc21f907c65d11"
+        },
+        "date": 1795447164239,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 1185.38,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 59212.15,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 52929.73,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 17223.59,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 103.6,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 57494.15,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 18871.01,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1641.27,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 36.08,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 53577.45,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 8129.93,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 576.54,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 42.51,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 54092.01,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 9464.26,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 677.76,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 122.44,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 14930.93,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1719.83,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 96.99,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 104.6,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 104.73,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 106.59,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 103.35,
             "unit": "iter/sec"
           }
         ]
