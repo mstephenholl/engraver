@@ -640,3 +640,45 @@ fn xz_followed_by_zero_padding_writes_the_payload() {
 
     assert_image_writes_payload("padded.img.xz", &image, &payload);
 }
+
+/// Asserts that writing `image` fails rather than stopping early with success.
+fn assert_image_fails_to_write(file_name: &str, image: &[u8]) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(file_name);
+    std::fs::write(&path, image).unwrap();
+
+    let mut source = Source::open(path.to_str().unwrap()).unwrap();
+    let mut target = std::io::Cursor::new(Vec::new());
+    let mut writer = Writer::with_config(WriteConfig::new().block_size(MIN_BLOCK_SIZE));
+
+    let result = writer.write(&mut source, &mut target, 0);
+
+    assert!(
+        result.is_err(),
+        "{file_name}: a member after zero padding must fail the write, got {result:?}"
+    );
+}
+
+#[test]
+fn gzip_with_a_member_after_zero_padding_fails() {
+    let (payload, split) = two_halves();
+    let image = [
+        zero_padded(gzip_member(&payload[..split])),
+        gzip_member(&payload[split..]),
+    ]
+    .concat();
+
+    assert_image_fails_to_write("data-after-padding.img.gz", &image);
+}
+
+#[test]
+fn bzip2_with_a_stream_after_zero_padding_fails() {
+    let (payload, split) = two_halves();
+    let image = [
+        zero_padded(bzip2_member(&payload[..split])),
+        bzip2_member(&payload[split..]),
+    ]
+    .concat();
+
+    assert_image_fails_to_write("data-after-padding.img.bz2", &image);
+}
