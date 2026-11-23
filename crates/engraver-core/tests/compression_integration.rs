@@ -492,3 +492,151 @@ fn all_formats_4mb_roundtrip() {
         );
     }
 }
+
+// ============================================================================
+// Multi-member images
+// ============================================================================
+//
+// `cat a.gz b.gz`, `gzip -c a b`, `xz -c a b`, `zstd -c a b` and pbzip2 all
+// write one file of several members. It must decompress to every member in
+// order.
+
+fn gzip_member(data: &[u8]) -> Vec<u8> {
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn xz_member(data: &[u8]) -> Vec<u8> {
+    let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 1);
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn zstd_member(data: &[u8]) -> Vec<u8> {
+    let mut encoder = zstd::Encoder::new(Vec::new(), 1).unwrap();
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn bzip2_member(data: &[u8]) -> Vec<u8> {
+    let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// Write `image` to `file_name` in a tempdir, open it as a `Source`, and write
+/// it through a `Writer` to a device sized for `payload`. Asserts the device
+/// holds exactly `payload`.
+///
+/// `source_size` is 0 because the decompressed length of a compressed image is
+/// unknown up front, which is what the CLI passes.
+fn assert_image_writes_payload(file_name: &str, image: &[u8], payload: &[u8]) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(file_name);
+    std::fs::write(&path, image).unwrap();
+
+    let mut source = Source::open(path.to_str().unwrap()).unwrap();
+    let mut device = create_test_device(payload.len() as u64);
+    let mut writer = Writer::with_config(WriteConfig::new().block_size(MIN_BLOCK_SIZE));
+
+    let result = writer
+        .write(&mut source, device.as_file_mut(), 0)
+        .unwrap_or_else(|e| panic!("writing {file_name} failed: {e}"));
+
+    assert_eq!(
+        result.bytes_written,
+        payload.len() as u64,
+        "{file_name}: bytes written"
+    );
+    assert!(
+        read_all(device.as_file_mut()) == payload,
+        "{file_name}: the device does not hold the full payload"
+    );
+}
+
+/// Two halves split off a block boundary, so the second member starts mid-block.
+fn two_halves() -> (Vec<u8>, usize) {
+    (test_data(200_000), 100_000)
+}
+
+#[test]
+fn gzip_with_two_members_writes_both() {
+    let (payload, split) = two_halves();
+    let image = [
+        gzip_member(&payload[..split]),
+        gzip_member(&payload[split..]),
+    ]
+    .concat();
+
+    assert_image_writes_payload("two-members.img.gz", &image, &payload);
+}
+
+#[test]
+fn bzip2_with_two_streams_writes_both() {
+    let (payload, split) = two_halves();
+    let image = [
+        bzip2_member(&payload[..split]),
+        bzip2_member(&payload[split..]),
+    ]
+    .concat();
+
+    assert_image_writes_payload("two-streams.img.bz2", &image, &payload);
+}
+
+#[test]
+fn xz_with_two_streams_writes_both() {
+    let (payload, split) = two_halves();
+    let image = [xz_member(&payload[..split]), xz_member(&payload[split..])].concat();
+
+    assert_image_writes_payload("two-streams.img.xz", &image, &payload);
+}
+
+#[test]
+fn zstd_with_two_frames_writes_both() {
+    let (payload, split) = two_halves();
+    let image = [
+        zstd_member(&payload[..split]),
+        zstd_member(&payload[split..]),
+    ]
+    .concat();
+
+    assert_image_writes_payload("two-frames.img.zst", &image, &payload);
+}
+
+// ============================================================================
+// Trailing zero padding
+// ============================================================================
+//
+// GNU gzip and bzip2 accept a file whose last member is followed by zero bytes
+// (tape and block-device padding), and xz allows zero Stream Padding after the
+// last stream. Such an image must still write in full.
+
+fn zero_padded(mut image: Vec<u8>) -> Vec<u8> {
+    image.resize(image.len() + 512, 0);
+    image
+}
+
+#[test]
+fn gzip_followed_by_zero_padding_writes_the_payload() {
+    let payload = test_data(100_000);
+    let image = zero_padded(gzip_member(&payload));
+
+    assert_image_writes_payload("padded.img.gz", &image, &payload);
+}
+
+#[test]
+fn bzip2_followed_by_zero_padding_writes_the_payload() {
+    let payload = test_data(100_000);
+    let image = zero_padded(bzip2_member(&payload));
+
+    assert_image_writes_payload("padded.img.bz2", &image, &payload);
+}
+
+#[test]
+fn xz_followed_by_zero_padding_writes_the_payload() {
+    let payload = test_data(100_000);
+    let image = zero_padded(xz_member(&payload));
+
+    assert_image_writes_payload("padded.img.xz", &image, &payload);
+}
