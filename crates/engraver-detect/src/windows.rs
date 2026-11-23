@@ -535,6 +535,41 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // Volume to disk mapping tests
+    // -------------------------------------------------------------------------
+
+    /// Disk 0 is the internal system disk, disk 1 is a removable USB stick.
+    const TWO_DISKS_CSV: &str = r#""Index","DeviceID","Model","Size","MediaType","InterfaceType","SerialNumber"
+"0","\\.\PHYSICALDRIVE0","Samsung SSD 970","512110190592","Fixed hard disk media","SCSI","S123456"
+"1","\\.\PHYSICALDRIVE1","SanDisk Ultra","32015679488","Removable Media","USB",""
+"#;
+
+    /// `C:` lives on disk 0 and `E:` on disk 1.
+    const C_AND_E_VOLUMES_CSV: &str = r#""DriveLetter","Label","FileSystem","Capacity"
+"C:","Windows","NTFS","511999156224"
+"E:","USB","FAT32","32010928128"
+"#;
+
+    #[test]
+    fn test_usb_disk_does_not_hold_the_system_volume() {
+        let disks = parse_powershell_disks(TWO_DISKS_CSV).unwrap();
+        let volumes = parse_powershell_volumes(C_AND_E_VOLUMES_CSV);
+        let usb = &disks[1];
+
+        // The same steps `list_drives` takes for each disk.
+        let partitions = get_disk_partitions(&usb.device_id, &volumes);
+        let mount_points: Vec<String> = partitions
+            .iter()
+            .filter_map(|p| p.mount_point.clone())
+            .collect();
+        let (is_system, reason) =
+            check_if_system_drive(&usb.media_type, &mount_points, &usb.interface_type);
+
+        assert_eq!(mount_points, vec!["E:".to_string()]);
+        assert!(!is_system, "USB disk flagged as system: {reason:?}");
+    }
+
+    // -------------------------------------------------------------------------
     // detect_drive_type tests
     // -------------------------------------------------------------------------
 
