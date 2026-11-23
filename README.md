@@ -335,7 +335,7 @@ engraver config --init
 
 ```toml
 [write]
-block_size = "4M"
+block_size = "32M"
 verify = true
 checkpoint = false
 retry_attempts = 3
@@ -351,7 +351,7 @@ skip_confirmation = false
 quiet = false
 
 [benchmark]
-block_size = "4M"
+block_size = "32M"
 test_size = "256M"
 pattern = "zeros"
 passes = 1
@@ -367,7 +367,7 @@ cloud_chunk_size = "4M"
 
 | Section | Option | Description | Default |
 |---------|--------|-------------|---------|
-| `[write]` | `block_size` | Default block size for writes | `"4M"` |
+| `[write]` | `block_size` | Default block size for writes | `"32M"` |
 | `[write]` | `verify` | Always verify writes | `false` |
 | `[write]` | `checkpoint` | Enable checkpointing by default | `false` |
 | `[write]` | `retry_attempts` | Number of retry attempts on transient errors | `3` |
@@ -377,7 +377,7 @@ cloud_chunk_size = "4M"
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
 | `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
 | `[behavior]` | `quiet` | Suppress non-error output | `false` |
-| `[benchmark]` | `block_size` | Default block size for benchmarks | `"4M"` |
+| `[benchmark]` | `block_size` | Default block size for benchmarks | `"32M"` |
 | `[benchmark]` | `test_size` | Default test data size | `"256M"` |
 | `[benchmark]` | `pattern` | Default data pattern (`zeros`, `random`, `sequential`) | `"zeros"` |
 | `[benchmark]` | `passes` | Default number of benchmark passes | `1` |
@@ -393,7 +393,7 @@ Command-line flags always override configuration file settings.
 Test drive write speed before committing to a long write operation:
 
 ```bash
-# Basic benchmark (256 MB test, 4 MB blocks)
+# Basic benchmark (32 MB blocks, 320 MB test: at least 10 blocks per pass)
 engraver benchmark /dev/sdb
 
 # Custom test size and pattern
@@ -411,7 +411,7 @@ engraver benchmark /dev/sdb --json
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--size` | Amount of data to write | `256M` |
-| `--block-size` | Block size for writes | `4M` |
+| `--block-size` | Block size for writes | `32M` |
 | `--pattern` | Data pattern: `zeros`, `random`, `sequential` | `zeros` |
 | `--passes` | Number of benchmark passes | `1` |
 | `--test-block-sizes` | Test multiple block sizes (comma-separated) | - |

@@ -85,7 +85,7 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 4M
+        /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 32M
         #[arg(short, long)]
         block_size: Option<String>,
 
@@ -183,7 +183,7 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 4M
+        /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 32M
         #[arg(short, long)]
         block_size: Option<String>,
 
@@ -205,7 +205,7 @@ enum Commands {
         #[arg(short, long)]
         size: Option<String>,
 
-        /// Block size for writing (e.g., 4K, 1M, 4M). Must be power of 2, max 64M. Default from config or 4M
+        /// Block size for writing (e.g., 4K, 1M, 4M). Must be power of 2, max 64M. Default from config or 32M
         #[arg(short, long)]
         block_size: Option<String>,
 
