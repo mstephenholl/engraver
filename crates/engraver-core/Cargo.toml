@@ -33,7 +33,7 @@ dirs-next = "2"
 # Compression (optional)
 flate2 = { version = "1", optional = true }
 xz2 = { version = "0.1", optional = true }
-zstd = { version = "0.13", optional = true }
+zstd = { version = "0.14", optional = true }
 bzip2 = { version = "0.6", optional = true }
 
 # HTTP client (optional) - uses rustls for cross-compilation support
