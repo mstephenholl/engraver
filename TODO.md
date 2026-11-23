@@ -185,10 +185,14 @@ Planned features, improvements, and development roadmap for Engraver.
   - Results and how to rerun them: `docs/benchmarks/io-uring.md`
   - Still to run on a USB 3 stick
 
-- [ ] **Direct I/O optimizations**
-  - Align the Writer's buffer so direct I/O skips the bounce-buffer copy. The copy makes writes to a USB SSD 17% slower, and on NVMe it takes 1.5 to 1.9x the CPU per GiB
-  - Raise the default block size from 4M. On a USB SSD, aligned 32 MiB writes were 6% faster than 4 MiB ones. Measure on a USB stick first
-  - Adaptive block sizing based on device performance
+- [x] **Direct I/O optimizations**
+  - The Writer's chunk buffer starts on a 4096-byte boundary, so direct I/O skips the bounce-buffer copy
+  - The default block size for `write`, `erase` and `benchmark` is 32M instead of 4M
+  - Writing a 2 GiB image to a USB SSD went from 588 to 714 MiB/s
+  - `erase` still goes through the bounce buffer, because its zero buffer is a plain `Vec`
+  - The 32M default is still to be measured on a USB stick
+
+- [ ] **Adaptive block sizing based on device performance**
 
 ---
 
