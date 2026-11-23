@@ -413,8 +413,8 @@ mod tests {
     #[test]
     fn test_handle_verify_result_cancelled() {
         let handled = handle_verify_result(Err(engraver_core::Error::Cancelled), true);
-        // Cancelled is not an error - returns Ok
-        assert!(handled.is_ok());
+        let err = handled.expect_err("a cancelled verification must not return Ok");
+        crate::commands::assert_cancelled(&err);
     }
 
     #[test]

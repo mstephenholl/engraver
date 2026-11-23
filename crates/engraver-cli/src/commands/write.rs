@@ -2139,6 +2139,16 @@ mod tests {
     }
 
     #[test]
+    fn test_setup_checksum_with_pending_cancel_returns_a_cancelled_error() {
+        let (_source, args) = checksum_args(SHA256_OF_64K_OF_0XAB, true);
+
+        let err = setup_checksum(&args, Some(64 * 1024), &silent_ctx())
+            .expect_err("a pending cancel must stop the checksum step");
+
+        crate::commands::assert_cancelled(&err);
+    }
+
+    #[test]
     fn test_setup_checksum_still_reports_a_real_mismatch() {
         let (_source, args) = checksum_args(&"00".repeat(32), false);
 

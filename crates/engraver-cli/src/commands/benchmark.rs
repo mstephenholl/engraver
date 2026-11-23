@@ -1017,4 +1017,89 @@ mod tests {
             assert!(result.is_ok());
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Cancellation tests
+    // -------------------------------------------------------------------------
+
+    const TEST_SIZE: u64 = 64 * 1024;
+    const TEST_BLOCK: u64 = 4 * 1024;
+
+    fn scratch_device() -> std::io::Cursor<Vec<u8>> {
+        std::io::Cursor::new(vec![0u8; 1024 * 1024])
+    }
+
+    #[test]
+    fn test_single_benchmark_with_pending_cancel_returns_a_cancelled_error() {
+        let mut device = scratch_device();
+
+        let err = run_single_benchmark(
+            &mut device,
+            "/dev/test",
+            TEST_SIZE,
+            TEST_BLOCK,
+            DataPattern::Zeros,
+            1,
+            true,
+            true,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .expect_err("a pending cancel must stop the benchmark");
+
+        crate::commands::assert_cancelled(&err);
+    }
+
+    #[test]
+    fn test_single_benchmark_without_cancel_succeeds() {
+        let mut device = scratch_device();
+
+        run_single_benchmark(
+            &mut device,
+            "/dev/test",
+            TEST_SIZE,
+            TEST_BLOCK,
+            DataPattern::Zeros,
+            1,
+            true,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("an uncancelled benchmark must succeed");
+    }
+
+    #[test]
+    fn test_multi_block_benchmark_with_pending_cancel_returns_a_cancelled_error() {
+        let mut device = scratch_device();
+
+        let err = run_multi_block_benchmark(
+            &mut device,
+            "/dev/test",
+            TEST_SIZE,
+            &[TEST_BLOCK, 2 * TEST_BLOCK],
+            DataPattern::Zeros,
+            true,
+            true,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .expect_err("a pending cancel must stop the benchmark");
+
+        crate::commands::assert_cancelled(&err);
+    }
+
+    #[test]
+    fn test_multi_block_benchmark_without_cancel_succeeds() {
+        let mut device = scratch_device();
+
+        run_multi_block_benchmark(
+            &mut device,
+            "/dev/test",
+            TEST_SIZE,
+            &[TEST_BLOCK, 2 * TEST_BLOCK],
+            DataPattern::Zeros,
+            true,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("an uncancelled benchmark must succeed");
+    }
 }

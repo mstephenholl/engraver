@@ -124,6 +124,37 @@ fn format_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    // -------------------------------------------------------------------------
+    // execute cancellation tests
+    // -------------------------------------------------------------------------
+
+    fn source_file(len: usize) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&vec![0xABu8; len]).unwrap();
+        file
+    }
+
+    #[test]
+    fn test_execute_with_pending_cancel_returns_a_cancelled_error() {
+        let file = source_file(64 * 1024);
+        let cancel = Arc::new(AtomicBool::new(true));
+
+        let err = execute(file.path().to_str().unwrap(), "sha256", cancel, true)
+            .expect_err("a pending cancel must stop the checksum");
+
+        crate::commands::assert_cancelled(&err);
+    }
+
+    #[test]
+    fn test_execute_without_cancel_succeeds() {
+        let file = source_file(64 * 1024);
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        execute(file.path().to_str().unwrap(), "sha256", cancel, true)
+            .expect("an uncancelled checksum must succeed");
+    }
 
     // -------------------------------------------------------------------------
     // format_size tests
