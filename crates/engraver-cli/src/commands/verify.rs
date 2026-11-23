@@ -25,8 +25,9 @@ pub fn execute(
     // Parse block size
     let block_size = engraver_core::parse_block_size(block_size_str)? as usize;
 
-    // Check for elevated privileges (needed for raw device access)
-    if !has_elevated_privileges() {
+    // Check for elevated privileges (needed for raw device access). A regular
+    // file is no device, and reading one needs no privileges.
+    if !has_elevated_privileges() && !is_regular_file(target) {
         #[cfg(unix)]
         bail!(
             "Root privileges required.\n\
@@ -278,6 +279,10 @@ fn handle_verify_result(
     }
 }
 
+fn is_regular_file(path: &str) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+}
+
 /// Get the raw device path for a given device path
 /// On macOS, converts /dev/disk2 to /dev/rdisk2 for raw access
 fn get_raw_device_path(path: &str) -> String {
@@ -375,6 +380,29 @@ mod tests {
         // Non-standard paths should pass through unchanged
         assert_eq!(get_raw_device_path("/tmp/image.img"), "/tmp/image.img");
         assert_eq!(get_raw_device_path("./local/file"), "./local/file");
+    }
+
+    // -------------------------------------------------------------------------
+    // is_regular_file tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_is_regular_file_accepts_a_file_and_rejects_a_directory_and_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("target.bin");
+        std::fs::write(&file, b"x").unwrap();
+
+        assert!(is_regular_file(file.to_str().unwrap()));
+        assert!(!is_regular_file(dir.path().to_str().unwrap()));
+        assert!(!is_regular_file(
+            dir.path().join("missing").to_str().unwrap()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_regular_file_rejects_a_device_node() {
+        assert!(!is_regular_file("/dev/null"));
     }
 
     // -------------------------------------------------------------------------

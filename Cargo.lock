@@ -714,6 +714,7 @@ dependencies = [
  "engraver-core",
  "engraver-detect",
  "engraver-platform",
+ "flate2",
  "humansize",
  "indicatif",
  "predicates",
