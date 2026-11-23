@@ -418,8 +418,8 @@ fn http_gzip_source_pipeline() {
     let server = start_mock(MockBehavior::ServeData(compressed));
     let url = format!("{}/image.iso.gz", server.url);
 
-    // Manually construct HttpSource → GzipSource pipeline
-    // (Source::open treats all HTTP URLs as plain Remote)
+    // Build the HttpSource → GzipSource pipeline by hand, from the wrappers
+    // (tests/http_compressed.rs covers Source::open on compressed URLs)
     let http_source = HttpSource::open(&url).unwrap();
     let info = SourceInfo::compressed(&url, compressed_len as u64, ST::Gzip);
     let mut gzip_source = GzipSource::new(http_source, info);
