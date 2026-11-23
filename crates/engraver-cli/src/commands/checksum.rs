@@ -3,11 +3,18 @@
 use anyhow::{Context, Result};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use engraver_core::{validate_source, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
 
 /// Execute the checksum command
-pub fn execute(source: &str, algorithm: &str, silent: bool) -> Result<()> {
+pub fn execute(
+    source: &str,
+    algorithm: &str,
+    cancel_flag: Arc<AtomicBool>,
+    silent: bool,
+) -> Result<()> {
     // Parse algorithm
     let algo: ChecksumAlgorithm = algorithm
         .parse()
@@ -63,9 +70,11 @@ pub fn execute(source: &str, algorithm: &str, silent: bool) -> Result<()> {
     // Calculate checksum
     let config = VerifyConfig::new();
     let pb_clone = pb.clone();
-    let mut verifier = Verifier::with_config(config).on_progress(move |progress| {
-        pb_clone.set_position(progress.bytes_processed);
-    });
+    let mut verifier = Verifier::with_config(config)
+        .with_cancel_flag(cancel_flag)
+        .on_progress(move |progress| {
+            pb_clone.set_position(progress.bytes_processed);
+        });
 
     let checksum = verifier
         .calculate_checksum(&mut source_reader, algo, source_size)

@@ -282,7 +282,6 @@ fn verify_cancellation() {
     let verifier = Verifier::with_config(config);
     let cancel = verifier.cancel_handle();
 
-    // Cancel after the first progress callback (compare() resets the flag on entry)
     let cancel_clone = cancel.clone();
     let mut verifier = verifier.on_progress(move |_p| {
         cancel_clone.store(true, Ordering::SeqCst);
