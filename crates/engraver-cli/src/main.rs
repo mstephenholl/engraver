@@ -266,11 +266,33 @@ struct Exit {
     cancelled_line: Option<String>,
 }
 
+/// Exit status for a run cancelled with Ctrl+C: 128 + SIGINT.
+const EXIT_CANCELLED: i32 = 130;
+
 /// Decide how a failed run ends.
-fn exit_for(_err: &anyhow::Error) -> Exit {
+///
+/// A run cancelled with Ctrl+C exits 130, so `engraver ... && next-step`
+/// stops and a supervisor sees the interrupt. That is the case when any error
+/// in the chain is [`engraver_core::Error::Cancelled`]. Every other error
+/// exits 1.
+fn exit_for(err: &anyhow::Error) -> Exit {
+    if !commands::is_cancelled(err) {
+        return Exit {
+            code: 1,
+            cancelled_line: None,
+        };
+    }
+
+    // The outermost message says what was cancelled. A bare `Cancelled` has
+    // only the library's wording, so use a plain default instead.
+    let line = if err.chain().len() > 1 {
+        err.to_string()
+    } else {
+        "Cancelled.".to_string()
+    };
     Exit {
-        code: 1,
-        cancelled_line: None,
+        code: EXIT_CANCELLED,
+        cancelled_line: Some(line),
     }
 }
 
@@ -319,7 +341,7 @@ fn run() -> Result<()> {
             if !silent_for_handler {
                 eprintln!("\n{}", style("Forced exit").red().bold());
             }
-            std::process::exit(130);
+            std::process::exit(EXIT_CANCELLED);
         }
         c.store(true, std::sync::atomic::Ordering::SeqCst);
         if !silent_for_handler {

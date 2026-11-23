@@ -812,6 +812,19 @@ fn test_invalid_args_exit_code() {
     engraver().arg("write").assert().failure(); // Just check it fails, exit code varies
 }
 
+#[test]
+fn test_runtime_error_exit_code_is_1() {
+    engraver()
+        .args(["checksum", "/nonexistent/file"])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn test_usage_error_exit_code_is_2() {
+    engraver().arg("write").assert().code(2);
+}
+
 /// A Ctrl+C that cancels a run must not look like success. Scripts that chain
 /// `engraver ... && next-step` rely on a non-zero exit, and 130 is the shell
 /// convention for "terminated by SIGINT".

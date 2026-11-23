@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 use engraver_core::{validate_source, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
 
+use super::context_or_cancelled;
+
 /// Execute the checksum command
 pub fn execute(
     source: &str,
@@ -78,7 +80,9 @@ pub fn execute(
 
     let checksum = verifier
         .calculate_checksum(&mut source_reader, algo, source_size)
-        .context("Failed to calculate checksum")?;
+        .map_err(|e| {
+            context_or_cancelled(e, "Failed to calculate checksum", "Checksum cancelled.")
+        })?;
 
     pb.finish_and_clear();
 

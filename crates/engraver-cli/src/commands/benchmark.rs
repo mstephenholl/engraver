@@ -21,6 +21,8 @@ use engraver_core::{
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
+use super::cancelled;
+
 /// Arguments for the benchmark command
 pub struct BenchmarkArgs {
     /// Target device path
@@ -467,10 +469,7 @@ where
             }
             Ok(())
         }
-        Err(BenchmarkError::Cancelled) => {
-            println_if!(silent, "\n{} Benchmark cancelled", style("✗").red());
-            Ok(())
-        }
+        Err(BenchmarkError::Cancelled) => Err(cancelled("Benchmark cancelled")),
         Err(e) => Err(anyhow::anyhow!("Benchmark failed: {}", e)),
     }
 }
@@ -504,8 +503,7 @@ where
 
     for (idx, &block_size) in block_sizes.iter().enumerate() {
         if cancel_flag.load(Ordering::Relaxed) {
-            println_if!(silent, "\n{} Benchmark cancelled", style("✗").red());
-            return Ok(());
+            return Err(cancelled("Benchmark cancelled"));
         }
 
         println_if!(
@@ -569,10 +567,7 @@ where
                     speed_display: engraver_core::benchmark::format_speed(speed),
                 });
             }
-            Err(BenchmarkError::Cancelled) => {
-                println_if!(silent, "\n{} Benchmark cancelled", style("✗").red());
-                return Ok(());
-            }
+            Err(BenchmarkError::Cancelled) => return Err(cancelled("Benchmark cancelled")),
             Err(e) => {
                 println_if!(
                     silent,

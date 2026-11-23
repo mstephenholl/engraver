@@ -263,6 +263,8 @@ engraver config --json | jq '.write.block_size'
 |------|---------|
 | `0` | Success |
 | `1` | Error (permission denied, device not found, verification failure, etc.) |
+| `2` | Usage error (unknown option, missing argument) |
+| `130` | Cancelled with Ctrl+C (SIGINT). A cancelled write or erase can leave the target partly written. |
 
 ### Example: Scripted Write with Verification
 
@@ -276,10 +278,16 @@ DEVICE="/dev/sdb"
 # Verify the image checksum before writing
 engraver checksum "$IMAGE" --algorithm sha256
 
-# Write with verification, skip prompt
-engraver write "$IMAGE" "$DEVICE" -y --verify --auto-checksum
+# Write with verification, skip prompt. Exit codes: 0 success, 1 error,
+# 2 usage error, 130 cancelled with Ctrl+C.
+status=0
+engraver write "$IMAGE" "$DEVICE" -y --verify --auto-checksum || status=$?
 
-echo "Write complete and verified."
+case "$status" in
+  0)   echo "Write complete and verified." ;;
+  130) echo "Write cancelled; $DEVICE may be partly written." >&2; exit 130 ;;
+  *)   echo "Write failed (exit $status)." >&2; exit "$status" ;;
+esac
 ```
 
 ## Shell Completions
