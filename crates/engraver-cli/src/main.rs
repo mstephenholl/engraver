@@ -85,7 +85,7 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Block size for writing (e.g., 4M, 1M, 512K). Default from config or 32M
+        /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 32M
         #[arg(short, long)]
         block_size: Option<String>,
 
@@ -130,7 +130,7 @@ enum Commands {
         /// Target device to verify
         target: String,
 
-        /// Block size for reading
+        /// Block size for reading (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M
         #[arg(short, long, default_value = "4M")]
         block_size: String,
     },
@@ -183,7 +183,7 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
 
-        /// Block size for writing (e.g., 4M, 1M, 512K). Default from config or 32M
+        /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 32M
         #[arg(short, long)]
         block_size: Option<String>,
 

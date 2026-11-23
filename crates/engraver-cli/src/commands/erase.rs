@@ -29,7 +29,7 @@ pub struct EraseArgs {
 
 /// Execute the erase command
 pub fn execute(args: EraseArgs) -> Result<()> {
-    let block_size = parse_block_size(&args.block_size)?;
+    let block_size = engraver_core::parse_block_size(&args.block_size)? as usize;
     let silent = args.silent;
 
     // Step 1: Check for elevated privileges
@@ -337,36 +337,6 @@ fn get_raw_device_path(path: &str) -> String {
     path.to_string()
 }
 
-/// Parse a human-readable block size (e.g., "4M", "1M", "512K")
-fn parse_block_size(s: &str) -> Result<usize> {
-    let s = s.trim().to_uppercase();
-
-    let (num_str, multiplier) = if s.ends_with('K') {
-        (&s[..s.len() - 1], 1024)
-    } else if s.ends_with('M') {
-        (&s[..s.len() - 1], 1024 * 1024)
-    } else if s.ends_with('G') {
-        (&s[..s.len() - 1], 1024 * 1024 * 1024)
-    } else {
-        (s.as_str(), 1)
-    };
-
-    let num: usize = num_str
-        .parse()
-        .with_context(|| format!("Invalid block size: {}", s))?;
-
-    let size = num * multiplier;
-
-    if size < 4096 {
-        bail!("Block size must be at least 4K");
-    }
-    if size > 64 * 1024 * 1024 {
-        bail!("Block size must be at most 64M");
-    }
-
-    Ok(size)
-}
-
 /// Format a size in bytes to human-readable format
 fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -442,122 +412,6 @@ mod tests {
             system_reason: None,
             usb_speed: None,
         }
-    }
-
-    // =========================================================================
-    // parse_block_size tests
-    // =========================================================================
-
-    #[test]
-    fn test_parse_block_size_bytes() {
-        assert_eq!(parse_block_size("4096").unwrap(), 4096);
-        assert_eq!(parse_block_size("8192").unwrap(), 8192);
-        assert_eq!(parse_block_size("65536").unwrap(), 65536);
-    }
-
-    #[test]
-    fn test_parse_block_size_kilobytes() {
-        assert_eq!(parse_block_size("4K").unwrap(), 4096);
-        assert_eq!(parse_block_size("4k").unwrap(), 4096);
-        assert_eq!(parse_block_size("8K").unwrap(), 8192);
-        assert_eq!(parse_block_size("64K").unwrap(), 64 * 1024);
-        assert_eq!(parse_block_size("512K").unwrap(), 512 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_megabytes() {
-        assert_eq!(parse_block_size("1M").unwrap(), 1024 * 1024);
-        assert_eq!(parse_block_size("4M").unwrap(), 4 * 1024 * 1024);
-        assert_eq!(parse_block_size("16M").unwrap(), 16 * 1024 * 1024);
-        assert_eq!(parse_block_size("64M").unwrap(), 64 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_gigabytes() {
-        // 1G is within the 64M max, so this should fail
-        assert!(parse_block_size("1G").is_err());
-    }
-
-    #[test]
-    fn test_parse_block_size_whitespace_trimming() {
-        assert_eq!(parse_block_size("  4K  ").unwrap(), 4096);
-        assert_eq!(parse_block_size(" 1M ").unwrap(), 1024 * 1024);
-        assert_eq!(parse_block_size("\t4096\t").unwrap(), 4096);
-    }
-
-    #[test]
-    fn test_parse_block_size_case_insensitive() {
-        assert_eq!(parse_block_size("4k").unwrap(), 4096);
-        assert_eq!(parse_block_size("4K").unwrap(), 4096);
-        assert_eq!(parse_block_size("1m").unwrap(), 1024 * 1024);
-        assert_eq!(parse_block_size("1M").unwrap(), 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_exact_minimum() {
-        // Exactly 4096 bytes (4K) is the minimum
-        assert_eq!(parse_block_size("4K").unwrap(), 4096);
-        assert_eq!(parse_block_size("4096").unwrap(), 4096);
-    }
-
-    #[test]
-    fn test_parse_block_size_below_minimum() {
-        assert!(parse_block_size("1K").is_err());
-        assert!(parse_block_size("2K").is_err());
-        assert!(parse_block_size("100").is_err());
-        assert!(parse_block_size("1").is_err());
-        assert!(parse_block_size("0").is_err());
-    }
-
-    #[test]
-    fn test_parse_block_size_exact_maximum() {
-        // Exactly 64M is the maximum
-        assert_eq!(parse_block_size("64M").unwrap(), 64 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_above_maximum() {
-        assert!(parse_block_size("65M").is_err());
-        assert!(parse_block_size("128M").is_err());
-        assert!(parse_block_size("1G").is_err());
-    }
-
-    #[test]
-    fn test_parse_block_size_non_numeric() {
-        assert!(parse_block_size("abc").is_err());
-        assert!(parse_block_size("K").is_err());
-        assert!(parse_block_size("M").is_err());
-        assert!(parse_block_size("xyzK").is_err());
-    }
-
-    #[test]
-    fn test_parse_block_size_empty_string() {
-        // Empty string after trim: parsing "" as number should fail
-        assert!(parse_block_size("").is_err());
-    }
-
-    #[test]
-    fn test_parse_block_size_error_messages() {
-        let err = parse_block_size("100").unwrap_err();
-        assert!(
-            err.to_string().contains("at least 4K"),
-            "Expected 'at least 4K' in: {}",
-            err
-        );
-
-        let err = parse_block_size("128M").unwrap_err();
-        assert!(
-            err.to_string().contains("at most 64M"),
-            "Expected 'at most 64M' in: {}",
-            err
-        );
-
-        let err = parse_block_size("abc").unwrap_err();
-        assert!(
-            err.to_string().contains("Invalid block size"),
-            "Expected 'Invalid block size' in: {}",
-            err
-        );
     }
 
     // =========================================================================

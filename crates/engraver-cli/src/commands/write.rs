@@ -504,7 +504,7 @@ fn setup_checkpoint(
 
 /// Execute the write command
 pub fn execute(args: WriteArgs) -> Result<()> {
-    let block_size = parse_block_size(&args.block_size)?;
+    let block_size = engraver_core::parse_block_size(&args.block_size)? as usize;
     let silent = args.silent;
     let ctx = WriteContext { silent, block_size };
 
@@ -1085,37 +1085,6 @@ fn get_raw_device_path(path: &str) -> String {
     }
 
     path.to_string()
-}
-
-/// Parse a human-readable block size (e.g., "4M", "1M", "512K")
-fn parse_block_size(s: &str) -> Result<usize> {
-    let s = s.trim().to_uppercase();
-
-    let (num_str, multiplier) = if s.ends_with('K') {
-        (&s[..s.len() - 1], 1024)
-    } else if s.ends_with('M') {
-        (&s[..s.len() - 1], 1024 * 1024)
-    } else if s.ends_with('G') {
-        (&s[..s.len() - 1], 1024 * 1024 * 1024)
-    } else {
-        (s.as_str(), 1)
-    };
-
-    let num: usize = num_str
-        .parse()
-        .with_context(|| format!("Invalid block size: {}", s))?;
-
-    let size = num * multiplier;
-
-    // Validate range
-    if size < 4096 {
-        bail!("Block size must be at least 4K");
-    }
-    if size > 64 * 1024 * 1024 {
-        bail!("Block size must be at most 64M");
-    }
-
-    Ok(size)
 }
 
 /// Format a size in bytes to human-readable format
@@ -1773,53 +1742,6 @@ fn display_source_partitions(_source_path: &str, silent: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -------------------------------------------------------------------------
-    // parse_block_size tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_parse_block_size() {
-        assert_eq!(parse_block_size("4096").unwrap(), 4096);
-        assert_eq!(parse_block_size("4K").unwrap(), 4096);
-        assert_eq!(parse_block_size("4k").unwrap(), 4096);
-        assert_eq!(parse_block_size("1M").unwrap(), 1024 * 1024);
-        assert_eq!(parse_block_size("4M").unwrap(), 4 * 1024 * 1024);
-        assert_eq!(parse_block_size("64M").unwrap(), 64 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_with_whitespace() {
-        assert_eq!(parse_block_size("  4K  ").unwrap(), 4096);
-        assert_eq!(parse_block_size("\t1M\n").unwrap(), 1024 * 1024);
-    }
-
-    #[test]
-    fn test_parse_block_size_gigabytes() {
-        // 1G is valid (within 64M limit? No, 1G > 64M)
-        assert!(parse_block_size("1G").is_err()); // Too large
-    }
-
-    #[test]
-    fn test_parse_block_size_boundary_values() {
-        // Minimum valid: 4K
-        assert_eq!(parse_block_size("4K").unwrap(), 4096);
-        assert!(parse_block_size("2K").is_err()); // Below minimum
-
-        // Maximum valid: 64M
-        assert_eq!(parse_block_size("64M").unwrap(), 64 * 1024 * 1024);
-        assert!(parse_block_size("65M").is_err()); // Above maximum
-    }
-
-    #[test]
-    fn test_parse_block_size_invalid() {
-        assert!(parse_block_size("100").is_err()); // Too small
-        assert!(parse_block_size("128M").is_err()); // Too large
-        assert!(parse_block_size("abc").is_err()); // Invalid
-        assert!(parse_block_size("").is_err()); // Empty
-        assert!(parse_block_size("K").is_err()); // No number
-        assert!(parse_block_size("-4K").is_err()); // Negative
-    }
 
     // -------------------------------------------------------------------------
     // format_size tests
