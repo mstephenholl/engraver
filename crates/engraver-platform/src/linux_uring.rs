@@ -1,11 +1,11 @@
+use crate::linux::open_file;
 use crate::{
     align_up, bytes_consumed_from_aligned_write, is_aligned, DeviceInfo, OpenOptions,
     PlatformError, Result,
 };
 use io_uring::{opcode, types, IoUring};
-use std::fs::{File, OpenOptions as StdOpenOptions};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
@@ -86,25 +86,7 @@ impl IoUringDevice {
             ));
         }
 
-        let mut std_options = StdOpenOptions::new();
-        std_options.read(options.read).write(options.write);
-
-        if options.direct_io {
-            std_options.custom_flags(libc::O_DIRECT);
-        }
-
-        let file = std_options.open(device_path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::PermissionDenied {
-                PlatformError::PermissionDenied(format!(
-                    "Cannot open {}: {}. Try running with sudo.",
-                    path, e
-                ))
-            } else if e.raw_os_error() == Some(libc::EBUSY) {
-                PlatformError::DeviceBusy(format!("{} is busy. Try unmounting first.", path))
-            } else {
-                PlatformError::Io(e)
-            }
-        })?;
+        let file = open_file(path, &options)?;
 
         let size = get_device_size(&file, path)?;
 
