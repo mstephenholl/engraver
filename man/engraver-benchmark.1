@@ -24,7 +24,7 @@ Default from config or 256M.
 \fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR
 Block size for writes (e.g., 4K, 1M, 4M).
 Must be a power of 2, maximum 64M.
-Default from config or 4M.
+Default from config or 32M.
 .TP
 \fB\-\-pattern\fR \fI<PATTERN>\fR
 Data pattern to write: \fBzeros\fR, \fBrandom\fR, or \fBsequential\fR.
@@ -47,7 +47,7 @@ Skip confirmation prompt.
 \fB\-h\fR, \fB\-\-help\fR
 Print help information.
 .SH EXAMPLES
-Basic benchmark with default settings (256 MB, 4 MB blocks, zeros pattern):
+Basic benchmark with default settings (32 MB blocks, 320 MB test, zeros pattern):
 .PP
 .nf
     engraver benchmark /dev/sdb

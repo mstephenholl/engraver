@@ -78,7 +78,7 @@ fn init_config(config_path: Option<PathBuf>, silent: bool) -> Result<()> {
         println!();
         println!("  [write]");
         println!("  verify = true        # Always verify writes");
-        println!("  block_size = \"4M\"    # Default block size");
+        println!("  block_size = \"32M\"   # Default block size");
         println!();
         println!("  [checksum]");
         println!("  auto_detect = true   # Auto-detect checksum files");

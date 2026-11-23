@@ -347,7 +347,7 @@ fn test_error_display() {
 #[test]
 fn test_block_size_constants() {
     assert_eq!(MIN_BLOCK_SIZE, 4 * 1024);
-    assert_eq!(DEFAULT_BLOCK_SIZE, 4 * 1024 * 1024);
+    assert_eq!(DEFAULT_BLOCK_SIZE, 32 * 1024 * 1024);
     assert_eq!(MAX_BLOCK_SIZE, 64 * 1024 * 1024);
 
     // Ensure proper ordering

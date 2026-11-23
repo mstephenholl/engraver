@@ -571,11 +571,10 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     // Open target device using platform layer with direct I/O
     let device_path = get_raw_device_path(&target_drive.path);
-    let options = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .direct_io(true) // Bypass page cache for better performance
-        .block_size(block_size);
+    // The device alignment stays at its 4096 default. The Writer's chunk buffer
+    // is 4096-aligned, not block_size-aligned, so a larger value would send
+    // every chunk through the device's bounce buffer.
+    let options = OpenOptions::new().read(true).write(true).direct_io(true); // Bypass page cache for better performance
 
     let mut target = open_device(&device_path, options)
         .with_context(|| format!("Failed to open device: {}", device_path))?;
