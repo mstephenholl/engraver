@@ -27,7 +27,7 @@ use engraver_core::{inspect_from_buffer, read_partition_header, PartitionTableTy
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
-use super::{cancelled, context_or_cancelled};
+use super::{cancelled, checksum_image_and_target, create_progress_bar, describe_source_size};
 
 /// Arguments for the write command
 pub struct WriteArgs {
@@ -110,10 +110,7 @@ fn populate_source_header_hash(source_info: &mut engraver_core::SourceInfo, sile
 }
 
 /// Validate the source image and display info
-fn validate_source_info(
-    source: &str,
-    silent: bool,
-) -> Result<(engraver_core::SourceInfo, Option<u64>)> {
+fn validate_source_info(source: &str, silent: bool) -> Result<engraver_core::SourceInfo> {
     println_if!(
         silent,
         "{} {}",
@@ -124,14 +121,13 @@ fn validate_source_info(
     let source_info = validate_source(source)
         .with_context(|| format!("Failed to validate source: {}", source))?;
 
-    let source_size = source_info.size.or(source_info.compressed_size);
     let source_type_str = match source_info.source_type {
         SourceType::LocalFile => "local file",
         SourceType::Remote => "remote URL",
-        SourceType::Gzip => "gzip compressed",
-        SourceType::Xz => "xz compressed",
-        SourceType::Zstd => "zstd compressed",
-        SourceType::Bzip2 => "bzip2 compressed",
+        SourceType::Gzip => "gzip",
+        SourceType::Xz => "xz",
+        SourceType::Zstd => "zstd",
+        SourceType::Bzip2 => "bzip2",
         #[cfg(feature = "s3")]
         SourceType::S3 => "S3 object",
         #[cfg(feature = "gcs")]
@@ -141,24 +137,45 @@ fn validate_source_info(
         _ => "unknown",
     };
 
-    if let Some(size) = source_size {
-        println_if!(
-            silent,
-            "  {} ({}, {})",
-            style("✓").green(),
-            format_size(size),
-            source_type_str
-        );
-    } else {
-        println_if!(
-            silent,
-            "  {} (size unknown, {})",
-            style("✓").green(),
-            source_type_str
-        );
-    }
+    let size = describe_source_size(&source_info, format_size)
+        .unwrap_or_else(|| "size unknown".to_string());
+    println_if!(
+        silent,
+        "  {} ({}, {})",
+        style("✓").green(),
+        size,
+        source_type_str
+    );
 
-    Ok((source_info, source_size))
+    Ok(source_info)
+}
+
+/// Whether an image fits on a drive
+#[derive(Debug, PartialEq, Eq)]
+enum Capacity {
+    /// The image is known to fit
+    Fits,
+    /// The image, of this many bytes, is larger than the drive
+    TooLarge(u64),
+    /// The compressed file alone, of this many bytes, is larger than the drive
+    CompressedTooLarge(u64),
+    /// The image length is not known, so it cannot be told
+    Unknown,
+}
+
+/// Judge whether the source's image fits on a drive of `drive_size` bytes
+///
+/// A source with no image length is `Unknown`, unless its compressed file
+/// alone is larger than the drive.
+fn capacity(source_info: &engraver_core::SourceInfo, drive_size: u64) -> Capacity {
+    match (source_info.size, source_info.compressed_size) {
+        (Some(size), _) if size > drive_size => Capacity::TooLarge(size),
+        (Some(_), _) => Capacity::Fits,
+        (None, Some(compressed)) if compressed > drive_size => {
+            Capacity::CompressedTooLarge(compressed)
+        }
+        (None, _) => Capacity::Unknown,
+    }
 }
 
 /// Validate the target device, performing safety checks
@@ -167,7 +184,7 @@ fn validate_target_device<'a>(
     drives: &'a [Drive],
     force: bool,
     skip_confirm: bool,
-    source_size: Option<u64>,
+    source_info: &engraver_core::SourceInfo,
     silent: bool,
 ) -> Result<&'a Drive> {
     println_if!(
@@ -212,14 +229,23 @@ fn validate_target_device<'a>(
     }
 
     // Check size compatibility
-    if let Some(src_size) = source_size {
-        if src_size > target_drive.size {
-            bail!(
-                "Source ({}) is larger than target ({})",
-                format_size(src_size),
-                format_size(target_drive.size)
-            );
-        }
+    match capacity(source_info, target_drive.size) {
+        Capacity::TooLarge(size) => bail!(
+            "Source ({}) is larger than target ({})",
+            format_size(size),
+            format_size(target_drive.size)
+        ),
+        Capacity::CompressedTooLarge(compressed) => bail!(
+            "Compressed source alone ({}) is larger than target ({})",
+            format_size(compressed),
+            format_size(target_drive.size)
+        ),
+        Capacity::Unknown => println_if!(
+            silent,
+            "  {} Image size is unknown until it is decompressed, so not checking that it fits",
+            style("ℹ").blue()
+        ),
+        Capacity::Fits => {}
     }
 
     println_if!(
@@ -340,7 +366,7 @@ fn unmount_target(path: &str, silent: bool) {
 }
 
 /// Auto-detect or use explicit checksum, verify if found
-fn setup_checksum(args: &WriteArgs, source_size: Option<u64>, ctx: &WriteContext) -> Result<()> {
+fn setup_checksum(args: &WriteArgs, image_size: Option<u64>, ctx: &WriteContext) -> Result<()> {
     let (effective_checksum, effective_algo) = if args.checksum.is_none() && args.auto_checksum {
         if let Some(detected) = auto_detect_checksum(&args.source) {
             println_if!(
@@ -383,7 +409,7 @@ fn setup_checksum(args: &WriteArgs, source_size: Option<u64>, ctx: &WriteContext
         let mut source_for_checksum =
             Source::open(&args.source).context("Failed to open source for checksum")?;
 
-        let pb = create_progress_bar(source_size, "Checksumming", ctx.silent);
+        let pb = create_progress_bar(image_size, "Checksumming", ctx.silent);
 
         let config = VerifyConfig::new().block_size(ctx.block_size);
         let pb_clone = pb.clone();
@@ -397,7 +423,7 @@ fn setup_checksum(args: &WriteArgs, source_size: Option<u64>, ctx: &WriteContext
             &mut source_for_checksum,
             algo,
             expected_checksum,
-            source_size,
+            image_size,
         );
 
         pb.finish_and_clear();
@@ -521,7 +547,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     check_privileges()?;
 
     // Step 1: Validate source
-    let (mut source_info, source_size) = validate_source_info(&args.source, silent)?;
+    let mut source_info = validate_source_info(&args.source, silent)?;
 
     // Compute a content fingerprint for resume validation. For local
     // files we hash the first 1 MB so a later resume can detect when the
@@ -536,7 +562,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         &drives,
         args.force,
         args.skip_confirm,
-        source_size,
+        &source_info,
         silent,
     )?;
 
@@ -556,7 +582,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     }
 
     // Step 5: Checksum verification
-    setup_checksum(&args, source_size, &ctx)?;
+    setup_checksum(&args, source_info.size, &ctx)?;
 
     // Step 6: Check for existing checkpoint (resume support)
     let (checkpoint_manager, resume_offset, mut existing_checkpoint) =
@@ -616,7 +642,6 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     };
 
     // Step 9: Write with progress and checkpointing
-    let total_size = source_size.unwrap_or(0);
     let write_size = image_size.unwrap_or(0);
     let pb = create_write_progress_bar(write_size, silent);
     if resume_offset > 0 {
@@ -708,7 +733,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     pb.finish_and_clear();
 
     // Handle write result
-    let write_success = match &write_result {
+    let image_written = match &write_result {
         Ok(result) => {
             let elapsed = start_time.elapsed();
             let total_written = result.bytes_written;
@@ -791,7 +816,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                 }
             }
 
-            true
+            result.bytes_written
         }
         Err(engraver_core::Error::Cancelled) => {
             // Save checkpoint on cancel
@@ -846,11 +871,9 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     };
 
     // Remove checkpoint on success
-    if write_success {
-        if let Some(ref mgr) = checkpoint_manager {
-            if let Err(e) = mgr.remove(&checkpoint) {
-                tracing::warn!("Failed to remove checkpoint: {}", e);
-            }
+    if let Some(ref mgr) = checkpoint_manager {
+        if let Err(e) = mgr.remove(&checkpoint) {
+            tracing::warn!("Failed to remove checkpoint: {}", e);
         }
     }
 
@@ -880,7 +903,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             // Seek target back to start
             target.seek(SeekFrom::Start(0))?;
 
-            let pb = create_progress_bar(source_size, "Verifying", silent);
+            let pb = create_progress_bar(image_size, "Verifying", silent);
 
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
@@ -903,7 +926,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                     ));
                 });
 
-            let verify_result = verifier.compare(&mut source_file, &mut *target, total_size);
+            let verify_result = verifier.compare(&mut source_file, &mut *target, write_size);
 
             pb.finish_and_clear();
 
@@ -955,79 +978,16 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                 style("ℹ").blue()
             );
 
-            // Calculate checksum of what we wrote
             target.seek(SeekFrom::Start(0))?;
 
-            let pb = create_progress_bar(Some(total_size), "Checksumming", silent);
-
-            let config = VerifyConfig::new().block_size(block_size);
-            let pb_clone = pb.clone();
-            let checksum_block_size = block_size;
-            let checksum_total = total_size;
-            let mut verifier = Verifier::with_config(config)
-                .with_cancel_flag(args.cancel_flag.clone())
-                .on_progress(move |p| {
-                    pb_clone.set_position(p.bytes_processed);
-                    let blocks = p.bytes_processed.div_ceil(checksum_block_size as u64);
-                    let total_blocks = checksum_total.div_ceil(checksum_block_size as u64);
-                    pb_clone.set_message(format!(
-                        "{}/s | Block {}/{} | ETA: {}",
-                        p.speed_display(),
-                        blocks,
-                        total_blocks,
-                        p.eta_display()
-                    ));
-                });
-
-            let written_checksum = verifier
-                .calculate_checksum(&mut *target, ChecksumAlgorithm::Sha256, Some(total_size))
-                .map_err(|e| {
-                    context_or_cancelled(
-                        e,
-                        "Failed to checksum written data",
-                        "Verification cancelled.",
-                    )
-                })?;
-
-            pb.finish_and_clear();
-
-            // Re-open source and calculate its checksum
-            println_if!(silent, "  Calculating source checksum...");
-            let mut source_for_checksum =
-                Source::open(&args.source).context("Failed to reopen source")?;
-
-            let source_total = source_size.unwrap_or(0);
-            let pb = create_progress_bar(source_size, "Checksumming source", silent);
-
-            let config = VerifyConfig::new().block_size(block_size);
-            let pb_clone = pb.clone();
-            let source_block_size = block_size;
-            let mut verifier = Verifier::with_config(config)
-                .with_cancel_flag(args.cancel_flag.clone())
-                .on_progress(move |p| {
-                    pb_clone.set_position(p.bytes_processed);
-                    let blocks = p.bytes_processed.div_ceil(source_block_size as u64);
-                    let total_blocks = source_total.div_ceil(source_block_size as u64);
-                    pb_clone.set_message(format!(
-                        "{}/s | Block {}/{} | ETA: {}",
-                        p.speed_display(),
-                        blocks,
-                        total_blocks,
-                        p.eta_display()
-                    ));
-                });
-
-            let source_checksum = verifier
-                .calculate_checksum(
-                    &mut source_for_checksum,
-                    ChecksumAlgorithm::Sha256,
-                    source_size,
-                )
-                .map_err(|e| {
-                    context_or_cancelled(e, "Failed to checksum source", "Verification cancelled.")
-                })?;
-
-            pb.finish_and_clear();
+            let (source_checksum, written_checksum) = checksum_image_and_target(
+                &args.source,
+                &mut *target,
+                Some(image_written),
+                block_size,
+                &args.cancel_flag,
+                silent,
+            )?;
 
             if written_checksum.matches(&source_checksum) {
                 println_if!(
@@ -1597,30 +1557,6 @@ fn format_windows_error(code: i32, base_msg: &str) -> String {
     }
 }
 
-/// Create a progress bar for operations
-fn create_progress_bar(total: Option<u64>, operation: &str, silent: bool) -> ProgressBar {
-    if silent {
-        return ProgressBar::hidden();
-    }
-
-    let pb = match total {
-        Some(t) => ProgressBar::new(t),
-        None => ProgressBar::new_spinner(),
-    };
-
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template(&format!(
-                "  {{spinner:.green}} {} [{{bar:40.cyan/blue}}] {{bytes}}/{{total_bytes}} ({{eta}})",
-                operation
-            ))
-            .unwrap()
-            .progress_chars("█▓░"),
-    );
-
-    pb
-}
-
 /// Create a progress bar for write operations
 fn create_write_progress_bar(total: u64, silent: bool) -> ProgressBar {
     if silent {
@@ -1942,32 +1878,6 @@ mod tests {
         assert!(err.contains("/dev/sdb"));
     }
 
-    // -------------------------------------------------------------------------
-    // Progress bar creation tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_create_progress_bar_silent() {
-        let pb = create_progress_bar(Some(1024), "Test", true);
-        // Silent progress bar should be hidden
-        assert!(pb.is_hidden());
-    }
-
-    #[test]
-    fn test_create_progress_bar_with_size() {
-        let pb = create_progress_bar(Some(1024 * 1024), "Writing", false);
-        // Progress bar may be hidden in test environment without a terminal
-        // Just verify it was created with the right length
-        assert_eq!(pb.length(), Some(1024 * 1024));
-    }
-
-    #[test]
-    fn test_create_progress_bar_unknown_size() {
-        let pb = create_progress_bar(None, "Downloading", false);
-        // Spinner doesn't have a length - just verify creation succeeds
-        assert!(pb.length().is_none() || pb.length() == Some(0));
-    }
-
     #[test]
     fn test_create_write_progress_bar_silent() {
         let pb = create_write_progress_bar(1024, true);
@@ -2091,6 +2001,85 @@ mod tests {
         assert!(args.checkpoint);
         assert!(args.auto_checksum);
         assert!(args.show_partitions);
+    }
+
+    // -------------------------------------------------------------------------
+    // Capacity check tests
+    // -------------------------------------------------------------------------
+
+    const MIB: u64 = 1024 * 1024;
+    const GIB: u64 = 1024 * MIB;
+
+    fn compressed_source(size_on_disk: u64) -> engraver_core::SourceInfo {
+        engraver_core::SourceInfo::compressed("image.img.gz", size_on_disk, SourceType::Gzip)
+    }
+
+    fn removable_drive(size: u64) -> Drive {
+        Drive {
+            path: "/dev/sdz".to_string(),
+            raw_path: "/dev/sdz".to_string(),
+            size,
+            removable: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_capacity_of_a_compressed_source_is_unknown_when_the_file_is_small() {
+        // A 1 MiB file can decompress to far more than a 4 GiB drive holds
+        assert_eq!(
+            capacity(&compressed_source(MIB), 4 * GIB),
+            Capacity::Unknown
+        );
+    }
+
+    #[test]
+    fn test_capacity_of_a_compressed_source_larger_than_the_drive_is_too_large() {
+        // Refused before the drive is touched, not by ENOSPC partway through
+        assert_eq!(
+            capacity(&compressed_source(8 * GIB), 4 * GIB),
+            Capacity::CompressedTooLarge(8 * GIB)
+        );
+    }
+
+    #[test]
+    fn test_capacity_of_a_plain_source_is_judged_by_its_length() {
+        let source = |size| engraver_core::SourceInfo::local("image.iso", size);
+
+        assert_eq!(capacity(&source(GIB), 4 * GIB), Capacity::Fits);
+        assert_eq!(capacity(&source(4 * GIB), 4 * GIB), Capacity::Fits);
+        assert_eq!(
+            capacity(&source(4 * GIB + 1), 4 * GIB),
+            Capacity::TooLarge(4 * GIB + 1)
+        );
+    }
+
+    #[test]
+    fn test_validate_target_device_accepts_a_compressed_source_of_unknown_image_size() {
+        let drives = vec![removable_drive(4 * GIB)];
+
+        let drive = validate_target_device(
+            "/dev/sdz",
+            &drives,
+            false,
+            true,
+            &compressed_source(MIB),
+            true,
+        )
+        .expect("the capacity check must not judge an unknown image by its file size");
+
+        assert_eq!(drive.path, "/dev/sdz");
+    }
+
+    #[test]
+    fn test_validate_target_device_refuses_an_image_larger_than_the_drive() {
+        let drives = vec![removable_drive(4 * GIB)];
+        let source = engraver_core::SourceInfo::local("image.iso", 8 * GIB);
+
+        let err = validate_target_device("/dev/sdz", &drives, false, true, &source, true)
+            .expect_err("an 8 GiB image does not fit on a 4 GiB drive");
+
+        assert!(err.to_string().contains("larger than target"), "{err}");
     }
 
     // -------------------------------------------------------------------------

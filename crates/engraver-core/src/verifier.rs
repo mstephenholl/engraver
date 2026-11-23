@@ -543,6 +543,37 @@ impl Verifier {
         Ok(Checksum::new(algorithm, bytes))
     }
 
+    /// Calculate the checksum of exactly the first `len` bytes of a reader
+    ///
+    /// It never reads past `len`. A reader that ends before `len` bytes
+    /// returns [`Error::SizeMismatch`], with `source_size` the `len` asked for
+    /// and `target_size` the bytes the reader held.
+    ///
+    /// It honours the cancel flag as [`calculate_checksum`] does: it only
+    /// reads the flag, and a flag that is already set returns
+    /// [`Error::Cancelled`] before any read.
+    ///
+    /// [`calculate_checksum`]: Self::calculate_checksum
+    #[cfg(feature = "checksum")]
+    pub fn calculate_checksum_of_prefix<R: Read + ?Sized>(
+        &mut self,
+        reader: &mut R,
+        algorithm: ChecksumAlgorithm,
+        len: u64,
+    ) -> Result<Checksum> {
+        let mut prefix = (&mut *reader).take(len);
+        let checksum = self.calculate_checksum(&mut prefix, algorithm, Some(len))?;
+
+        let missing = prefix.limit();
+        if missing > 0 {
+            return Err(Error::SizeMismatch {
+                source_size: len,
+                target_size: len - missing,
+            });
+        }
+        Ok(checksum)
+    }
+
     /// Calculate checksum and verify against expected value
     #[cfg(feature = "checksum")]
     pub fn verify_checksum<R: Read + ?Sized>(

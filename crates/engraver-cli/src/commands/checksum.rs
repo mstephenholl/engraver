@@ -2,13 +2,12 @@
 
 use anyhow::{Context, Result};
 use console::style;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use engraver_core::{validate_source, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
 
-use super::context_or_cancelled;
+use super::{context_or_cancelled, create_progress_bar, describe_source_size};
 
 /// Execute the checksum command
 pub fn execute(
@@ -33,10 +32,8 @@ pub fn execute(
     let source_info = validate_source(source)
         .with_context(|| format!("Failed to validate source: {}", source))?;
 
-    let source_size = source_info.size.or(source_info.compressed_size);
-
-    if let Some(size) = source_size {
-        println_if!(silent, "  Size: {}", format_size(size));
+    if let Some(size) = describe_source_size(&source_info, format_size) {
+        println_if!(silent, "  Size: {}", size);
     }
 
     // Open source
@@ -50,24 +47,7 @@ pub fn execute(
     let mut source_reader =
         Source::open(source).with_context(|| format!("Failed to open source: {}", source))?;
 
-    // Create progress bar
-    let pb = if silent {
-        ProgressBar::hidden()
-    } else {
-        match source_size {
-            Some(size) => ProgressBar::new(size),
-            None => ProgressBar::new_spinner(),
-        }
-    };
-
-    if !silent {
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("  {spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-                .unwrap()
-                .progress_chars("█▓░"),
-        );
-    }
+    let pb = create_progress_bar(source_info.size, "Checksumming", silent);
 
     // Calculate checksum
     let config = VerifyConfig::new();
@@ -79,7 +59,7 @@ pub fn execute(
         });
 
     let checksum = verifier
-        .calculate_checksum(&mut source_reader, algo, source_size)
+        .calculate_checksum(&mut source_reader, algo, source_info.size)
         .map_err(|e| {
             context_or_cancelled(e, "Failed to calculate checksum", "Checksum cancelled.")
         })?;
