@@ -47,9 +47,18 @@ pub struct BenchmarkArgs {
     pub cancel_flag: Arc<AtomicBool>,
 }
 
+impl BenchmarkArgs {
+    /// Whether to withhold the human-readable status lines.
+    ///
+    /// `--json` shares stdout with these lines, so it hides them like `--silent`.
+    fn hides_status_lines(&self) -> bool {
+        self.silent || self.json
+    }
+}
+
 /// Execute the benchmark command
 pub fn execute(args: BenchmarkArgs) -> Result<()> {
-    let silent = args.silent;
+    let silent = args.hides_status_lines();
 
     // Step 0: Validate arguments (before any I/O)
     validate_args(&args)?;
@@ -106,18 +115,16 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
     };
 
     // Step 4: Display configuration
-    if !args.json {
-        display_benchmark_info(
-            target_drive,
-            base_test_size,
-            block_size,
-            &pattern,
-            args.passes,
-            is_multi_block,
-            &block_sizes,
-            silent,
-        );
-    }
+    display_benchmark_info(
+        target_drive,
+        base_test_size,
+        block_size,
+        &pattern,
+        args.passes,
+        is_multi_block,
+        &block_sizes,
+        silent,
+    );
 
     // Step 5: Safety confirmation
     if !args.skip_confirm && !confirm_benchmark(target_drive)? {
@@ -178,7 +185,7 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
         tracing::debug!("Sync after benchmark: {}", e);
     }
 
-    if result.is_ok() && !args.json {
+    if result.is_ok() {
         println_if!(
             silent,
             "{}",
@@ -335,38 +342,38 @@ fn display_benchmark_info(
 
 /// Confirm benchmark with user
 fn confirm_benchmark(drive: &engraver_detect::Drive) -> Result<bool> {
-    println!();
-    println!(
+    eprintln!();
+    eprintln!(
         "{}",
         style("╔══════════════════════════════════════════════════════════════╗")
             .red()
             .bold()
     );
-    println!(
+    eprintln!(
         "{}",
         style("║                     DESTRUCTIVE OPERATION                     ║")
             .red()
             .bold()
     );
-    println!(
+    eprintln!(
         "{}",
         style("║  This benchmark will OVERWRITE data on the target device!    ║")
             .red()
             .bold()
     );
-    println!(
+    eprintln!(
         "{}",
         style("║  ALL DATA ON THE TARGET DEVICE WILL BE PERMANENTLY LOST!     ║")
             .red()
             .bold()
     );
-    println!(
+    eprintln!(
         "{}",
         style("╚══════════════════════════════════════════════════════════════╝")
             .red()
             .bold()
     );
-    println!();
+    eprintln!();
 
     let size_str = format_size(drive.size);
 
@@ -428,7 +435,7 @@ where
     println_if!(silent, "\n{} Benchmarking...", style("▶").cyan());
 
     // Create progress bar
-    let pb = if silent || json {
+    let pb = if silent {
         ProgressBar::hidden()
     } else {
         let pb = ProgressBar::new(total_bytes);
@@ -525,7 +532,7 @@ where
         // Seek to beginning
         device.seek(std::io::SeekFrom::Start(0))?;
 
-        let pb = if silent || json {
+        let pb = if silent {
             ProgressBar::hidden()
         } else {
             let pb = ProgressBar::new(effective_size);
@@ -727,6 +734,27 @@ mod tests {
         assert_eq!(args.passes, 1);
         assert!(!args.json);
         assert!(args.skip_confirm);
+    }
+
+    #[test]
+    fn test_json_and_silent_hide_status_lines() {
+        let args = |json, silent| BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size: None,
+            block_size: "4M".to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json,
+            skip_confirm: true,
+            silent,
+            test_block_sizes: None,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+        };
+
+        assert!(args(true, false).hides_status_lines());
+        assert!(args(false, true).hides_status_lines());
+        assert!(args(true, true).hides_status_lines());
+        assert!(!args(false, false).hides_status_lines());
     }
 
     // -------------------------------------------------------------------------

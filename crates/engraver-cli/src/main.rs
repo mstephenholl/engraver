@@ -22,6 +22,7 @@ use clap_complete::{generate, Shell};
 use clap_mangen::Man;
 use console::style;
 use engraver_core::Settings;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
@@ -317,8 +318,17 @@ fn run() -> Result<()> {
         EnvFilter::new("info")
     };
 
+    // Logs go to stderr so stdout carries only a command's own output, such
+    // as the document that `--json` prints. Colour only when a person is
+    // reading stderr. `with_ansi` overrides tracing-subscriber's own NO_COLOR
+    // check, so the check is repeated here.
+    let ansi = std::io::stderr().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+
     tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(ansi)
         .with_target(false)
         .without_time()
         .init();
