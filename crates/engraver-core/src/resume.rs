@@ -169,7 +169,8 @@ impl WriteCheckpoint {
 
         // Determine source properties
         let source_seekable = matches!(source_info.source_type, SourceType::LocalFile);
-        let source_resumable = matches!(source_info.source_type, SourceType::Remote);
+        let source_resumable =
+            matches!(source_info.source_type, SourceType::Remote) && source_info.resumable;
 
         let total_blocks = source_info
             .size
@@ -541,7 +542,7 @@ pub fn validate_checkpoint(
     // Check if source can be resumed
     if !checkpoint.can_resume() {
         return CheckpointValidation::invalid(
-            "Source type does not support resume (compressed sources cannot be seeked)",
+            "This source does not support resume: it is compressed, or its server does not accept Range requests",
         );
     }
 

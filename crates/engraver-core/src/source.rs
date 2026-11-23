@@ -731,6 +731,43 @@ fn http_client_builder() -> reqwest::blocking::ClientBuilder {
     reqwest::blocking::Client::builder().tls_backend_preconfigured(tls)
 }
 
+/// The first byte of a `Content-Range: bytes START-END/TOTAL` value.
+#[cfg(feature = "remote")]
+fn content_range_start(value: &str) -> Option<u64> {
+    let (unit, range) = value.trim().split_once(' ')?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return None;
+    }
+    let (start, _) = range.split_once('-')?;
+    start.parse().ok()
+}
+
+/// Refuse a reply to `Range: bytes={offset}-` that does not start at `offset`.
+///
+/// A server may ignore the Range header and answer 200 with the whole file, or
+/// answer 206 for another range. The caller writes the body at `offset`, so
+/// either reply would put the wrong bytes there.
+#[cfg(feature = "remote")]
+fn check_range_reply(status: u16, content_range: Option<&str>, offset: u64) -> Result<()> {
+    let refuse = |why: String| Error::Network {
+        message: format!("{why}, so this write can't resume. Run again without --resume."),
+        source: None,
+    };
+
+    if status != 206 {
+        return Err(refuse("The server ignored the Range request".to_string()));
+    }
+    match content_range.and_then(content_range_start) {
+        Some(start) if start == offset => Ok(()),
+        Some(start) => Err(refuse(format!(
+            "The server answered the Range request from byte {start} instead of byte {offset}"
+        ))),
+        None => Err(refuse(
+            "The server's reply to the Range request has no valid Content-Range header".to_string(),
+        )),
+    }
+}
+
 /// HTTP source with resume support
 #[cfg(feature = "remote")]
 pub struct HttpSource {
@@ -824,6 +861,14 @@ impl HttpSource {
                 ),
                 source: None,
             });
+        }
+
+        if offset > 0 {
+            let content_range = response
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok());
+            check_range_reply(status.as_u16(), content_range, offset)?;
         }
 
         // Extract headers
