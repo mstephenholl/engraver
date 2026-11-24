@@ -8,7 +8,6 @@
 
 use anyhow::{bail, Context, Result};
 use console::style;
-use dialoguer::Confirm;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +20,7 @@ use engraver_core::{
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
-use super::cancelled;
+use super::{cancelled, confirm};
 
 /// Arguments for the benchmark command
 pub struct BenchmarkArgs {
@@ -382,11 +381,7 @@ fn confirm_benchmark(drive: &engraver_detect::Drive) -> Result<bool> {
         drive.path, size_str
     );
 
-    Confirm::new()
-        .with_prompt(confirm_text)
-        .default(false)
-        .interact()
-        .context("Failed to get user confirmation")
+    confirm(&confirm_text, false)
 }
 
 /// Get progress bar style based on percentage

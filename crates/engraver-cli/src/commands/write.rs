@@ -10,7 +10,6 @@
 
 use anyhow::{bail, Context, Result};
 use console::style;
-use dialoguer::Confirm;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,7 +26,9 @@ use engraver_core::{inspect_from_buffer, read_partition_header, PartitionTableTy
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
-use super::{cancelled, checksum_image_and_target, create_progress_bar, describe_source_size};
+use super::{
+    cancelled, checksum_image_and_target, confirm, create_progress_bar, describe_source_size,
+};
 
 /// Arguments for the write command
 pub struct WriteArgs {
@@ -217,10 +218,7 @@ fn validate_target_device<'a>(
             style("Warning:").yellow().bold()
         );
         if !skip_confirm {
-            let proceed = Confirm::new()
-                .with_prompt("Are you absolutely sure you want to continue?")
-                .default(false)
-                .interact()?;
+            let proceed = confirm("Are you absolutely sure you want to continue?", false)?;
 
             if !proceed {
                 bail!("Aborted by user");
@@ -340,10 +338,7 @@ fn confirm_write(
         drive.path
     );
 
-    let proceed = Confirm::new()
-        .with_prompt(confirm_text)
-        .default(false)
-        .interact()?;
+    let proceed = confirm(&confirm_text, false)?;
 
     if !proceed {
         println!("{}", style("Aborted.").yellow());
@@ -499,10 +494,7 @@ fn setup_checkpoint(
                     let should_resume = if args.skip_confirm {
                         true
                     } else {
-                        Confirm::new()
-                            .with_prompt("Resume from checkpoint?")
-                            .default(true)
-                            .interact()?
+                        confirm("Resume from checkpoint?", true)?
                     };
 
                     if should_resume {

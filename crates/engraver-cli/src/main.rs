@@ -590,4 +590,38 @@ mod tests {
         assert_eq!(exit.code, 1);
         assert_eq!(exit.cancelled_line, None);
     }
+
+    fn prompt_failure(kind: std::io::ErrorKind, message: &str) -> anyhow::Error {
+        commands::prompt_error(dialoguer::Error::IO(std::io::Error::new(kind, message)))
+    }
+
+    #[test]
+    fn test_exit_for_ctrl_c_at_a_prompt_is_130_with_one_cancel_line() {
+        let err = prompt_failure(std::io::ErrorKind::Interrupted, "read interrupted");
+
+        let exit = exit_for(&err);
+
+        assert_eq!(exit.code, 130);
+        assert_eq!(exit.cancelled_line.as_deref(), Some("Cancelled."));
+    }
+
+    #[test]
+    fn test_exit_for_a_prompt_without_a_terminal_is_1_and_prints_as_an_error() {
+        let err = prompt_failure(std::io::ErrorKind::NotConnected, "not a terminal");
+
+        let exit = exit_for(&err);
+
+        assert_eq!(exit.code, 1);
+        assert_eq!(exit.cancelled_line, None);
+    }
+
+    #[test]
+    fn test_exit_for_a_prompt_whose_input_ended_is_1() {
+        let err = prompt_failure(std::io::ErrorKind::UnexpectedEof, "Reached end of file");
+
+        let exit = exit_for(&err);
+
+        assert_eq!(exit.code, 1);
+        assert_eq!(exit.cancelled_line, None);
+    }
 }

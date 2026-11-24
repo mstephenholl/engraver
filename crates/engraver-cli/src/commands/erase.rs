@@ -6,7 +6,6 @@
 
 use anyhow::{bail, Context, Result};
 use console::style;
-use dialoguer::Confirm;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +15,7 @@ use std::time::Instant;
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
-use super::cancelled;
+use super::{cancelled, confirm};
 
 /// Arguments for the erase command
 pub struct EraseArgs {
@@ -84,10 +83,7 @@ pub fn execute(args: EraseArgs) -> Result<()> {
             style("Warning:").yellow().bold()
         );
         if !args.skip_confirm {
-            let proceed = Confirm::new()
-                .with_prompt("Are you absolutely sure you want to continue?")
-                .default(false)
-                .interact()?;
+            let proceed = confirm("Are you absolutely sure you want to continue?", false)?;
 
             if !proceed {
                 bail!("Aborted by user");
@@ -154,10 +150,7 @@ pub fn execute(args: EraseArgs) -> Result<()> {
             format_size(target_drive.size)
         );
 
-        let proceed = Confirm::new()
-            .with_prompt(confirm_text)
-            .default(false)
-            .interact()?;
+        let proceed = confirm(&confirm_text, false)?;
 
         if !proceed {
             println!("{}", style("Aborted.").yellow());

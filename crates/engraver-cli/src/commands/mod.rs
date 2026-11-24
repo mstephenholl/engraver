@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use dialoguer::Confirm;
 use engraver_core::{Checksum, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -32,6 +33,23 @@ pub(crate) fn is_cancelled(err: &anyhow::Error) -> bool {
             Some(engraver_core::Error::Cancelled)
         )
     })
+}
+
+/// Ask a yes/no question on the terminal.
+///
+/// Every confirmation prompt goes through here, so every prompt fails the
+/// same way.
+pub(crate) fn confirm(prompt: &str, default: bool) -> Result<bool> {
+    Confirm::new()
+        .with_prompt(prompt)
+        .default(default)
+        .interact()
+        .map_err(prompt_error)
+}
+
+/// Turn a prompt's error into the command's error.
+pub(crate) fn prompt_error(err: dialoguer::Error) -> anyhow::Error {
+    anyhow::Error::new(err)
 }
 
 /// Turn an error from `engraver-core` into the command's error.
