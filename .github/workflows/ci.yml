@@ -60,6 +60,7 @@ jobs:
               - '**/*.md'
               - 'docs/**'
             scripts:
+              - 'README.md'
               - 'install.sh'
               - 'scripts/**'
 
@@ -261,7 +262,14 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run ShellCheck
-        run: shellcheck install.sh
+        run: shellcheck install.sh scripts/*.sh
+      - name: Check the checksum of install.sh in README.md
+        run: |
+          sum=$(sha256sum install.sh | cut -d' ' -f1)
+          if ! grep -qF "${sum}  install.sh" README.md; then
+            echo "::error file=README.md::README.md does not give the checksum of install.sh. Replace it with: ${sum}  install.sh"
+            exit 1
+          fi
 
   # ============================================================================
   # Final status check (for branch protection)
