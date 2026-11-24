@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795552868640,
+  "lastUpdate": 1795553938199,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -2013,6 +2013,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 117.74,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3845529b4e5ee38eac1f900643098e265279a093",
+          "message": "fix(core): skip the hole at the end of an xz file when measuring it (#73)\n\n* test(core): show a sparse terabyte of xz padding still being read\n\nThe size check reads a file's trailing zeros 4 KiB at a time, so an xz file ending in a sparse hole is read in full. The new test gives the check 10 s to measure an xz stream followed by a 1 TiB hole. It fails at this commit.\n\n* fix(core): skip the hole at the end of an xz file when measuring it\n\ntrailing_zeros reads backward 4 KiB at a time, so an xz file followed\nby a 16 GiB sparse hole took 26 s to measure. On Linux, Android, macOS\nand FreeBSD the filesystem knows where the last data region ends. The\nbytes after it are a hole, so they are zeros: count them without\nreading and scan back from the end of the data, as before. If the\nfilesystem can't say, the whole tail is scanned as before.\n\nThe length is unchanged for every file.\n\n* docs: say which compressed images the size check can measure\n\nThe size check uses the length a compressed file records: exact for .xz,\na lower bound for .gz and .zst, none for .bz2. An image it cannot measure\nis written until the drive fills, then fails with ENOSPC.\n\n* docs: say the size check measures local compressed files only\n\nA compressed image from a URL or cloud storage gets no recorded length,\nso the check can't refuse it before writing.",
+          "timestamp": "2026-11-24T15:53:49-05:00",
+          "tree_id": "7c9bdc65cc755158d3bdd207dbd007332fb279b2",
+          "url": "https://github.com/mstephenholl/engraver/commit/3845529b4e5ee38eac1f900643098e265279a093"
+        },
+        "date": 1795553937373,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 71.22,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 71.14,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 69.4,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 71.75,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 66.88,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 14621.15,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 60765.02,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1116.39,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 68.23,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 6515.37,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 52888.34,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 449.1,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 27.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 7268.33,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 54542.36,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 508.41,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 31.27,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 48063.85,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 60848.03,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 9781.36,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 668.97,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 9665.06,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1333.36,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 77.61,
             "unit": "iter/sec"
           }
         ]
