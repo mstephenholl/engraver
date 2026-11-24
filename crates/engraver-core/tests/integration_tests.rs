@@ -477,7 +477,7 @@ fn test_source_to_writer_pipeline() {
 
     // Open source
     let mut source = Source::open(source_file.path().to_str().unwrap()).unwrap();
-    let source_size = source.size().unwrap();
+    let source_size = source.info().size.unwrap();
 
     // Create target
     let mut target = Cursor::new(vec![0u8; 8192]);

@@ -1427,12 +1427,6 @@ impl Source {
         }
     }
 
-    /// Get the known size (uncompressed if available, otherwise compressed)
-    pub fn size(&self) -> Option<u64> {
-        let info = self.info();
-        info.size.or(info.compressed_size)
-    }
-
     /// Check if this source is seekable
     pub fn is_seekable(&self) -> bool {
         self.info().seekable
@@ -2404,7 +2398,7 @@ mod tests {
 
         assert!(!source.is_compressed());
         assert!(source.is_seekable());
-        assert_eq!(source.size(), Some(9));
+        assert_eq!(source.info().size, Some(9));
     }
 
     #[test]
@@ -2633,15 +2627,6 @@ mod tests {
     // -------------------------------------------------------------------------
     // Source helper method tests
     // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_source_size() {
-        let mut temp = NamedTempFile::new().unwrap();
-        temp.write_all(&[0u8; 4096]).unwrap();
-
-        let source = Source::open(temp.path().to_str().unwrap()).unwrap();
-        assert_eq!(source.size(), Some(4096));
-    }
 
     #[test]
     fn test_source_is_seekable() {
