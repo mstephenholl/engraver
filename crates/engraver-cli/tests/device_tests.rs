@@ -11,7 +11,7 @@
 //! All tests are `#[ignore]` by default. Run them explicitly with:
 //!
 //! ```bash
-//! sudo ENGRAVER_TEST_DEVICE=/dev/sdX cargo test -p engraver --test device_tests -- --ignored
+//! sudo ENGRAVER_TEST_DEVICE=/dev/sdX cargo test -p engraver-cli --test device_tests -- --ignored
 //! ```
 //!
 //! **WARNING**: All data on the test device WILL be destroyed!
@@ -35,7 +35,7 @@ fn require_test_device() -> String {
         panic!(
             "ENGRAVER_TEST_DEVICE not set. \
              Set it to a removable drive path to run device tests. \
-             Example: sudo ENGRAVER_TEST_DEVICE=/dev/sdb cargo test -p engraver --test device_tests -- --ignored"
+             Example: sudo ENGRAVER_TEST_DEVICE=/dev/sdb cargo test -p engraver-cli --test device_tests -- --ignored"
         )
     })
 }

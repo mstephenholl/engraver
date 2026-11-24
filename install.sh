@@ -263,7 +263,7 @@ install_from_source() {
     git clone "https://github.com/${REPO}.git" "$tmpdir/engraver"
     cd "$tmpdir/engraver"
     
-    cargo build --release -p engraver
+    cargo build --release -p engraver-cli
     
     info "Installing to ${INSTALL_DIR}..."
     if [[ -w "$INSTALL_DIR" ]]; then

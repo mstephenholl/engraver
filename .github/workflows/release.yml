@@ -66,7 +66,7 @@ jobs:
           sudo apt-get install -y musl-tools
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} -p engraver
+        run: cargo build --release --target ${{ matrix.target }} -p engraver-cli
 
       - name: Generate shell completions
         shell: bash
@@ -256,4 +256,4 @@ jobs:
           sleep 30
           cargo publish -p engraver-core --no-verify || true
           sleep 30
-          cargo publish -p engraver --no-verify || true
+          cargo publish -p engraver-cli --no-verify || true

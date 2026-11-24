@@ -16,8 +16,10 @@ A safe, fast command-line tool for creating bootable USB drives, SD cards, and N
 ## Installation
 
 ```bash
-cargo install engraver
+cargo install engraver-cli
 ```
+
+This installs the `engraver` command.
 
 Or build from source:
 
