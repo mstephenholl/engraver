@@ -266,6 +266,8 @@ engraver config --json | jq '.write.block_size'
 | `2` | Usage error (unknown option, missing argument) |
 | `130` | Cancelled with Ctrl+C (SIGINT). A cancelled write or erase can leave the target partly written. |
 
+On Linux and macOS, Ctrl+C at a confirmation prompt also exits 130, before anything is written. Answering no when asked to write, erase or benchmark prints `Aborted.` and exits 0.
+
 ### Example: Scripted Write with Verification
 
 ```bash

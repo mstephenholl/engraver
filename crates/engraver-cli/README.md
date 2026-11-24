@@ -278,6 +278,8 @@ engraver write image.iso /dev/sda --force --yes
 
 A second Ctrl+C while a run is stopping exits immediately, also with 130.
 
+On Linux and macOS, Ctrl+C at a confirmation prompt also exits 130, before anything is written. Answering no when asked to write, erase or benchmark prints `Aborted.` and exits 0.
+
 ## Environment Variables
 
 | Variable | Description |
