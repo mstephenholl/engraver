@@ -126,3 +126,36 @@ fn resume_tolerates_missing_hash_on_older_checkpoint() {
         "missing checkpoint hash must not block resume; old checkpoints stay valid"
     );
 }
+
+#[test]
+fn checkpoint_for_remote_source_without_range_support_cannot_resume() {
+    // The server never advertised `Accept-Ranges: bytes`, so the checkpoint must
+    // not offer a resume.
+    let mut info = http_source("https://example.com/image.iso", 1024 * 1024);
+    info.resumable = false;
+
+    let cp = WriteCheckpoint::new(&info, "/dev/sdb", 2 * 1024 * 1024, &WriteConfig::new());
+
+    assert!(!cp.can_resume());
+    let result = validate_checkpoint(&cp, &info, 2 * 1024 * 1024);
+    assert!(
+        !result.valid,
+        "a source without range support must not validate for resume"
+    );
+}
+
+#[test]
+fn checkpoint_for_remote_source_with_range_support_can_resume() {
+    let info = http_source("https://example.com/image.iso", 1024 * 1024);
+    assert!(info.resumable);
+
+    let cp = WriteCheckpoint::new(&info, "/dev/sdb", 2 * 1024 * 1024, &WriteConfig::new());
+
+    assert!(cp.can_resume());
+    let result = validate_checkpoint(&cp, &info, 2 * 1024 * 1024);
+    assert!(
+        result.valid,
+        "a source with range support must validate for resume: {:?}",
+        result.messages
+    );
+}
