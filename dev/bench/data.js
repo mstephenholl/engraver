@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795450458494,
+  "lastUpdate": 1795483295027,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -1581,6 +1581,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 119.13,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9422bbe5833929e100e6e6be80808ed04489536a",
+          "message": "fix: verify compressed and remote sources by the decompressed length (#62)\n\n* fix(platform): keep a macOS file's read position at the start\n\nWhen the disk-size ioctl fails, as it does for a regular file, macOS\nmeasures the file by seeking a clone of the handle to its end. A clone\nshares the handle's offset, and the old code never moved it back, so\nevery sequential read after open_device started at the end and saw\nEOF. On macOS, `engraver verify` of a compressed image against a file\nhashed none of the file.\n\nSeek the clone back to where it was. Raw disks answer the ioctl, so\nthey never took this path. Linux already restores the position.\n\nThe new test reads a freshly opened file with read_to_end. Every\nexisting platform test reads with read_at, which seeks first, so none\nof them saw the bug.\n\n* test: show verification of compressed images hashing the whole drive\n\n`engraver verify img.img.gz <drive>` hashes the target to its end, so a\ndrive that holds the image followed by anything else never matches. The\nsame drive passes for a plain image, which is compared byte for byte over\nthe image length only.\n\nAdd end-to-end tests that run the binary against a regular file holding\nthe image followed by 1 MiB of other bytes. The compressed-image test\nfails here. The corrupted-image, exact-length and plain-image tests pass\nboth before and after the fix and guard its edges. The shorter-target\ntest fails only on its message.\n\n`verify` demanded root before it looked at the target, so these tests\ncould not run unprivileged. The check exists for raw device access, so\nskip it when the target is a regular file. Reading a file needs no\nprivileges, and `verify` never writes the target. Add flate2 as a dev\ndependency of the CLI to compress the test images.\n\n* fix: verify compressed and remote sources by the decompressed length\n\nVerifying a compressed or remote source hashed the target to its end, so\non a drive it hashed the whole drive and never matched the image. Both\nchecksum paths, `engraver verify` and the post-write check in `write`,\nnow hash the source first, take its decompressed length, and hash\nexactly that many bytes of the target.\n\nAdd Verifier::calculate_checksum_of_prefix for the second step. It\nhashes `reader.take(len)`, so it never reads past `len`. A target\nshorter than the image returns SizeMismatch, with the bytes the target\nheld. It honours the cancel flag like calculate_checksum: it only reads\nthe flag, and a flag that is already set cancels before any read. Both\npaths share one function in commands/mod.rs, and an image of a\ndifferent length than the one expected, such as the bytes just written,\nfails verification.\n\nRemove the `size.or(compressed_size)` that mixed two lengths. The image\nlength is `size` and the bytes on disk or on the wire are\n`compressed_size`, and only the first is a length of the image:\n\n- The capacity check uses the image length. A compressed source whose\n  compressed file alone is larger than the drive is refused. Otherwise\n  its capacity is Unknown and the check is skipped with a notice,\n  instead of passing on the compressed size.\n- Progress totals use the image length, or a spinner when it is unknown.\n- The source size shown is the image length, or the compressed size\n  labelled as compressed.\n- The checkpoint already stores the image length through\n  WriteCheckpoint::new, so it needed no change.\n\n`verify` skips its root check when the target is a regular file, because\nreading a file needs no privileges. This lets the CLI tests run against\na file that holds the image and then other data.\n\nThe write path's resume-verify progress bar loses its per-block text; it\nshares the verify bars now. The checksum command's progress bar and size\nline follow the same rule. What it hashes is unchanged.",
+          "timestamp": "2026-11-23T20:15:28-05:00",
+          "tree_id": "d9d80541a7770fd8c4689d9bb4ebeee3b3770b27",
+          "url": "https://github.com/mstephenholl/engraver/commit/9422bbe5833929e100e6e6be80808ed04489536a"
+        },
+        "date": 1795483294750,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 1138.18,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 58990.67,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 52882.83,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 16872.94,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 103.39,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 57273.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 18854.69,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1637.16,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 36.14,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 53556.22,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 8076.12,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 577.98,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 42.62,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 53860.92,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 9519,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 686.3,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 122.98,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 14408.74,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1744.86,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 97.28,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 105.17,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 105.08,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 107.8,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 103.9,
             "unit": "iter/sec"
           }
         ]
