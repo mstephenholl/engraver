@@ -86,7 +86,8 @@ pub fn execute(args: EraseArgs) -> Result<()> {
             let proceed = confirm("Are you absolutely sure you want to continue?", false)?;
 
             if !proceed {
-                bail!("Aborted by user");
+                println!("{}", style("Aborted.").yellow());
+                return Ok(());
             }
         }
     }

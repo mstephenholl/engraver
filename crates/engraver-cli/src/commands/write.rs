@@ -179,6 +179,12 @@ fn capacity(source_info: &engraver_core::SourceInfo, drive_size: u64) -> Capacit
     }
 }
 
+#[derive(Debug)]
+enum TargetChoice<'a> {
+    Use(&'a Drive),
+    Declined,
+}
+
 /// Validate the target device, performing safety checks
 fn validate_target_device<'a>(
     target: &str,
@@ -187,7 +193,7 @@ fn validate_target_device<'a>(
     skip_confirm: bool,
     source_info: &engraver_core::SourceInfo,
     silent: bool,
-) -> Result<&'a Drive> {
+) -> Result<TargetChoice<'a>> {
     println_if!(
         silent,
         "\n{} {}",
@@ -221,7 +227,8 @@ fn validate_target_device<'a>(
             let proceed = confirm("Are you absolutely sure you want to continue?", false)?;
 
             if !proceed {
-                bail!("Aborted by user");
+                println!("{}", style("Aborted.").yellow());
+                return Ok(TargetChoice::Declined);
             }
         }
     }
@@ -288,7 +295,7 @@ fn validate_target_device<'a>(
         );
     }
 
-    Ok(target_drive)
+    Ok(TargetChoice::Use(target_drive))
 }
 
 /// Display the confirmation dialog and return whether to proceed
@@ -549,14 +556,17 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     // Step 2: Validate target device
     let drives = list_drives().context("Failed to list drives")?;
-    let target_drive = validate_target_device(
+    let TargetChoice::Use(target_drive) = validate_target_device(
         &args.target,
         &drives,
         args.force,
         args.skip_confirm,
         &source_info,
         silent,
-    )?;
+    )?
+    else {
+        return Ok(());
+    };
 
     // Step 2.5: Show partition information if requested
     if args.show_partitions {
@@ -2050,7 +2060,7 @@ mod tests {
     fn test_validate_target_device_accepts_a_compressed_source_of_unknown_image_size() {
         let drives = vec![removable_drive(4 * GIB)];
 
-        let drive = validate_target_device(
+        let TargetChoice::Use(drive) = validate_target_device(
             "/dev/sdz",
             &drives,
             false,
@@ -2058,7 +2068,9 @@ mod tests {
             &compressed_source(MIB),
             true,
         )
-        .expect("the capacity check must not judge an unknown image by its file size");
+        .expect("the capacity check must not judge an unknown image by its file size") else {
+            panic!("a removable drive needs no confirmation");
+        };
 
         assert_eq!(drive.path, "/dev/sdz");
     }

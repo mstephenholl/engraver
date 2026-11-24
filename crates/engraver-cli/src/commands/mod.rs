@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
+use console::Term;
 use dialoguer::Confirm;
 use engraver_core::{Checksum, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -35,21 +36,31 @@ pub(crate) fn is_cancelled(err: &anyhow::Error) -> bool {
     })
 }
 
-/// Ask a yes/no question on the terminal.
-///
-/// Every confirmation prompt goes through here, so every prompt fails the
-/// same way.
 pub(crate) fn confirm(prompt: &str, default: bool) -> Result<bool> {
     Confirm::new()
         .with_prompt(prompt)
         .default(default)
         .interact()
-        .map_err(prompt_error)
+        .map_err(|err| {
+            // dialoguer hides the cursor for the prompt and shows it again
+            // only after an answer, so a failed prompt would leave it hidden.
+            let term = Term::stderr();
+            if term.is_term() {
+                let _ = term.show_cursor();
+            }
+            prompt_error(err)
+        })
 }
 
-/// Turn a prompt's error into the command's error.
+/// On Unix, console reads Ctrl+C at a prompt as a byte, returns it as
+/// `ErrorKind::Interrupted`, and raises SIGINT itself.
 pub(crate) fn prompt_error(err: dialoguer::Error) -> anyhow::Error {
-    anyhow::Error::new(err)
+    match err {
+        dialoguer::Error::IO(io) if io.kind() == std::io::ErrorKind::Interrupted => {
+            cancelled("Cancelled.")
+        }
+        err => anyhow::Error::new(err),
+    }
 }
 
 /// Turn an error from `engraver-core` into the command's error.
