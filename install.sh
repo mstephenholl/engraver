@@ -133,7 +133,6 @@ install_binary() {
     else
         error "Cannot write to ${INSTALL_DIR}. Set INSTALL_DIR to a writable location or remove --no-sudo."
     fi
-    chmod +x "${INSTALL_DIR}/engraver"
     
     # Install completions
     install_completions "$extract_dir"
