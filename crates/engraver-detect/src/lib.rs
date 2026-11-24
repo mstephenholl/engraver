@@ -243,7 +243,8 @@ pub struct Partition {
     /// Size in bytes
     pub size: u64,
 
-    /// Mount point if mounted
+    /// Mount point if mounted. A partition mounted more than once reports its first
+    /// mount here, and `Drive::mount_points` lists them all.
     pub mount_point: Option<String>,
 }
 
@@ -359,6 +360,7 @@ pub const SYSTEM_MOUNT_POINTS: &[&str] = &[
     "/",
     "/boot",
     "/boot/efi",
+    "/efi",
     "/home",
     "/usr",
     "/var",

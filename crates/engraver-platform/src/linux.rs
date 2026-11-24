@@ -8,7 +8,7 @@ use crate::{
 };
 use std::fs::{File, OpenOptions as StdOpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::process::Command;
@@ -96,6 +96,51 @@ impl AlignedBuffer {
     }
 }
 
+/// The `custom_flags` for opening a device
+///
+/// A block device opened for writing gets `O_EXCL`. Without `O_CREAT`, Linux reads
+/// that as an exclusive open, and the kernel refuses with EBUSY while the disk or
+/// any of its partitions is mounted, in use as swap, or claimed by device-mapper,
+/// md, ZFS or btrfs. Other files get no `O_EXCL`: without `O_CREAT` it is
+/// defined only for block devices.
+fn open_flags(options: &OpenOptions, block_device: bool) -> i32 {
+    let mut flags = 0;
+    if options.direct_io {
+        flags |= libc::O_DIRECT;
+    }
+    if options.write && block_device {
+        flags |= libc::O_EXCL;
+    }
+    flags
+}
+
+/// Open the file behind a device, mapping EBUSY from the exclusive open to `DeviceBusy`.
+pub(crate) fn open_file(path: &str, options: &OpenOptions) -> Result<File> {
+    let block_device = std::fs::metadata(path).is_ok_and(|m| m.file_type().is_block_device());
+
+    StdOpenOptions::new()
+        .read(options.read)
+        .write(options.write)
+        .custom_flags(open_flags(options, block_device))
+        .open(path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                PlatformError::PermissionDenied(format!(
+                    "Cannot open {}: {}. Try running with sudo.",
+                    path, e
+                ))
+            } else if e.raw_os_error() == Some(libc::EBUSY) {
+                PlatformError::DeviceBusy(format!(
+                    "{} is in use: it is mounted, used as swap, or held by another program. \
+                     Unmount it or stop that program, then try again.",
+                    path
+                ))
+            } else {
+                PlatformError::Io(e)
+            }
+        })
+}
+
 impl LinuxDevice {
     /// Open a device for raw I/O
     pub fn open(path: &str, options: OpenOptions) -> Result<Self> {
@@ -106,30 +151,7 @@ impl LinuxDevice {
             return Err(PlatformError::DeviceNotFound(path.to_string()));
         }
 
-        // Build open options
-        let mut std_options = StdOpenOptions::new();
-        std_options.read(options.read).write(options.write);
-
-        // Add O_DIRECT for direct I/O if requested
-        #[cfg(target_os = "linux")]
-        if options.direct_io {
-            std_options.custom_flags(libc::O_DIRECT);
-        }
-
-        // Try to open the device
-        let file = std_options.open(device_path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::PermissionDenied {
-                PlatformError::PermissionDenied(format!(
-                    "Cannot open {}: {}. Try running with sudo.",
-                    path, e
-                ))
-            } else if e.raw_os_error() == Some(16) {
-                // EBUSY
-                PlatformError::DeviceBusy(format!("{} is busy. Try unmounting first.", path))
-            } else {
-                PlatformError::Io(e)
-            }
-        })?;
+        let file = open_file(path, &options)?;
 
         // Get device size
         let size = get_device_size(&file, path)?;
@@ -395,6 +417,39 @@ fn get_device_block_size(path: &str) -> Result<u32> {
     Ok(512)
 }
 
+/// Split a `/proc/mounts` line into its device and mount point
+///
+/// Returns `None` for a line with fewer than two fields.
+fn parse_mount_entry(line: &str) -> Option<(String, String)> {
+    let mut fields = line.split_whitespace();
+    let device = unescape_mount_field(fields.next()?);
+    let mount_point = unescape_mount_field(fields.next()?);
+    Some((device, mount_point))
+}
+
+/// Decode the octal escapes in a `/proc/mounts` field
+///
+/// The kernel writes a space, tab, newline or backslash as `\040`, `\011`, `\012`
+/// or `\134`, so `umount` fails on the raw field. Anything other than a backslash
+/// and an octal byte from `\000` to `\377` is kept as it is.
+fn unescape_mount_field(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some([b'\\', d0 @ b'0'..=b'3', d1 @ b'0'..=b'7', d2 @ b'0'..=b'7']) =
+            bytes.get(i..i + 4)
+        {
+            decoded.push(((d0 - b'0') << 6) | ((d1 - b'0') << 3) | (d2 - b'0'));
+            i += 4;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
 /// Unmount all filesystems on a device
 fn unmount_linux_device(device_path: &str) -> Result<()> {
     // Find all mounted partitions for this device
@@ -404,13 +459,9 @@ fn unmount_linux_device(device_path: &str) -> Result<()> {
     let mut unmounted_any = false;
 
     for line in mounts.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 2 {
+        let Some((mount_device, mount_point)) = parse_mount_entry(line) else {
             continue;
-        }
-
-        let mount_device = parts[0];
-        let mount_point = parts[1];
+        };
 
         // Strict match: only the device itself or one of its real
         // partitions. The previous heuristic (`starts_with` OR `contains`
@@ -418,10 +469,10 @@ fn unmount_linux_device(device_path: &str) -> Result<()> {
         // sharing a prefix (`/dev/sdab` matched `/dev/sda`) and for
         // arbitrary substring overlaps (`/dev/mapper/loop_sda` matched
         // `/dev/sda`) — unmounting either would corrupt unrelated data.
-        if is_linux_partition_of(mount_device, device_path) {
+        if is_linux_partition_of(&mount_device, device_path) {
             tracing::debug!("Unmounting {} from {}", mount_device, mount_point);
 
-            let status = Command::new("umount").arg(mount_point).status();
+            let status = Command::new("umount").arg(&mount_point).status();
 
             match status {
                 Ok(s) if s.success() => {
@@ -679,6 +730,55 @@ tmpfs /tmp tmpfs rw,nosuid 0 0
                 assert!(!parts[0].is_empty() || parts[0].is_empty());
             }
         }
+    }
+
+    #[test]
+    fn test_parse_mount_entry_decodes_space_in_mount_point() {
+        let (device, mount_point) =
+            parse_mount_entry("/dev/sdb1 /mnt/my\\040drive vfat rw 0 0").unwrap();
+        assert_eq!(device, "/dev/sdb1");
+        assert_eq!(mount_point, "/mnt/my drive");
+    }
+
+    #[test]
+    fn test_parse_mount_entry_decodes_tab_newline_and_backslash() {
+        let line = "/dev/sdb1 /mnt/a\\011b\\012c\\134d ext4 rw 0 0";
+        let (_, mount_point) = parse_mount_entry(line).unwrap();
+        assert_eq!(mount_point, "/mnt/a\tb\nc\\d");
+    }
+
+    #[test]
+    fn test_parse_mount_entry_decodes_each_escape_once() {
+        // `\134040` is an escaped backslash followed by the text `040`, not a space
+        let (_, mount_point) = parse_mount_entry("/dev/sdb1 /mnt/x\\134040y ext4 rw 0 0").unwrap();
+        assert_eq!(mount_point, "/mnt/x\\040y");
+    }
+
+    #[test]
+    fn test_parse_mount_entry_keeps_text_that_is_not_an_octal_escape() {
+        for path in [
+            "/mnt/plain",
+            "/mnt/a\\b",
+            "/mnt/a\\04",
+            "/mnt/a\\0x0",
+            "/mnt/a\\400",
+        ] {
+            let line = format!("/dev/sdb1 {path} ext4 rw 0 0");
+            assert_eq!(parse_mount_entry(&line).unwrap().1, path);
+        }
+    }
+
+    #[test]
+    fn test_parse_mount_entry_decodes_device_field() {
+        let (device, _) =
+            parse_mount_entry("/dev/disk/by-label/My\\040Disk /mnt/disk ext4 rw 0 0").unwrap();
+        assert_eq!(device, "/dev/disk/by-label/My Disk");
+    }
+
+    #[test]
+    fn test_parse_mount_entry_needs_a_device_and_a_mount_point() {
+        assert_eq!(parse_mount_entry(""), None);
+        assert_eq!(parse_mount_entry("/dev/sda1"), None);
     }
 
     // -------------------------------------------------------------------------
@@ -944,6 +1044,54 @@ tmpfs /tmp tmpfs rw,nosuid 0 0
         let err = PlatformError::DeviceNotFound("/dev/xyz".to_string());
         let msg = format!("{}", err);
         assert!(msg.contains("/dev/xyz"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Exclusive open of block devices
+    //
+    // A real block device needs root, so `open_flags` takes the device kind as
+    // an argument. The loop-device test in tests/integration_tests.rs covers
+    // the kernel's EBUSY.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_open_flags_write_to_block_device_is_exclusive() {
+        let options = OpenOptions::new().write(true).direct_io(true);
+        let flags = open_flags(&options, true);
+        assert_ne!(flags & libc::O_EXCL, 0);
+        assert_ne!(flags & libc::O_DIRECT, 0, "O_DIRECT must survive");
+    }
+
+    #[test]
+    fn test_open_flags_exclusive_without_direct_io() {
+        let options = OpenOptions::new().write(true).direct_io(false);
+        assert_eq!(open_flags(&options, true), libc::O_EXCL);
+    }
+
+    #[test]
+    fn test_open_flags_read_only_block_device_is_not_exclusive() {
+        let options = OpenOptions::new().read(true).write(false).direct_io(true);
+        assert_eq!(open_flags(&options, true) & libc::O_EXCL, 0);
+    }
+
+    #[test]
+    fn test_open_flags_regular_file_is_not_exclusive() {
+        let options = OpenOptions::new().write(true).direct_io(true);
+        assert_eq!(open_flags(&options, false), libc::O_DIRECT);
+    }
+
+    #[test]
+    fn test_regular_file_opens_for_write_twice() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(&[0u8; 4096]).unwrap();
+        let path = temp.path().to_str().unwrap();
+        let options = OpenOptions::new().write(true).direct_io(false);
+
+        let first = LinuxDevice::open(path, options.clone()).unwrap();
+        let second = LinuxDevice::open(path, options);
+
+        assert!(second.is_ok(), "a regular file is not opened exclusively");
+        drop(first);
     }
 
     // -------------------------------------------------------------------------

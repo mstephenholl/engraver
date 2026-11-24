@@ -759,6 +759,7 @@ name = "engraver-detect"
 version = "0.1.0"
 dependencies = [
  "cfg-if",
+ "libc",
  "mockall",
  "serde",
  "serde_json",
