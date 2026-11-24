@@ -45,6 +45,11 @@ Options:
 Environment Variables:
   INSTALL_DIR   Installation directory (default: /usr/local/bin)
   MAN_DIR       Man page directory (default: /usr/local/share/man/man1)
+  ENGRAVER_VERSION
+                Version to install, such as 0.1.0 (default: the latest release)
+  ENGRAVER_RELEASE_URL
+                Download release files from <url>/v<version>/<file>
+                (default: https://github.com/mstephenholl/engraver/releases/download)
 
 EOF
     exit 0
@@ -108,7 +113,7 @@ get_latest_version() {
 install_binary() {
     local version="$1"
     local platform="$2"
-    local url="https://github.com/${REPO}/releases/download/v${version}/engraver-v${version}-${platform}.tar.gz"
+    local url="${ENGRAVER_RELEASE_URL:-https://github.com/${REPO}/releases/download}/v${version}/engraver-v${version}-${platform}.tar.gz"
     local tmpdir
     
     tmpdir=$(mktemp -d)
@@ -262,8 +267,12 @@ main() {
     local platform version
     platform=$(detect_platform)
     
-    # Try to get latest version from GitHub
-    if version=$(get_latest_version 2>/dev/null) && [[ -n "$version" ]]; then
+    # Install the version asked for, or else the latest release from GitHub
+    if [[ -n "${ENGRAVER_VERSION:-}" ]]; then
+        version="${ENGRAVER_VERSION#v}"
+        info "Version: v${version}"
+        install_binary "$version" "$platform"
+    elif version=$(get_latest_version 2>/dev/null) && [[ -n "$version" ]]; then
         info "Latest version: v${version}"
         install_binary "$version" "$platform"
     else

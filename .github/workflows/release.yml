@@ -175,9 +175,30 @@ jobs:
           name: release
           path: dist/
 
+  test-install:
+    name: Test install.sh (${{ matrix.os }})
+    needs: package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download release files
+        uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
+
+      - name: Install through install.sh
+        run: scripts/test-install.sh dist
+
   release:
     name: Create Release
-    needs: [package, check-crates]
+    needs: [package, test-install, check-crates]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
