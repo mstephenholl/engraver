@@ -273,7 +273,10 @@ engraver write image.iso /dev/sda --force --yes
 |------|---------|
 | 0 | Success |
 | 1 | General error |
-| 130 | Interrupted (Ctrl+C) |
+| 2 | Usage error (unknown option, missing argument) |
+| 130 | Cancelled with Ctrl+C (SIGINT). A cancelled write or erase can leave the target partly written. |
+
+A second Ctrl+C while a run is stopping exits immediately, also with 130.
 
 ## Environment Variables
 

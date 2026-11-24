@@ -27,6 +27,8 @@ use engraver_core::{inspect_from_buffer, read_partition_header, PartitionTableTy
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
+use super::{cancelled, context_or_cancelled};
+
 /// Arguments for the write command
 pub struct WriteArgs {
     pub source: String,
@@ -408,7 +410,9 @@ fn setup_checksum(args: &WriteArgs, source_size: Option<u64>, ctx: &WriteContext
                 algo.name()
             ),
             Err(engraver_core::Error::Cancelled) => {
-                bail!("Cancelled before writing. The target was not modified.")
+                return Err(cancelled(
+                    "Cancelled before writing. The target was not modified.",
+                ));
             }
             Err(e) => bail!("Checksum verification failed: {}", e),
         }
@@ -812,8 +816,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             if let Err(e) = target.sync() {
                 tracing::debug!("Sync after cancel: {}", e);
             }
-            println_if!(silent, "\n{}", style("Write cancelled by user.").yellow());
-            return Ok(());
+            return Err(cancelled("Write cancelled by user."));
         }
         Err(e) => {
             // Save checkpoint on error
@@ -937,6 +940,9 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                         result.first_mismatch_offset.unwrap_or(0) / block_size as u64
                     );
                 }
+                Err(engraver_core::Error::Cancelled) => {
+                    return Err(cancelled("Verification cancelled."));
+                }
                 Err(e) => {
                     bail!("Verification failed: {}", e);
                 }
@@ -975,7 +981,13 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
             let written_checksum = verifier
                 .calculate_checksum(&mut *target, ChecksumAlgorithm::Sha256, Some(total_size))
-                .context("Failed to checksum written data")?;
+                .map_err(|e| {
+                    context_or_cancelled(
+                        e,
+                        "Failed to checksum written data",
+                        "Verification cancelled.",
+                    )
+                })?;
 
             pb.finish_and_clear();
 
@@ -1011,7 +1023,9 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                     ChecksumAlgorithm::Sha256,
                     source_size,
                 )
-                .context("Failed to checksum source")?;
+                .map_err(|e| {
+                    context_or_cancelled(e, "Failed to checksum source", "Verification cancelled.")
+                })?;
 
             pb.finish_and_clear();
 
@@ -2136,6 +2150,16 @@ mod tests {
             args.cancel_flag.load(Ordering::SeqCst),
             "the cancel must stay set so the write that follows also stops"
         );
+    }
+
+    #[test]
+    fn test_setup_checksum_with_pending_cancel_returns_a_cancelled_error() {
+        let (_source, args) = checksum_args(SHA256_OF_64K_OF_0XAB, true);
+
+        let err = setup_checksum(&args, Some(64 * 1024), &silent_ctx())
+            .expect_err("a pending cancel must stop the checksum step");
+
+        crate::commands::assert_cancelled(&err);
     }
 
     #[test]

@@ -812,6 +812,79 @@ fn test_invalid_args_exit_code() {
     engraver().arg("write").assert().failure(); // Just check it fails, exit code varies
 }
 
+#[test]
+fn test_runtime_error_exit_code_is_1() {
+    engraver()
+        .args(["checksum", "/nonexistent/file"])
+        .assert()
+        .code(1);
+}
+
+#[test]
+fn test_usage_error_exit_code_is_2() {
+    engraver().arg("write").assert().code(2);
+}
+
+/// A Ctrl+C that cancels a run must not look like success. Scripts that chain
+/// `engraver ... && next-step` rely on a non-zero exit, and 130 is the shell
+/// convention for "terminated by SIGINT".
+#[cfg(unix)]
+#[test]
+fn test_checksum_interrupted_by_sigint_exits_130() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Command, Stdio};
+
+    let temp_dir = TempDir::new().unwrap();
+    let image = temp_dir.path().join("big.img");
+    // Sparse, so it costs no disk, but hashing 8 GiB takes far longer than
+    // the signal needs to arrive.
+    fs::File::create(&image)
+        .unwrap()
+        .set_len(8 * 1024 * 1024 * 1024)
+        .unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_engraver"))
+        .args(["checksum", image.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // The Ctrl+C handler is installed before the command prints anything, so
+    // once this line appears the signal reaches the handler, not the default.
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let read = stdout.read_line(&mut line).unwrap();
+        assert!(read > 0, "engraver exited before it started hashing");
+        if line.contains("Calculating") {
+            break;
+        }
+    }
+
+    let killed = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success(), "could not send SIGINT");
+
+    let status = child.wait().unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+
+    assert_eq!(status.code(), Some(130), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("Error:"),
+        "a cancel is not an error report: {stderr}"
+    );
+}
+
 // ============================================================================
 // Shell Completions Tests
 // ============================================================================

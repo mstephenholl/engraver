@@ -16,6 +16,8 @@ use std::time::Instant;
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
+use super::cancelled;
+
 /// Arguments for the erase command
 pub struct EraseArgs {
     pub target: String,
@@ -210,8 +212,7 @@ pub fn execute(args: EraseArgs) -> Result<()> {
             if let Err(e) = target.sync() {
                 tracing::debug!("Sync after cancel: {}", e);
             }
-            println_if!(silent, "\n{}", style("Erase cancelled by user.").yellow());
-            return Ok(());
+            return Err(cancelled("Erase cancelled by user."));
         }
 
         let remaining = total_size - bytes_written;

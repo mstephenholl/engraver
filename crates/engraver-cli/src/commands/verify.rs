@@ -12,6 +12,8 @@ use engraver_core::{
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, OpenOptions};
 
+use super::{cancelled, context_or_cancelled};
+
 /// Execute the verify command
 pub fn execute(
     source: &str,
@@ -176,7 +178,9 @@ pub fn execute(
                 ChecksumAlgorithm::Sha256,
                 Some(total_size),
             )
-            .context("Failed to checksum target")?;
+            .map_err(|e| {
+                context_or_cancelled(e, "Failed to checksum target", "Verification cancelled.")
+            })?;
 
         pb.finish_and_clear();
 
@@ -211,7 +215,9 @@ pub fn execute(
 
         let source_checksum = verifier
             .calculate_checksum(&mut source_reader, ChecksumAlgorithm::Sha256, source_size)
-            .context("Failed to checksum source")?;
+            .map_err(|e| {
+                context_or_cancelled(e, "Failed to checksum source", "Verification cancelled.")
+            })?;
 
         pb.finish_and_clear();
 
@@ -265,10 +271,7 @@ fn handle_verify_result(
             }
             bail!("Verification failed");
         }
-        Err(engraver_core::Error::Cancelled) => {
-            println_if!(silent, "\n{}", style("Verification cancelled.").yellow());
-            Ok(())
-        }
+        Err(engraver_core::Error::Cancelled) => Err(cancelled("Verification cancelled.")),
         Err(e) => {
             bail!("Verification error: {}", e);
         }
@@ -413,8 +416,8 @@ mod tests {
     #[test]
     fn test_handle_verify_result_cancelled() {
         let handled = handle_verify_result(Err(engraver_core::Error::Cancelled), true);
-        // Cancelled is not an error - returns Ok
-        assert!(handled.is_ok());
+        let err = handled.expect_err("a cancelled verification must not return Ok");
+        crate::commands::assert_cancelled(&err);
     }
 
     #[test]

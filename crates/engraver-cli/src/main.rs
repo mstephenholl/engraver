@@ -238,18 +238,61 @@ fn main() {
     }));
 
     if let Err(e) = run() {
-        eprintln!("{} {}", style("Error:").red().bold(), e);
+        let exit = exit_for(&e);
 
-        // Show cause chain in verbose mode
-        if std::env::var("RUST_BACKTRACE").is_ok() {
-            let mut source = e.source();
-            while let Some(cause) = source {
-                eprintln!("  {} {}", style("Caused by:").yellow(), cause);
-                source = cause.source();
+        if let Some(line) = &exit.cancelled_line {
+            eprintln!("{line}");
+        } else {
+            eprintln!("{} {}", style("Error:").red().bold(), e);
+
+            // Show cause chain in verbose mode
+            if std::env::var("RUST_BACKTRACE").is_ok() {
+                let mut source = e.source();
+                while let Some(cause) = source {
+                    eprintln!("  {} {}", style("Caused by:").yellow(), cause);
+                    source = cause.source();
+                }
             }
         }
 
-        std::process::exit(1);
+        std::process::exit(exit.code);
+    }
+}
+
+/// How a failed run ends: the exit status, and for a cancelled run the one
+/// line to print in place of the `Error:` report.
+struct Exit {
+    code: i32,
+    cancelled_line: Option<String>,
+}
+
+/// Exit status for a run cancelled with Ctrl+C: 128 + SIGINT.
+const EXIT_CANCELLED: i32 = 130;
+
+/// Decide how a failed run ends.
+///
+/// A run cancelled with Ctrl+C exits 130, so `engraver ... && next-step`
+/// stops and a supervisor sees the interrupt. That is the case when any error
+/// in the chain is [`engraver_core::Error::Cancelled`]. Every other error
+/// exits 1.
+fn exit_for(err: &anyhow::Error) -> Exit {
+    if !commands::is_cancelled(err) {
+        return Exit {
+            code: 1,
+            cancelled_line: None,
+        };
+    }
+
+    // The outermost message says what was cancelled. A bare `Cancelled` has
+    // only the library's wording, so use a plain default instead.
+    let line = if err.chain().len() > 1 {
+        err.to_string()
+    } else {
+        "Cancelled.".to_string()
+    };
+    Exit {
+        code: EXIT_CANCELLED,
+        cancelled_line: Some(line),
     }
 }
 
@@ -298,7 +341,7 @@ fn run() -> Result<()> {
             if !silent_for_handler {
                 eprintln!("\n{}", style("Forced exit").red().bold());
             }
-            std::process::exit(130);
+            std::process::exit(EXIT_CANCELLED);
         }
         c.store(true, std::sync::atomic::Ordering::SeqCst);
         if !silent_for_handler {
@@ -487,5 +530,54 @@ fn run() -> Result<()> {
                 cancel_flag: cancel,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engraver_core::Error;
+
+    #[test]
+    fn test_exit_for_cancelled_run_is_130_with_the_outer_message() {
+        let err = anyhow::Error::new(Error::Cancelled)
+            .context("Failed to calculate checksum")
+            .context("Checksum cancelled.");
+
+        let exit = exit_for(&err);
+
+        assert_eq!(exit.code, 130);
+        assert_eq!(exit.cancelled_line.as_deref(), Some("Checksum cancelled."));
+    }
+
+    #[test]
+    fn test_exit_for_bare_cancelled_run_is_130_with_a_default_message() {
+        let err = anyhow::Error::new(Error::Cancelled);
+
+        let exit = exit_for(&err);
+
+        assert_eq!(exit.code, 130);
+        assert_eq!(exit.cancelled_line.as_deref(), Some("Cancelled."));
+    }
+
+    #[test]
+    fn test_exit_for_plain_error_is_1_and_prints_as_an_error() {
+        let err = anyhow::anyhow!("disk exploded").context("Failed to write");
+
+        let exit = exit_for(&err);
+
+        assert_eq!(exit.code, 1);
+        assert_eq!(exit.cancelled_line, None);
+    }
+
+    #[test]
+    fn test_exit_for_other_core_error_under_context_is_1() {
+        let err = anyhow::Error::new(Error::SourceNotFound("a.iso".to_string()))
+            .context("Failed to validate source");
+
+        let exit = exit_for(&err);
+
+        assert_eq!(exit.code, 1);
+        assert_eq!(exit.cancelled_line, None);
     }
 }

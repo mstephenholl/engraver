@@ -21,6 +21,8 @@ use engraver_core::{
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
+use super::cancelled;
+
 /// Arguments for the benchmark command
 pub struct BenchmarkArgs {
     /// Target device path
@@ -467,10 +469,7 @@ where
             }
             Ok(())
         }
-        Err(BenchmarkError::Cancelled) => {
-            println_if!(silent, "\n{} Benchmark cancelled", style("✗").red());
-            Ok(())
-        }
+        Err(BenchmarkError::Cancelled) => Err(cancelled("Benchmark cancelled")),
         Err(e) => Err(anyhow::anyhow!("Benchmark failed: {}", e)),
     }
 }
@@ -504,8 +503,7 @@ where
 
     for (idx, &block_size) in block_sizes.iter().enumerate() {
         if cancel_flag.load(Ordering::Relaxed) {
-            println_if!(silent, "\n{} Benchmark cancelled", style("✗").red());
-            return Ok(());
+            return Err(cancelled("Benchmark cancelled"));
         }
 
         println_if!(
@@ -569,10 +567,7 @@ where
                     speed_display: engraver_core::benchmark::format_speed(speed),
                 });
             }
-            Err(BenchmarkError::Cancelled) => {
-                println_if!(silent, "\n{} Benchmark cancelled", style("✗").red());
-                return Ok(());
-            }
+            Err(BenchmarkError::Cancelled) => return Err(cancelled("Benchmark cancelled")),
             Err(e) => {
                 println_if!(
                     silent,
@@ -1016,5 +1011,90 @@ mod tests {
             let result = find_target_drive(&_drives, "sdb");
             assert!(result.is_ok());
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Cancellation tests
+    // -------------------------------------------------------------------------
+
+    const TEST_SIZE: u64 = 64 * 1024;
+    const TEST_BLOCK: u64 = 4 * 1024;
+
+    fn scratch_device() -> std::io::Cursor<Vec<u8>> {
+        std::io::Cursor::new(vec![0u8; 1024 * 1024])
+    }
+
+    #[test]
+    fn test_single_benchmark_with_pending_cancel_returns_a_cancelled_error() {
+        let mut device = scratch_device();
+
+        let err = run_single_benchmark(
+            &mut device,
+            "/dev/test",
+            TEST_SIZE,
+            TEST_BLOCK,
+            DataPattern::Zeros,
+            1,
+            true,
+            true,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .expect_err("a pending cancel must stop the benchmark");
+
+        crate::commands::assert_cancelled(&err);
+    }
+
+    #[test]
+    fn test_single_benchmark_without_cancel_succeeds() {
+        let mut device = scratch_device();
+
+        run_single_benchmark(
+            &mut device,
+            "/dev/test",
+            TEST_SIZE,
+            TEST_BLOCK,
+            DataPattern::Zeros,
+            1,
+            true,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("an uncancelled benchmark must succeed");
+    }
+
+    #[test]
+    fn test_multi_block_benchmark_with_pending_cancel_returns_a_cancelled_error() {
+        let mut device = scratch_device();
+
+        let err = run_multi_block_benchmark(
+            &mut device,
+            "/dev/test",
+            TEST_SIZE,
+            &[TEST_BLOCK, 2 * TEST_BLOCK],
+            DataPattern::Zeros,
+            true,
+            true,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .expect_err("a pending cancel must stop the benchmark");
+
+        crate::commands::assert_cancelled(&err);
+    }
+
+    #[test]
+    fn test_multi_block_benchmark_without_cancel_succeeds() {
+        let mut device = scratch_device();
+
+        run_multi_block_benchmark(
+            &mut device,
+            "/dev/test",
+            TEST_SIZE,
+            &[TEST_BLOCK, 2 * TEST_BLOCK],
+            DataPattern::Zeros,
+            true,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("an uncancelled benchmark must succeed");
     }
 }
