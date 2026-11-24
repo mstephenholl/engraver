@@ -72,8 +72,15 @@ if [[ "$ready" != true ]]; then
     exit 2
 fi
 
-# Root owns both directories, so a user cannot write to them.
+# Only root can write to either directory, so install.sh has to copy through sudo.
 sudo mkdir -p "$install_dir" "$man_dir"
+sudo chown -R 0:0 "$work/prefix"
+sudo chmod -R 755 "$work/prefix"
+if [[ -w "$install_dir" || -w "$man_dir" ]]; then
+    echo "This user can still write to the install directories, so the sudo path would go untested:" >&2
+    ls -ld "$install_dir" "$man_dir" >&2
+    exit 2
+fi
 
 # HOME is a throwaway so install.sh cannot add completions to the real one.
 run_install() {
