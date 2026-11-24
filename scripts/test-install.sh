@@ -94,7 +94,9 @@ verdict() {
         printf '%s' "$problems"
         failures=$((failures + 1))
     fi
-    echo "$output" | sed 's/^/    | /'
+    while IFS= read -r line; do
+        printf '    | %s\n' "$line"
+    done <<<"$output"
     echo
 }
 
