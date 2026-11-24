@@ -210,41 +210,31 @@ impl Default for ChecksumSettings {
 }
 
 impl Settings {
-    /// Load settings from the configuration file
+    /// Load settings from a specific path, reporting a file that is unusable
     ///
-    /// Returns default settings if the file doesn't exist or can't be parsed
-    pub fn load() -> Self {
-        Self::load_from_path(Self::config_path())
-    }
-
-    /// Load settings from a specific path
-    pub fn load_from_path(path: Option<PathBuf>) -> Self {
+    /// Returns default settings if there is no path or no file there. A file
+    /// that exists but can't be read or parsed is an error.
+    pub fn try_load_from_path(path: Option<PathBuf>) -> Result<Self, SettingsError> {
         let Some(path) = path else {
             tracing::debug!("No config path available, using defaults");
-            return Self::default();
+            return Ok(Self::default());
         };
 
         if !path.exists() {
             tracing::debug!("Config file not found at {:?}, using defaults", path);
-            return Self::default();
+            return Ok(Self::default());
         }
 
-        match std::fs::read_to_string(&path) {
-            Ok(contents) => match toml::from_str(&contents) {
-                Ok(settings) => {
-                    tracing::debug!("Loaded settings from {:?}", path);
-                    settings
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse config file {:?}: {}", path, e);
-                    Self::default()
-                }
-            },
-            Err(e) => {
-                tracing::warn!("Failed to read config file {:?}: {}", path, e);
-                Self::default()
-            }
-        }
+        let contents = std::fs::read_to_string(&path).map_err(|source| SettingsError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let settings = toml::from_str(&contents).map_err(|source| SettingsError::Parse {
+            path: path.clone(),
+            source,
+        })?;
+        tracing::debug!("Loaded settings from {:?}", path);
+        Ok(settings)
     }
 
     /// Save settings to the configuration file
@@ -319,9 +309,14 @@ pub enum SettingsError {
     #[error("Failed to serialize settings: {0}")]
     Serialize(toml::ser::Error),
 
-    /// Failed to deserialize settings
-    #[error("Failed to parse settings: {0}")]
-    Deserialize(toml::de::Error),
+    /// The config file is not valid settings
+    #[error("Failed to parse config file {path}: {}", .source.to_string().trim_end())]
+    Parse {
+        /// Path of the config file
+        path: PathBuf,
+        /// The underlying error
+        source: toml::de::Error,
+    },
 }
 
 #[cfg(test)]
@@ -393,21 +388,52 @@ mod tests {
         assert!(config_path.exists());
 
         // Load
-        let loaded = Settings::load_from_path(Some(config_path));
+        let loaded = Settings::try_load_from_path(Some(config_path)).unwrap();
         assert_eq!(settings, loaded);
     }
 
     #[test]
-    fn test_load_nonexistent_file() {
-        let settings =
-            Settings::load_from_path(Some(PathBuf::from("/nonexistent/engraver_config.toml")));
-        assert_eq!(settings, Settings::default());
+    fn test_try_load_missing_file_is_the_defaults() {
+        let path = PathBuf::from("/nonexistent/engraver_config.toml");
+        assert_eq!(
+            Settings::try_load_from_path(Some(path)).unwrap(),
+            Settings::default()
+        );
+        assert_eq!(
+            Settings::try_load_from_path(None).unwrap(),
+            Settings::default()
+        );
     }
 
     #[test]
-    fn test_load_no_path() {
-        let settings = Settings::load_from_path(None);
-        assert_eq!(settings, Settings::default());
+    fn test_try_load_reports_a_file_that_does_not_parse() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("engraver_config.toml");
+        std::fs::write(&config_path, "[write]\nblock_size = 32\n").unwrap();
+
+        let err = Settings::try_load_from_path(Some(config_path.clone())).unwrap_err();
+
+        assert!(matches!(err, SettingsError::Parse { .. }));
+        let message = err.to_string();
+        assert!(
+            message.starts_with(&format!(
+                "Failed to parse config file {}",
+                config_path.display()
+            )),
+            "got {message:?}"
+        );
+        assert!(message.contains("block_size"), "got {message:?}");
+        assert!(!message.ends_with('\n'), "got {message:?}");
+    }
+
+    #[test]
+    fn test_try_load_reports_a_file_that_cannot_be_read() {
+        let dir_as_config_file = TempDir::new().unwrap();
+
+        let err = Settings::try_load_from_path(Some(dir_as_config_file.path().to_path_buf()))
+            .unwrap_err();
+
+        assert!(matches!(err, SettingsError::Io { .. }));
     }
 
     #[test]
@@ -422,7 +448,7 @@ verify = true
 "#;
         std::fs::write(&config_path, partial_config).unwrap();
 
-        let settings = Settings::load_from_path(Some(config_path));
+        let settings = Settings::try_load_from_path(Some(config_path)).unwrap();
 
         // Specified value should be set
         assert!(settings.write.verify);
@@ -471,19 +497,6 @@ verify = true
     fn test_config_exists_runs() {
         // Just verify it doesn't panic - actual result depends on environment
         let _ = Settings::config_exists();
-    }
-
-    #[test]
-    fn test_load_invalid_toml() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("engraver_config.toml");
-
-        // Write invalid TOML
-        std::fs::write(&config_path, "this is not valid toml {{{{").unwrap();
-
-        // Should return defaults when parsing fails
-        let settings = Settings::load_from_path(Some(config_path));
-        assert_eq!(settings, Settings::default());
     }
 
     #[test]
@@ -561,7 +574,7 @@ validation_timeout_secs = 15
 "#;
         std::fs::write(&config_path, config).unwrap();
 
-        let settings = Settings::load_from_path(Some(config_path));
+        let settings = Settings::try_load_from_path(Some(config_path)).unwrap();
         assert_eq!(settings.network.http_timeout_secs, 60);
         assert_eq!(settings.network.validation_timeout_secs, 15);
     }
@@ -578,7 +591,7 @@ http_timeout_secs = 120
 "#;
         std::fs::write(&config_path, config).unwrap();
 
-        let settings = Settings::load_from_path(Some(config_path));
+        let settings = Settings::try_load_from_path(Some(config_path)).unwrap();
         assert_eq!(settings.network.http_timeout_secs, 120);
         // validation_timeout_secs should use default
         assert_eq!(settings.network.validation_timeout_secs, 10);
@@ -607,7 +620,7 @@ read_buffer_size = "128K"
 "#;
         std::fs::write(&config_path, config).unwrap();
 
-        let settings = Settings::load_from_path(Some(config_path));
+        let settings = Settings::try_load_from_path(Some(config_path)).unwrap();
         assert_eq!(settings.write.retry_attempts, 5);
         assert_eq!(settings.write.retry_delay_ms, 250);
         assert_eq!(settings.write.read_buffer_size, "128K");
@@ -627,7 +640,7 @@ cloud_chunk_size = "8M"
 "#;
         std::fs::write(&config_path, config).unwrap();
 
-        let settings = Settings::load_from_path(Some(config_path));
+        let settings = Settings::try_load_from_path(Some(config_path)).unwrap();
         assert_eq!(settings.network.cloud_chunk_size, "8M");
         // Other values should use defaults
         assert_eq!(settings.network.http_timeout_secs, 30);

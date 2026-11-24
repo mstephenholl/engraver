@@ -1314,6 +1314,81 @@ fn test_config_path_silent_mode() {
         .stdout(predicate::str::is_empty());
 }
 
+#[test]
+fn test_config_path_json_prints_the_path_as_json() {
+    let (_temp_dir, config_file) = setup_config_test();
+    let config_path = config_file.to_str().unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_path, "config", "--path", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout_as_json(&output),
+        serde_json::json!({ "path": config_path })
+    );
+    assert!(!config_file.exists(), "--path must not create the file");
+}
+
+#[test]
+fn test_config_path_json_names_the_default_path_without_config_file() {
+    let output = engraver()
+        .args(["config", "--path", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let path = stdout_as_json(&output)["path"]
+        .as_str()
+        .expect("path should be a string")
+        .to_owned();
+    assert!(path.ends_with("engraver_config.toml"), "got {path:?}");
+}
+
+#[test]
+fn test_config_init_json_reports_the_created_file() {
+    let (_temp_dir, config_file) = setup_config_test();
+    let config_path = config_file.to_str().unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_path, "config", "--init", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout_as_json(&output),
+        serde_json::json!({ "path": config_path, "created": true })
+    );
+    assert!(fs::read_to_string(&config_file)
+        .unwrap()
+        .contains("[write]"));
+}
+
+#[test]
+fn test_config_init_json_reports_an_existing_file_left_alone() {
+    let (_temp_dir, config_file) = setup_config_test();
+    let config_path = config_file.to_str().unwrap();
+    fs::write(&config_file, "[write]\nverify = true").unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_path, "config", "--init", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout_as_json(&output),
+        serde_json::json!({ "path": config_path, "created": false })
+    );
+    assert_eq!(
+        fs::read_to_string(&config_file).unwrap(),
+        "[write]\nverify = true"
+    );
+}
+
 // ============================================================================
 // JSON Output Tests
 // ============================================================================
@@ -1355,6 +1430,8 @@ fn test_json_stdout_is_json_when_config_file_is_invalid() {
         ["list", "--json"].as_slice(),
         ["list", "--json", "--all"].as_slice(),
         ["config", "--json"].as_slice(),
+        ["config", "--path", "--json"].as_slice(),
+        ["config", "--init", "--json"].as_slice(),
     ] {
         let output = engraver()
             .args(["--config-file", config_file.to_str().unwrap()])
@@ -1387,6 +1464,133 @@ fn test_logs_go_to_stderr_without_colour_codes_when_piped() {
         !stderr.contains('\u{1b}'),
         "stderr is not a terminal, so it should have no ANSI colour codes, got: {stderr:?}"
     );
+}
+
+const MISTYPED_CONFIG: &str = "[write]\nverify = true\nblock_size = 32\n";
+
+fn assert_reports_unusable_config(
+    output: &std::process::Output,
+    config_path: &std::path::Path,
+    what: &str,
+) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{what} failed: {stderr}");
+    assert_eq!(
+        stderr.matches(config_path.to_str().unwrap()).count(),
+        1,
+        "{what}: stderr should name the config file once, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("Using default settings"),
+        "{what}: stderr should say the defaults are in use, got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "{what}: stderr is not a terminal, so it should have no colour codes, got: {stderr:?}"
+    );
+}
+
+#[test]
+fn test_invalid_config_file_is_reported_on_stderr_by_every_command() {
+    let (temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, MISTYPED_CONFIG).unwrap();
+    let image = temp_dir.path().join("image.bin");
+    fs::write(&image, b"hello").unwrap();
+
+    for command in [
+        vec!["list"],
+        vec!["checksum", image.to_str().unwrap()],
+        vec!["config"],
+        vec!["config", "--json"],
+    ] {
+        let output = engraver()
+            .args(["--config-file", config_file.to_str().unwrap()])
+            .args(&command)
+            .output()
+            .unwrap();
+
+        assert_reports_unusable_config(&output, &config_file, &format!("{command:?}"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.matches("Failed to parse config file").count(),
+            1,
+            "{command:?}: got {stderr:?}"
+        );
+        assert!(
+            stderr.contains("block_size"),
+            "{command:?}: stderr should show what is wrong, got: {stderr:?}"
+        );
+    }
+}
+
+#[test]
+fn test_unreadable_config_file_is_reported_on_stderr() {
+    let dir_as_config_file = TempDir::new().unwrap();
+
+    let output = engraver()
+        .args([
+            "--config-file",
+            dir_as_config_file.path().to_str().unwrap(),
+            "list",
+        ])
+        .output()
+        .unwrap();
+
+    assert_reports_unusable_config(&output, dir_as_config_file.path(), "list");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_invalid_config_at_the_default_path_is_reported_on_stderr() {
+    let home = TempDir::new().unwrap();
+    let engraver_at_home = || {
+        let mut command = engraver();
+        command
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path().join(".config"));
+        command
+    };
+
+    let output = engraver_at_home()
+        .args(["config", "--path"])
+        .output()
+        .unwrap();
+    let config_file = std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+    assert!(config_file.starts_with(home.path()), "got {config_file:?}");
+    fs::create_dir_all(config_file.parent().unwrap()).unwrap();
+    fs::write(&config_file, MISTYPED_CONFIG).unwrap();
+
+    let output = engraver_at_home().arg("list").output().unwrap();
+
+    assert_reports_unusable_config(&output, &config_file, "list");
+}
+
+#[test]
+fn test_invalid_config_warning_stays_off_json_stdout() {
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, MISTYPED_CONFIG).unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_file.to_str().unwrap()])
+        .args(["list", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(stdout_as_json(&output).is_array());
+    assert_reports_unusable_config(&output, &config_file, "list --json");
+}
+
+#[test]
+fn test_quiet_hides_the_invalid_config_warning() {
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, MISTYPED_CONFIG).unwrap();
+
+    engraver()
+        .args(["--config-file", config_file.to_str().unwrap()])
+        .args(["--quiet", "list"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
 }
 
 // ============================================================================

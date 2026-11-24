@@ -300,11 +300,11 @@ fn exit_for(err: &anyhow::Error) -> Exit {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // Load user settings from config file (custom path takes precedence)
-    let settings = if let Some(ref config_path) = cli.config_file {
-        Settings::load_from_path(Some(config_path.clone()))
-    } else {
-        Settings::load()
+    let (settings, settings_error) = match Settings::try_load_from_path(
+        cli.config_file.clone().or_else(Settings::config_path),
+    ) {
+        Ok(settings) => (settings, None),
+        Err(e) => (Settings::default(), Some(e)),
     };
 
     // Initialize logging
@@ -332,6 +332,10 @@ fn run() -> Result<()> {
         .with_target(false)
         .without_time()
         .init();
+
+    if let Some(e) = settings_error {
+        tracing::warn!("{e}\nUsing default settings.");
+    }
 
     // --silent implies --yes (skip confirmations)
     let silent = cli.silent;
@@ -495,6 +499,7 @@ fn run() -> Result<()> {
                 path,
                 json,
                 silent,
+                settings,
                 config_file: cli.config_file,
             })
         }

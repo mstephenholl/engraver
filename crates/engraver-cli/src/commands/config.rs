@@ -15,6 +15,7 @@ pub struct ConfigArgs {
     pub json: bool,
     /// Suppress output (for scripting)
     pub silent: bool,
+    pub settings: Settings,
     /// Custom configuration file path (overrides default)
     pub config_file: Option<PathBuf>,
 }
@@ -26,6 +27,13 @@ pub fn execute(args: ConfigArgs) -> Result<()> {
 
     // Handle --path flag
     if args.path {
+        if args.json {
+            if !args.silent {
+                let path = config_path.as_ref().map(|p| p.display().to_string());
+                print_json(&serde_json::json!({ "path": path }))?;
+            }
+            return Ok(());
+        }
         if let Some(path) = &config_path {
             if !args.silent {
                 println!("{}", path.display());
@@ -38,19 +46,30 @@ pub fn execute(args: ConfigArgs) -> Result<()> {
 
     // Handle --init flag
     if args.init {
-        return init_config(config_path, args.silent);
+        return init_config(config_path, args.json, args.silent);
     }
 
     // Default: show current configuration
-    show_config(config_path, args.json, args.silent)
+    show_config(config_path, &args.settings, args.json, args.silent)
+}
+
+fn print_json(value: &serde_json::Value) -> Result<()> {
+    let json = serde_json::to_string_pretty(value).context("Failed to serialize output to JSON")?;
+    println!("{}", json);
+    Ok(())
 }
 
 /// Initialize a new configuration file with default values
-fn init_config(config_path: Option<PathBuf>, silent: bool) -> Result<()> {
+fn init_config(config_path: Option<PathBuf>, json: bool, silent: bool) -> Result<()> {
     let path = config_path.context("Could not determine configuration directory")?;
 
     if path.exists() {
-        if !silent {
+        if json {
+            if !silent {
+                let path = path.display().to_string();
+                print_json(&serde_json::json!({ "path": path, "created": false }))?;
+            }
+        } else if !silent {
             eprintln!(
                 "{} Configuration file already exists at: {}",
                 style("Warning:").yellow(),
@@ -65,6 +84,14 @@ fn init_config(config_path: Option<PathBuf>, silent: bool) -> Result<()> {
     let saved_path = settings
         .save_to_path(Some(path))
         .context("Failed to save configuration file")?;
+
+    if json {
+        if !silent {
+            let path = saved_path.display().to_string();
+            print_json(&serde_json::json!({ "path": path, "created": true }))?;
+        }
+        return Ok(());
+    }
 
     if !silent {
         println!(
@@ -91,17 +118,21 @@ fn init_config(config_path: Option<PathBuf>, silent: bool) -> Result<()> {
 }
 
 /// Show the current configuration
-fn show_config(config_path: Option<PathBuf>, json: bool, silent: bool) -> Result<()> {
+fn show_config(
+    config_path: Option<PathBuf>,
+    settings: &Settings,
+    json: bool,
+    silent: bool,
+) -> Result<()> {
     if silent {
         return Ok(());
     }
 
     let config_exists = config_path.as_ref().is_some_and(|p| p.exists());
-    let settings = Settings::load_from_path(config_path.clone());
 
     if json {
         // Output as JSON for scripting
-        let json_output = serde_json::to_string_pretty(&settings)
+        let json_output = serde_json::to_string_pretty(settings)
             .context("Failed to serialize settings to JSON")?;
         println!("{}", json_output);
     } else {
@@ -195,6 +226,7 @@ mod tests {
             path: false,
             json: false,
             silent: false,
+            settings: Settings::default(),
             config_file: None,
         };
         assert!(!args.init);
@@ -207,14 +239,14 @@ mod tests {
     #[test]
     fn test_show_config_silent() {
         // Silent mode should not panic and return Ok
-        let result = show_config(None, false, true);
+        let result = show_config(None, &Settings::default(), false, true);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_show_config_json_silent() {
         // Silent mode with JSON should still return Ok
-        let result = show_config(None, true, true);
+        let result = show_config(None, &Settings::default(), true, true);
         assert!(result.is_ok());
     }
 
@@ -225,6 +257,7 @@ mod tests {
             path: true,
             json: false,
             silent: true,
+            settings: Settings::default(),
             config_file: None,
         };
         let result = execute(args);
@@ -238,6 +271,7 @@ mod tests {
             path: false,
             json: false,
             silent: true,
+            settings: Settings::default(),
             config_file: None,
         };
         let result = execute(args);
@@ -254,7 +288,7 @@ mod tests {
         assert!(config_path.exists());
 
         // Load and verify
-        let loaded = Settings::load_from_path(Some(config_path));
+        let loaded = Settings::try_load_from_path(Some(config_path)).unwrap();
         assert_eq!(loaded.write.block_size, "2M");
         assert!(loaded.write.verify);
         assert!(loaded.checksum.auto_detect);
