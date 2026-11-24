@@ -4,14 +4,18 @@ on:
   push:
     tags:
       - 'v*'
+  # The next two events dry-run the workflow: they build and package every
+  # archive under a placeholder tag, and neither creates a release nor publishes.
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'install.sh'
+      - 'scripts/test-install.sh'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g., v0.1.0)'
-        required: true
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-dry-run' }}
 
 jobs:
   build:
@@ -101,20 +105,20 @@ jobs:
       - name: Create archive (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
-          ARCHIVE_NAME="engraver-${{ github.ref_name }}-${{ matrix.target }}"
+          ARCHIVE_NAME="engraver-${TAG}-${{ matrix.target }}"
           mkdir -p "$ARCHIVE_NAME"
           cp target/${{ matrix.target }}/release/engraver "$ARCHIVE_NAME/"
           cp -r completions "$ARCHIVE_NAME/"
           cp -r man "$ARCHIVE_NAME/"
           cp README.md LICENSE "$ARCHIVE_NAME/" 2>/dev/null || true
           tar -czvf "$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
-          echo "ARCHIVE=$ARCHIVE_NAME.tar.gz" >> $GITHUB_ENV
+          echo "ARCHIVE=$ARCHIVE_NAME.tar.gz" >> "$GITHUB_ENV"
 
       - name: Create archive (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $ARCHIVE_NAME = "engraver-${{ github.ref_name }}-${{ matrix.target }}"
+          $ARCHIVE_NAME = "engraver-${env:TAG}-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $ARCHIVE_NAME -Force
           Copy-Item "target/${{ matrix.target }}/release/engraver.exe" "$ARCHIVE_NAME/"
           Copy-Item -Recurse "completions" "$ARCHIVE_NAME/"
@@ -129,14 +133,9 @@ jobs:
           name: engraver-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
 
-  release:
-    name: Create Release
-    needs: build
+  check-crates:
+    name: Check crates.io packaging
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write  # Required for cosign keyless signing via OIDC
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -144,44 +143,74 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Download all artifacts
+      - name: Package every publishable crate
+        run: cargo publish --workspace --dry-run
+
+  package:
+    name: Package release files
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download archives
         uses: actions/download-artifact@v8
         with:
-          path: artifacts
+          pattern: engraver-*
+          merge-multiple: true
+          path: dist
 
       - name: Generate SBOM
         run: |
-          cargo install cargo-sbom --locked
-          cargo sbom --output-format cyclonedx-json > artifacts/engraver-sbom.cdx.json
+          cargo install cargo-sbom --locked --version 0.10.0
+          cargo sbom --output-format cyclone_dx_json_1_6 > dist/engraver-sbom.cdx.json
 
       - name: Create checksums
+        working-directory: dist
         run: |
-          cd artifacts
-          find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.cdx.json" | while read f; do
-            sha256sum "$f" >> checksums.txt
-          done
+          sha256sum -- *.tar.gz *.zip *.cdx.json > checksums.txt
           cat checksums.txt
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: dist/
+
+  release:
+    name: Create Release
+    needs: [package, check-crates]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write  # Required for cosign keyless signing via OIDC
+
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Sign release artifacts
+      - name: Sign release files
         run: |
-          cd artifacts
-          for f in $(find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.cdx.json"); do
+          # The glob expands before the loop, so the bundles are not signed in turn.
+          for f in dist/*; do
             cosign sign-blob --yes "$f" --bundle "${f}.bundle"
           done
-          cosign sign-blob --yes checksums.txt --bundle checksums.txt.bundle
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
-            artifacts/**/*.cdx.json
-            artifacts/**/*.bundle
-            artifacts/checksums.txt
+          files: dist/*
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
