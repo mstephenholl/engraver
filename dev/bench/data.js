@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795483295027,
+  "lastUpdate": 1795534076295,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -1725,6 +1725,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "block_size/SHA-256/1MB",
             "value": 103.9,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "93ef3b2f0adafc1786b771ea73cce6073efa27b6",
+          "message": "fix(platform): read through an aligned buffer under Windows direct I/O (#68)\n\n* test(platform): show direct I/O reads and writes losing their place\n\nUnder direct I/O, a device sends a buffer of unaligned address or\nlength through an aligned bounce buffer. On Linux it reads or writes\nthe padded length, which moves the file position past the bytes it\nreports. A read of 1000 bytes moves 4096 bytes on, so the next read\nskips 3096 bytes. A write of 1000 bytes leaves the next write 3096\nbytes further on, past a gap of zeros.\n\nOn Windows the device hands the caller's buffer straight to ReadFile,\nand FILE_FLAG_NO_BUFFERING refuses a buffer whose address or length is\nnot sector-aligned.\n\nThese tests read a file opened with direct I/O in 1000-byte chunks\nand into misaligned slices of unaligned lengths, and compare the\nbytes with the file. On Linux, a third test writes twice with\nunaligned lengths and checks that the second write either fails or\nlands right after the first.\n\n* fix(platform): keep the Linux direct I/O position after the bytes moved\n\nUnder O_DIRECT, a buffer of unaligned address or length goes through\nan aligned bounce buffer, and the kernel reads or writes the padded\nlength. The device reported the unpadded count but left the file\nposition after the padding. A read of 1000 bytes left the next read\n3096 bytes too far on, so it returned the wrong bytes. A write of 1000\nbytes left the next write 3096 bytes on, past a gap of zeros.\n\nA bounced read now reads the aligned blocks that cover the request at\nan explicit offset, copies out the bytes asked for, and sets the\nposition just past them. Because the position can now sit inside a\nblock, a read also checks it, and bounces when it is not aligned.\n\nA bounced write still pads to a whole block, then steps the position\nback over the padding. No caller writes an unaligned length except as\nits last write, and the Writer, erase and benchmark all end that way.\nA write that follows one now starts mid-block, where the kernel\nrefuses it with EINVAL instead of leaving a gap.\n\nread_at and write_at now go through Read and Write, so there is one\nbounce path for each.\n\n* fix(platform): read through an aligned buffer under Windows direct I/O\n\nWith direct I/O, a Windows device opens with FILE_FLAG_NO_BUFFERING.\nReadFile on such a handle needs a whole number of sectors at a\nsector-aligned file offset, into a sector-aligned buffer on disks that\nenforce it, and the handle's own file pointer only moves to\nsector-aligned positions. Read passed the caller's buffer straight to\nReadFile. The Verifier reads into a plain Vec, and asks for a short\nlast read when the image ends mid-block. Windows refused those reads,\nand any seek to a position inside a sector, with\nERROR_INVALID_PARAMETER.\n\nWindowsDevice now keeps its own position. Every ReadFile and WriteFile\nnames its offset through OVERLAPPED, and Seek only computes the new\nposition, from the device size for SeekFrom::End. A read that is not\naligned reads the sector-aligned blocks that cover it into an aligned\nbuffer and copies out the bytes asked for, as on Linux. AlignedBuffer\nmoves from linux.rs to a module both platforms share. Its read_through\ntest runs on Linux against a fake device that refuses unaligned\nrequests, so it also covers the arithmetic Windows relies on.\n\nWindows writes still pass the caller's buffer, so a direct I/O write\nstill needs whole sectors. The direct I/O test file no longer imports\nWrite outside the Linux-only test that uses it, which left an unused\nimport on Windows.",
+          "timestamp": "2026-11-24T10:21:47-05:00",
+          "tree_id": "ee30159f9e58e182018b9ca8ee20fd31ea32adf3",
+          "url": "https://github.com/mstephenholl/engraver/commit/93ef3b2f0adafc1786b771ea73cce6073efa27b6"
+        },
+        "date": 1795534075629,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 1192.12,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 59037.83,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 52454.05,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 18397.78,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 104.42,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 57529.71,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 18837.47,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1640.09,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 36.11,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 53550.2,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 8101.25,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 579.41,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 42.9,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 54184.62,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 9477.69,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 679.72,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 124.04,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 14777.73,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1752.47,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 97.6,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 104.64,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 105.4,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 107.03,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 104.13,
             "unit": "iter/sec"
           }
         ]
