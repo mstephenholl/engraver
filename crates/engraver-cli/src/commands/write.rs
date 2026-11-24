@@ -158,6 +158,7 @@ enum Capacity {
     Fits,
     /// The image, of this many bytes, is larger than the drive
     TooLarge(u64),
+    AtLeastTooLarge(u64),
     /// The compressed file alone, of this many bytes, is larger than the drive
     CompressedTooLarge(u64),
     /// The image length is not known, so it cannot be told
@@ -165,17 +166,19 @@ enum Capacity {
 }
 
 /// Judge whether the source's image fits on a drive of `drive_size` bytes
-///
-/// A source with no image length is `Unknown`, unless its compressed file
-/// alone is larger than the drive.
 fn capacity(source_info: &engraver_core::SourceInfo, drive_size: u64) -> Capacity {
-    match (source_info.size, source_info.compressed_size) {
-        (Some(size), _) if size > drive_size => Capacity::TooLarge(size),
-        (Some(_), _) => Capacity::Fits,
-        (None, Some(compressed)) if compressed > drive_size => {
+    match (
+        source_info.size,
+        source_info.min_size,
+        source_info.compressed_size,
+    ) {
+        (Some(size), _, _) if size > drive_size => Capacity::TooLarge(size),
+        (Some(_), _, _) => Capacity::Fits,
+        (None, Some(min), _) if min > drive_size => Capacity::AtLeastTooLarge(min),
+        (None, _, Some(compressed)) if compressed > drive_size => {
             Capacity::CompressedTooLarge(compressed)
         }
-        (None, _) => Capacity::Unknown,
+        (None, _, _) => Capacity::Unknown,
     }
 }
 
@@ -238,6 +241,11 @@ fn validate_target_device<'a>(
         Capacity::TooLarge(size) => bail!(
             "Source ({}) is larger than target ({})",
             format_size(size),
+            format_size(target_drive.size)
+        ),
+        Capacity::AtLeastTooLarge(min) => bail!(
+            "Image is at least {} once decompressed, larger than target ({})",
+            format_size(min),
             format_size(target_drive.size)
         ),
         Capacity::CompressedTooLarge(compressed) => bail!(
@@ -2084,6 +2092,94 @@ mod tests {
             .expect_err("an 8 GiB image does not fit on a 4 GiB drive");
 
         assert!(err.to_string().contains("larger than target"), "{err}");
+    }
+
+    const DRIVE: u64 = 4 * MIB;
+
+    fn image_larger_than_the_drive() -> Vec<u8> {
+        (0..2 * DRIVE).map(|i| (i % 251) as u8).collect()
+    }
+
+    fn gzip(image: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(image).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn xz(image: &[u8]) -> Vec<u8> {
+        let mut encoder = xz2::write::XzEncoder::new(Vec::new(), 1);
+        encoder.write_all(image).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn zstd_with_content_size(image: &[u8]) -> Vec<u8> {
+        zstd::bulk::compress(image, 1).unwrap()
+    }
+
+    fn validate_against_a_small_drive(ext: &str, compressed: &[u8]) -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(format!("image.img.{ext}"));
+        std::fs::write(&path, compressed).unwrap();
+        let source = validate_source_info(path.to_str().unwrap(), true).unwrap();
+
+        let drives = vec![removable_drive(DRIVE)];
+        validate_target_device("/dev/sdz", &drives, false, true, &source, true).map(|_| ())
+    }
+
+    #[test]
+    fn test_validate_target_device_refuses_a_gzip_image_larger_than_the_drive() {
+        let compressed = gzip(&image_larger_than_the_drive());
+        assert!(compressed.len() < MIB as usize);
+
+        let err = validate_against_a_small_drive("gz", &compressed)
+            .expect_err("an 8 MiB image does not fit on a 4 MiB drive");
+
+        assert_eq!(
+            err.to_string(),
+            "Image is at least 8.00 MB once decompressed, larger than target (4.00 MB)"
+        );
+    }
+
+    #[test]
+    fn test_validate_target_device_refuses_an_xz_image_larger_than_the_drive() {
+        let compressed = xz(&image_larger_than_the_drive());
+        assert!(compressed.len() < MIB as usize);
+
+        let err = validate_against_a_small_drive("xz", &compressed)
+            .expect_err("an 8 MiB image does not fit on a 4 MiB drive");
+
+        assert_eq!(
+            err.to_string(),
+            "Source (8.00 MB) is larger than target (4.00 MB)"
+        );
+    }
+
+    #[test]
+    fn test_validate_target_device_refuses_a_zstd_image_larger_than_the_drive() {
+        let compressed = zstd_with_content_size(&image_larger_than_the_drive());
+        assert!(compressed.len() < MIB as usize);
+
+        let err = validate_against_a_small_drive("zst", &compressed)
+            .expect_err("an 8 MiB image does not fit on a 4 MiB drive");
+
+        assert_eq!(
+            err.to_string(),
+            "Image is at least 8.00 MB once decompressed, larger than target (4.00 MB)"
+        );
+    }
+
+    #[test]
+    fn test_validate_target_device_accepts_compressed_images_that_fit() {
+        let image: Vec<u8> = (0..2 * MIB).map(|i| (i % 251) as u8).collect();
+
+        for (ext, compressed) in [
+            ("gz", gzip(&image)),
+            ("xz", xz(&image)),
+            ("zst", zstd_with_content_size(&image)),
+        ] {
+            validate_against_a_small_drive(ext, &compressed)
+                .unwrap_or_else(|e| panic!(".{ext}: a 2 MiB image fits on a 4 MiB drive: {e}"));
+        }
     }
 
     // -------------------------------------------------------------------------

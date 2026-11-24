@@ -12,7 +12,7 @@ categories = ["command-line-utilities", "filesystem"]
 
 [features]
 default = ["compression", "remote", "checksum", "partition-info"]
-compression = ["flate2", "xz2", "zstd", "bzip2"]
+compression = ["flate2", "xz2", "zstd", "bzip2", "crc32fast"]
 partition-info = ["bootsector"]
 remote = ["reqwest", "dep:rustls", "dep:webpki-roots", "url"]
 checksum = ["sha2", "md-5", "crc32fast"]
