@@ -381,11 +381,11 @@ impl Writer {
     /// will fan out — replacing the older pattern of spawning a polling
     /// thread to bridge a separately-named "running" atomic.
     ///
-    /// Note: `write_internal` resets the flag to `false` at the start of
-    /// each call. If the externally provided flag was already `true`
-    /// when the write begins, that prior cancellation is cleared. Set
-    /// the flag *after* calling into the writer, or before any prior
-    /// write reset it.
+    /// The caller owns the flag; the writer only reads it and never
+    /// clears it. If the flag is already `true` when a write starts,
+    /// the write returns [`Error::Cancelled`] before it modifies the
+    /// target. A caller that reuses a writer after a cancel must
+    /// `store(false)` into the flag itself.
     pub fn with_cancel_flag(mut self, flag: Arc<AtomicBool>) -> Self {
         self.cancel_flag = flag;
         self
@@ -563,9 +563,6 @@ impl Writer {
     {
         use sha2::Digest;
 
-        // Reset cancel flag
-        self.cancel_flag.store(false, Ordering::SeqCst);
-
         let start_time = Instant::now();
         let block_size = self.config.block_size;
 
@@ -682,9 +679,6 @@ impl Writer {
         R: Read,
         W: Write + Seek,
     {
-        // Reset cancel flag
-        self.cancel_flag.store(false, Ordering::SeqCst);
-
         let start_time = Instant::now();
         let block_size = self.config.block_size;
 

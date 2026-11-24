@@ -384,7 +384,7 @@ fn run() -> Result<()> {
         Commands::Checksum { source, algorithm } => {
             let effective_algorithm =
                 algorithm.unwrap_or_else(|| settings.checksum.algorithm.clone());
-            commands::checksum::execute(&source, &effective_algorithm, silent)
+            commands::checksum::execute(&source, &effective_algorithm, cancel, silent)
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();

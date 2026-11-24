@@ -385,9 +385,11 @@ fn setup_checksum(args: &WriteArgs, source_size: Option<u64>, ctx: &WriteContext
 
         let config = VerifyConfig::new().block_size(ctx.block_size);
         let pb_clone = pb.clone();
-        let mut verifier = Verifier::with_config(config).on_progress(move |p| {
-            pb_clone.set_position(p.bytes_processed);
-        });
+        let mut verifier = Verifier::with_config(config)
+            .with_cancel_flag(Arc::clone(&args.cancel_flag))
+            .on_progress(move |p| {
+                pb_clone.set_position(p.bytes_processed);
+            });
 
         let result = verifier.verify_checksum(
             &mut source_for_checksum,
@@ -405,6 +407,9 @@ fn setup_checksum(args: &WriteArgs, source_size: Option<u64>, ctx: &WriteContext
                 style("✓").green(),
                 algo.name()
             ),
+            Err(engraver_core::Error::Cancelled) => {
+                bail!("Cancelled before writing. The target was not modified.")
+            }
             Err(e) => bail!("Checksum verification failed: {}", e),
         }
     }
@@ -875,21 +880,23 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
             let verify_block_size = block_size;
-            let mut verifier = Verifier::with_config(config).on_progress(move |p| {
-                pb_clone.set_position(p.bytes_processed);
-                let blocks = p.bytes_processed.div_ceil(verify_block_size as u64);
-                let total = p
-                    .total_bytes
-                    .map(|t| t.div_ceil(verify_block_size as u64))
-                    .unwrap_or(0);
-                pb_clone.set_message(format!(
-                    "{}/s | Block {}/{} | ETA: {}",
-                    p.speed_display(),
-                    blocks,
-                    total,
-                    p.eta_display()
-                ));
-            });
+            let mut verifier = Verifier::with_config(config)
+                .with_cancel_flag(args.cancel_flag.clone())
+                .on_progress(move |p| {
+                    pb_clone.set_position(p.bytes_processed);
+                    let blocks = p.bytes_processed.div_ceil(verify_block_size as u64);
+                    let total = p
+                        .total_bytes
+                        .map(|t| t.div_ceil(verify_block_size as u64))
+                        .unwrap_or(0);
+                    pb_clone.set_message(format!(
+                        "{}/s | Block {}/{} | ETA: {}",
+                        p.speed_display(),
+                        blocks,
+                        total,
+                        p.eta_display()
+                    ));
+                });
 
             let verify_result = verifier.compare(&mut source_file, &mut *target, total_size);
 
@@ -949,18 +956,20 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             let pb_clone = pb.clone();
             let checksum_block_size = block_size;
             let checksum_total = total_size;
-            let mut verifier = Verifier::with_config(config).on_progress(move |p| {
-                pb_clone.set_position(p.bytes_processed);
-                let blocks = p.bytes_processed.div_ceil(checksum_block_size as u64);
-                let total_blocks = checksum_total.div_ceil(checksum_block_size as u64);
-                pb_clone.set_message(format!(
-                    "{}/s | Block {}/{} | ETA: {}",
-                    p.speed_display(),
-                    blocks,
-                    total_blocks,
-                    p.eta_display()
-                ));
-            });
+            let mut verifier = Verifier::with_config(config)
+                .with_cancel_flag(args.cancel_flag.clone())
+                .on_progress(move |p| {
+                    pb_clone.set_position(p.bytes_processed);
+                    let blocks = p.bytes_processed.div_ceil(checksum_block_size as u64);
+                    let total_blocks = checksum_total.div_ceil(checksum_block_size as u64);
+                    pb_clone.set_message(format!(
+                        "{}/s | Block {}/{} | ETA: {}",
+                        p.speed_display(),
+                        blocks,
+                        total_blocks,
+                        p.eta_display()
+                    ));
+                });
 
             let written_checksum = verifier
                 .calculate_checksum(&mut *target, ChecksumAlgorithm::Sha256, Some(total_size))
@@ -979,18 +988,20 @@ pub fn execute(args: WriteArgs) -> Result<()> {
             let config = VerifyConfig::new().block_size(block_size);
             let pb_clone = pb.clone();
             let source_block_size = block_size;
-            let mut verifier = Verifier::with_config(config).on_progress(move |p| {
-                pb_clone.set_position(p.bytes_processed);
-                let blocks = p.bytes_processed.div_ceil(source_block_size as u64);
-                let total_blocks = source_total.div_ceil(source_block_size as u64);
-                pb_clone.set_message(format!(
-                    "{}/s | Block {}/{} | ETA: {}",
-                    p.speed_display(),
-                    blocks,
-                    total_blocks,
-                    p.eta_display()
-                ));
-            });
+            let mut verifier = Verifier::with_config(config)
+                .with_cancel_flag(args.cancel_flag.clone())
+                .on_progress(move |p| {
+                    pb_clone.set_position(p.bytes_processed);
+                    let blocks = p.bytes_processed.div_ceil(source_block_size as u64);
+                    let total_blocks = source_total.div_ceil(source_block_size as u64);
+                    pb_clone.set_message(format!(
+                        "{}/s | Block {}/{} | ETA: {}",
+                        p.speed_display(),
+                        blocks,
+                        total_blocks,
+                        p.eta_display()
+                    ));
+                });
 
             let source_checksum = verifier
                 .calculate_checksum(
@@ -2046,5 +2057,85 @@ mod tests {
         assert!(args.checkpoint);
         assert!(args.auto_checksum);
         assert!(args.show_partitions);
+    }
+
+    // -------------------------------------------------------------------------
+    // setup_checksum cancellation tests
+    // -------------------------------------------------------------------------
+
+    const SHA256_OF_64K_OF_0XAB: &str =
+        "7c56cd2bee665a1839e41377e70c4a00e688c2b31e6e25638185b5ad1b1537e1";
+
+    fn checksum_args(expected: &str, cancel: bool) -> (tempfile::NamedTempFile, WriteArgs) {
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&[0xABu8; 64 * 1024]).unwrap();
+        let args = WriteArgs {
+            source: source.path().to_str().unwrap().to_string(),
+            target: "/dev/null".to_string(),
+            verify: false,
+            skip_confirm: true,
+            block_size: "4K".to_string(),
+            checksum: Some(expected.to_string()),
+            checksum_algo: "sha256".to_string(),
+            force: false,
+            no_unmount: true,
+            cancel_flag: Arc::new(AtomicBool::new(cancel)),
+            silent: true,
+            resume: false,
+            checkpoint: false,
+            auto_checksum: false,
+            show_partitions: false,
+        };
+        (source, args)
+    }
+
+    fn silent_ctx() -> WriteContext {
+        WriteContext {
+            silent: true,
+            block_size: 4096,
+        }
+    }
+
+    #[test]
+    fn test_setup_checksum_with_pending_cancel_reports_cancelled() {
+        let (_source, args) = checksum_args(SHA256_OF_64K_OF_0XAB, true);
+
+        let err = setup_checksum(&args, Some(64 * 1024), &silent_ctx())
+            .expect_err("a pending cancel must stop the checksum step");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("Cancelled before writing"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            !message.contains("Checksum verification failed"),
+            "a cancel is not a checksum failure: {message}"
+        );
+        assert!(
+            args.cancel_flag.load(Ordering::SeqCst),
+            "the cancel must stay set so the write that follows also stops"
+        );
+    }
+
+    #[test]
+    fn test_setup_checksum_still_reports_a_real_mismatch() {
+        let (_source, args) = checksum_args(&"00".repeat(32), false);
+
+        let err = setup_checksum(&args, Some(64 * 1024), &silent_ctx())
+            .expect_err("a wrong checksum must fail");
+
+        assert!(
+            err.to_string().contains("Checksum verification failed"),
+            "unexpected message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_setup_checksum_passes_for_matching_checksum() {
+        let (_source, args) = checksum_args(SHA256_OF_64K_OF_0XAB, false);
+
+        setup_checksum(&args, Some(64 * 1024), &silent_ctx())
+            .expect("a matching checksum must pass");
     }
 }

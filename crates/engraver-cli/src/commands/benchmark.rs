@@ -535,7 +535,7 @@ where
             pb
         };
 
-        let runner = BenchmarkRunner::new(test_config);
+        let runner = BenchmarkRunner::new(test_config).with_cancel_flag(Arc::clone(&cancel_flag));
 
         let pb_clone = pb.clone();
         let result = runner.run(

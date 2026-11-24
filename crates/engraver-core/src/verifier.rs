@@ -443,6 +443,12 @@ impl Verifier {
     /// Adopt an externally provided cancel flag in place of the default
     /// internal one. See `Writer::with_cancel_flag` for the rationale.
     /// Convention: `true = cancel`.
+    ///
+    /// The caller owns the flag; the verifier only reads it and never
+    /// clears it. If the flag is already `true` when `compare` (with a
+    /// nonzero `size`) or `calculate_checksum` starts, the call returns
+    /// [`Error::Cancelled`] before reading any data. A caller that reuses a
+    /// verifier after a cancel must `store(false)` into the flag itself.
     pub fn with_cancel_flag(mut self, flag: Arc<AtomicBool>) -> Self {
         self.cancel_flag = flag;
         self
@@ -458,7 +464,6 @@ impl Verifier {
     ) -> Result<Checksum> {
         use sha2::Digest;
 
-        self.cancel_flag.store(false, Ordering::SeqCst);
         let start = Instant::now();
         let mut bytes_processed = 0u64;
         let mut buffer = vec![0u8; self.config.block_size];
@@ -576,7 +581,6 @@ impl Verifier {
         R: Read + Seek + ?Sized,
         T: Read + Seek + ?Sized,
     {
-        self.cancel_flag.store(false, Ordering::SeqCst);
         let start = Instant::now();
 
         // Seek both to start

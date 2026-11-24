@@ -164,9 +164,11 @@ pub fn execute(
 
         let config = VerifyConfig::new().block_size(block_size);
         let pb_clone = pb.clone();
-        let mut verifier = Verifier::with_config(config).on_progress(move |p| {
-            pb_clone.set_position(p.bytes_processed);
-        });
+        let mut verifier = Verifier::with_config(config)
+            .with_cancel_flag(cancel_flag.clone())
+            .on_progress(move |p| {
+                pb_clone.set_position(p.bytes_processed);
+            });
 
         let target_checksum = verifier
             .calculate_checksum(
@@ -201,9 +203,11 @@ pub fn execute(
 
         let config = VerifyConfig::new().block_size(block_size);
         let pb_clone = pb.clone();
-        let mut verifier = Verifier::with_config(config).on_progress(move |p| {
-            pb_clone.set_position(p.bytes_processed);
-        });
+        let mut verifier = Verifier::with_config(config)
+            .with_cancel_flag(cancel_flag)
+            .on_progress(move |p| {
+                pb_clone.set_position(p.bytes_processed);
+            });
 
         let source_checksum = verifier
             .calculate_checksum(&mut source_reader, ChecksumAlgorithm::Sha256, source_size)
