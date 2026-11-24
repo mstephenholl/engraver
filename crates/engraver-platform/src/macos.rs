@@ -236,9 +236,12 @@ fn get_device_size(file: &File, path: &str) -> Result<u64> {
         tracing::debug!("DKIOCGETBLOCKCOUNT/SIZE ioctl failed for {path}, falling back to seek");
     }
 
-    // Fallback: seek to end
-    let _current = file.try_clone()?.stream_position()?;
-    let size = file.try_clone()?.seek(SeekFrom::End(0))?;
+    // Fallback: seek to end. The clone shares this handle's offset, so put
+    // it back, or every later read starts at the end.
+    let mut clone = file.try_clone()?;
+    let current = clone.stream_position()?;
+    let size = clone.seek(SeekFrom::End(0))?;
+    clone.seek(SeekFrom::Start(current))?;
 
     if size == 0 {
         Err(PlatformError::Io(std::io::Error::other(format!(

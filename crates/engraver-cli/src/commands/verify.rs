@@ -6,13 +6,11 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use engraver_core::{
-    validate_source, ChecksumAlgorithm, Source, SourceType, Verifier, VerifyConfig,
-};
+use engraver_core::{validate_source, SourceType, Verifier, VerifyConfig};
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, OpenOptions};
 
-use super::{cancelled, context_or_cancelled};
+use super::{cancelled, checksum_image_and_target, describe_source_size};
 
 /// Execute the verify command
 pub fn execute(
@@ -25,8 +23,9 @@ pub fn execute(
     // Parse block size
     let block_size = engraver_core::parse_block_size(block_size_str)? as usize;
 
-    // Check for elevated privileges (needed for raw device access)
-    if !has_elevated_privileges() {
+    // Check for elevated privileges (needed for raw device access). A regular
+    // file is no device, and reading one needs no privileges.
+    if !has_elevated_privileges() && !is_regular_file(target) {
         #[cfg(unix)]
         bail!(
             "Root privileges required.\n\
@@ -54,13 +53,11 @@ pub fn execute(
     let source_info = validate_source(source)
         .with_context(|| format!("Failed to validate source: {}", source))?;
 
-    let source_size = source_info.size.or(source_info.compressed_size);
     let source_is_local = source_info.source_type == SourceType::LocalFile;
 
-    if let Some(size) = source_size {
-        println_if!(silent, "  {} ({})", style("✓").green(), format_size(size));
-    } else {
-        println_if!(silent, "  {} (size unknown)", style("✓").green());
+    match describe_source_size(&source_info, format_size) {
+        Some(size) => println_if!(silent, "  {} ({})", style("✓").green(), size),
+        None => println_if!(silent, "  {} (size unknown)", style("✓").green()),
     }
 
     // Validate target
@@ -95,11 +92,11 @@ pub fn execute(
     let mut target_reader = open_device(&device_path, options)
         .with_context(|| format!("Failed to open device: {}", device_path))?;
 
-    let total_size = source_size.unwrap_or(0);
-
     println_if!(silent, "\n{}", style("Verifying...").bold());
 
     if source_is_local {
+        let total_size = source_info.size.unwrap_or(0);
+
         // Direct byte-by-byte comparison for local files
         let mut source_file = std::fs::File::open(source)
             .with_context(|| format!("Failed to open source: {}", source))?;
@@ -149,77 +146,14 @@ pub fn execute(
             style("ℹ").blue()
         );
 
-        // Calculate checksum of target
-        let pb = if silent {
-            ProgressBar::hidden()
-        } else {
-            ProgressBar::new(total_size)
-        };
-        if !silent {
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template("  {spinner:.green} Checksumming target [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
-                    .unwrap()
-                    .progress_chars("█▓░"),
-            );
-        }
-
-        let config = VerifyConfig::new().block_size(block_size);
-        let pb_clone = pb.clone();
-        let mut verifier = Verifier::with_config(config)
-            .with_cancel_flag(cancel_flag.clone())
-            .on_progress(move |p| {
-                pb_clone.set_position(p.bytes_processed);
-            });
-
-        let target_checksum = verifier
-            .calculate_checksum(
-                &mut *target_reader,
-                ChecksumAlgorithm::Sha256,
-                Some(total_size),
-            )
-            .map_err(|e| {
-                context_or_cancelled(e, "Failed to checksum target", "Verification cancelled.")
-            })?;
-
-        pb.finish_and_clear();
-
-        // Calculate checksum of source
-        println_if!(silent, "  Calculating source checksum...");
-        let mut source_reader =
-            Source::open(source).with_context(|| format!("Failed to open source: {}", source))?;
-
-        let pb = if silent {
-            ProgressBar::hidden()
-        } else if let Some(size) = source_size {
-            ProgressBar::new(size)
-        } else {
-            ProgressBar::new_spinner()
-        };
-        if !silent {
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template("  {spinner:.green} Checksumming source [{bar:40.cyan/blue}] {bytes}/{total_bytes}")
-                    .unwrap()
-                    .progress_chars("█▓░"),
-            );
-        }
-
-        let config = VerifyConfig::new().block_size(block_size);
-        let pb_clone = pb.clone();
-        let mut verifier = Verifier::with_config(config)
-            .with_cancel_flag(cancel_flag)
-            .on_progress(move |p| {
-                pb_clone.set_position(p.bytes_processed);
-            });
-
-        let source_checksum = verifier
-            .calculate_checksum(&mut source_reader, ChecksumAlgorithm::Sha256, source_size)
-            .map_err(|e| {
-                context_or_cancelled(e, "Failed to checksum source", "Verification cancelled.")
-            })?;
-
-        pb.finish_and_clear();
+        let (source_checksum, target_checksum) = checksum_image_and_target(
+            source,
+            &mut *target_reader,
+            source_info.size,
+            block_size,
+            &cancel_flag,
+            silent,
+        )?;
 
         if target_checksum.matches(&source_checksum) {
             println_if!(
@@ -276,6 +210,10 @@ fn handle_verify_result(
             bail!("Verification error: {}", e);
         }
     }
+}
+
+fn is_regular_file(path: &str) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
 }
 
 /// Get the raw device path for a given device path
@@ -375,6 +313,29 @@ mod tests {
         // Non-standard paths should pass through unchanged
         assert_eq!(get_raw_device_path("/tmp/image.img"), "/tmp/image.img");
         assert_eq!(get_raw_device_path("./local/file"), "./local/file");
+    }
+
+    // -------------------------------------------------------------------------
+    // is_regular_file tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_is_regular_file_accepts_a_file_and_rejects_a_directory_and_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("target.bin");
+        std::fs::write(&file, b"x").unwrap();
+
+        assert!(is_regular_file(file.to_str().unwrap()));
+        assert!(!is_regular_file(dir.path().to_str().unwrap()));
+        assert!(!is_regular_file(
+            dir.path().join("missing").to_str().unwrap()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_regular_file_rejects_a_device_node() {
+        assert!(!is_regular_file("/dev/null"));
     }
 
     // -------------------------------------------------------------------------

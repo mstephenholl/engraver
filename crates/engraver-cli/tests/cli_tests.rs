@@ -579,6 +579,127 @@ fn test_verify_missing_target() {
 }
 
 // ============================================================================
+// Verify Against A Larger Target
+// ============================================================================
+//
+// Each target is a regular file holding the image and then other data; `verify`
+// skips its root check for a regular file.
+
+const TRAILING_BYTES: usize = 1024 * 1024;
+
+/// An image whose length is not a multiple of any block size `verify` accepts
+fn verify_test_image() -> Vec<u8> {
+    (0..1024 * 1024 + 4321)
+        .map(|i: usize| (i * 31 % 251) as u8)
+        .collect()
+}
+
+fn write_gzip(dir: &TempDir, name: &str, image: &[u8]) -> std::path::PathBuf {
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write;
+
+    let path = dir.path().join(name);
+    let mut encoder = GzEncoder::new(fs::File::create(&path).unwrap(), Compression::default());
+    encoder.write_all(image).unwrap();
+    encoder.finish().unwrap();
+    path
+}
+
+fn write_target(dir: &TempDir, contents: &[u8]) -> std::path::PathBuf {
+    let path = dir.path().join("drive.bin");
+    fs::write(&path, contents).unwrap();
+    path
+}
+
+fn image_then_other_data(image: &[u8]) -> Vec<u8> {
+    let mut drive = image.to_vec();
+    drive.extend(std::iter::repeat_n(0xEE, TRAILING_BYTES));
+    drive
+}
+
+#[test]
+fn test_verify_plain_image_passes_when_the_drive_holds_it_followed_by_other_data() {
+    let dir = TempDir::new().unwrap();
+    let image = verify_test_image();
+    let source = dir.path().join("img.raw");
+    fs::write(&source, &image).unwrap();
+    let target = write_target(&dir, &image_then_other_data(&image));
+
+    engraver()
+        .args(["verify", source.to_str().unwrap(), target.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("passed"));
+}
+
+#[test]
+fn test_verify_compressed_image_passes_when_the_drive_holds_it_followed_by_other_data() {
+    let dir = TempDir::new().unwrap();
+    let image = verify_test_image();
+    let source = write_gzip(&dir, "img.img.gz", &image);
+    let target = write_target(&dir, &image_then_other_data(&image));
+
+    for block_size in ["4K", "64K", "4M"] {
+        engraver()
+            .args([
+                "verify",
+                source.to_str().unwrap(),
+                target.to_str().unwrap(),
+                "--block-size",
+                block_size,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("passed"));
+    }
+}
+
+#[test]
+fn test_verify_compressed_image_passes_when_the_drive_holds_exactly_the_image() {
+    let dir = TempDir::new().unwrap();
+    let image = verify_test_image();
+    let source = write_gzip(&dir, "img.img.gz", &image);
+    let target = write_target(&dir, &image);
+
+    engraver()
+        .args(["verify", source.to_str().unwrap(), target.to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_verify_compressed_image_fails_when_a_byte_in_the_image_is_wrong() {
+    let dir = TempDir::new().unwrap();
+    let image = verify_test_image();
+    let source = write_gzip(&dir, "img.img.gz", &image);
+    let mut drive = image_then_other_data(&image);
+    drive[image.len() / 2] ^= 0xFF;
+    let target = write_target(&dir, &drive);
+
+    engraver()
+        .args(["verify", source.to_str().unwrap(), target.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("do not match"));
+}
+
+#[test]
+fn test_verify_compressed_image_fails_when_the_drive_is_shorter_than_the_image() {
+    let dir = TempDir::new().unwrap();
+    let image = verify_test_image();
+    let source = write_gzip(&dir, "img.img.gz", &image);
+    let target = write_target(&dir, &image[..image.len() - 1]);
+
+    engraver()
+        .args(["verify", source.to_str().unwrap(), target.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("shorter"));
+}
+
+// ============================================================================
 // Block Size Validation Tests
 // ============================================================================
 //

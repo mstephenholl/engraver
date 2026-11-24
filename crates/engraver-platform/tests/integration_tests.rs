@@ -4,7 +4,7 @@
 //! Tests that require actual devices are marked with #[ignore].
 
 use engraver_platform::*;
-use std::io::Write;
+use std::io::{Read, Write};
 use tempfile::NamedTempFile;
 
 // ============================================================================
@@ -141,6 +141,20 @@ fn test_open_tempfile_without_direct_io() {
 
     // Should work on regular files without direct I/O
     assert!(result.is_ok(), "Should open tempfile: {:?}", result.err());
+}
+
+#[test]
+fn test_reading_a_freshly_opened_tempfile_starts_at_the_first_byte() {
+    let mut temp = NamedTempFile::new().unwrap();
+    let image: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8).collect();
+    temp.write_all(&image).unwrap();
+
+    let options = OpenOptions::new().direct_io(false);
+    let mut device = open_device(temp.path().to_str().unwrap(), options).unwrap();
+
+    let mut read_back = Vec::new();
+    device.read_to_end(&mut read_back).unwrap();
+    assert_eq!(read_back, image);
 }
 
 #[test]
