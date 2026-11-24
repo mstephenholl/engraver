@@ -2,7 +2,7 @@
 
 Planned features, improvements, and development roadmap for Engraver.
 
-**Last updated**: 2026-11-18
+**Last updated**: 2026-11-24
 
 ---
 
@@ -167,6 +167,15 @@ Planned features, improvements, and development roadmap for Engraver.
   - `cargo deny check advisories` passes clean
   - Known duplicate deps are listed, each with its reason, in `deny.toml`'s `skip`
   - Periodic review should continue as part of CI (cargo-deny runs in CI pipeline)
+
+- [ ] **Replace chrono and humantime, which are unmaintained**
+  - `cargo audit` warns on both: RUSTSEC-2026-0543 (chrono) and RUSTSEC-2026-0542 (humantime)
+  - Neither is a direct dependency. Both come in through `object_store` 0.14.2, so only builds with the `s3`, `gcs` or `azure` feature include them
+  - `cargo deny` doesn't flag them, because `unmaintained = "workspace"` checks direct dependencies only
+  - Engraver calls three things on `object_store`, all in `crates/engraver-core/src/source.rs`: the `from_env()` builders for S3, GCS and Azure, `head`, and `get_range`
+  - Option 1, fix upstream. `object_store` uses humantime only in `src/config.rs`, to parse and print durations, so that change is internal. chrono is part of its public API (`ObjectMeta::last_modified` and the `GetOptions` date fields are `DateTime<Utc>`), so removing it needs a semver-major release
+  - Option 2, copy what engraver needs. Replace `object_store` with a client for those three calls. It must sign requests for each cloud (AWS SigV4, GCS and Azure credentials), produce the timestamps the signatures need, and read credentials from the environment as `from_env()` does
+  - Done when `cargo tree -i chrono --workspace --all-features` and `cargo tree -i humantime --workspace --all-features` find nothing
 
 ---
 
