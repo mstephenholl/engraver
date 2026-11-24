@@ -49,7 +49,7 @@ find . -name "*.bak" -delete
 
 # Verify build
 echo "Verifying build..."
-cargo build --release -p engraver
+cargo build --release -p engraver-cli
 cargo test --release
 
 # Generate changelog entry template

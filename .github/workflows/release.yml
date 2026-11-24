@@ -4,14 +4,18 @@ on:
   push:
     tags:
       - 'v*'
+  # The next two events dry-run the workflow: they build and package every
+  # archive under a placeholder tag, and neither creates a release nor publishes.
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'install.sh'
+      - 'scripts/test-install.sh'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g., v0.1.0)'
-        required: true
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.0.0-dry-run' }}
 
 jobs:
   build:
@@ -31,7 +35,7 @@ jobs:
             archive: tar.gz
           # Linux ARM64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             archive: tar.gz
           # macOS x86_64
           - target: x86_64-apple-darwin
@@ -55,12 +59,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
       - name: Install musl tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
@@ -68,7 +66,7 @@ jobs:
           sudo apt-get install -y musl-tools
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} -p engraver
+        run: cargo build --release --target ${{ matrix.target }} -p engraver-cli
 
       - name: Generate shell completions
         shell: bash
@@ -101,20 +99,20 @@ jobs:
       - name: Create archive (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
-          ARCHIVE_NAME="engraver-${{ github.ref_name }}-${{ matrix.target }}"
+          ARCHIVE_NAME="engraver-${TAG}-${{ matrix.target }}"
           mkdir -p "$ARCHIVE_NAME"
           cp target/${{ matrix.target }}/release/engraver "$ARCHIVE_NAME/"
           cp -r completions "$ARCHIVE_NAME/"
           cp -r man "$ARCHIVE_NAME/"
           cp README.md LICENSE "$ARCHIVE_NAME/" 2>/dev/null || true
           tar -czvf "$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
-          echo "ARCHIVE=$ARCHIVE_NAME.tar.gz" >> $GITHUB_ENV
+          echo "ARCHIVE=$ARCHIVE_NAME.tar.gz" >> "$GITHUB_ENV"
 
       - name: Create archive (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $ARCHIVE_NAME = "engraver-${{ github.ref_name }}-${{ matrix.target }}"
+          $ARCHIVE_NAME = "engraver-${env:TAG}-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $ARCHIVE_NAME -Force
           Copy-Item "target/${{ matrix.target }}/release/engraver.exe" "$ARCHIVE_NAME/"
           Copy-Item -Recurse "completions" "$ARCHIVE_NAME/"
@@ -129,14 +127,9 @@ jobs:
           name: engraver-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
 
-  release:
-    name: Create Release
-    needs: build
+  check-crates:
+    name: Check crates.io packaging
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write  # Required for cosign keyless signing via OIDC
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -144,44 +137,95 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Download all artifacts
+      - name: Package every publishable crate
+        run: cargo publish --workspace --dry-run
+
+  package:
+    name: Package release files
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download archives
         uses: actions/download-artifact@v8
         with:
-          path: artifacts
+          pattern: engraver-*
+          merge-multiple: true
+          path: dist
 
       - name: Generate SBOM
         run: |
-          cargo install cargo-sbom --locked
-          cargo sbom --output-format cyclonedx-json > artifacts/engraver-sbom.cdx.json
+          cargo install cargo-sbom --locked --version 0.10.0
+          cargo sbom --output-format cyclone_dx_json_1_6 > dist/engraver-sbom.cdx.json
 
       - name: Create checksums
+        working-directory: dist
         run: |
-          cd artifacts
-          find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.cdx.json" | while read f; do
-            sha256sum "$f" >> checksums.txt
-          done
+          sha256sum -- *.tar.gz *.zip *.cdx.json > checksums.txt
           cat checksums.txt
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: dist/
+
+  test-install:
+    name: Test install.sh (${{ matrix.os }})
+    needs: package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download release files
+        uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
+
+      - name: Install through install.sh
+        run: scripts/test-install.sh dist
+
+  release:
+    name: Create Release
+    needs: [package, test-install, check-crates]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write  # Required for cosign keyless signing via OIDC
+
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Sign release artifacts
+      - name: Sign release files
         run: |
-          cd artifacts
-          for f in $(find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.cdx.json"); do
+          # The glob expands before the loop, so the bundles are not signed in turn.
+          for f in dist/*; do
             cosign sign-blob --yes "$f" --bundle "${f}.bundle"
           done
-          cosign sign-blob --yes checksums.txt --bundle checksums.txt.bundle
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
-            artifacts/**/*.cdx.json
-            artifacts/**/*.bundle
-            artifacts/checksums.txt
+          files: dist/*
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
@@ -202,14 +246,31 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish crates
+        shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          # Publish in dependency order
-          cargo publish -p engraver-detect --no-verify || true
-          sleep 30
-          cargo publish -p engraver-platform --no-verify || true
-          sleep 30
-          cargo publish -p engraver-core --no-verify || true
-          sleep 30
-          cargo publish -p engraver --no-verify || true
+          # Publish what crates.io does not have yet, so that rerunning the job
+          # after a failure publishes the rest instead of failing on the crates
+          # that are already up.
+          packages=$(cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.publish == null) | "\(.name) \(.version)"')
+          publish=()
+          while read -r name version; do
+            status=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -A 'engraver-release (https://github.com/mstephenholl/engraver)' \
+              "https://crates.io/api/v1/crates/${name}/${version}")
+            case "$status" in
+              200) echo "${name} ${version} is already on crates.io" ;;
+              404) publish+=(-p "$name") ;;
+              *)
+                echo "::error::crates.io answered ${status} for ${name} ${version}"
+                exit 1
+                ;;
+            esac
+          done <<< "$packages"
+          if [[ ${#publish[@]} -eq 0 ]]; then
+            echo "Every crate is already on crates.io."
+            exit 0
+          fi
+          cargo publish "${publish[@]}"

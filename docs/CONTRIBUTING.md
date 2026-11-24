@@ -41,7 +41,7 @@ Run tests for a specific crate:
 
 ```bash
 cargo test -p engraver-core
-cargo test -p engraver -- write   # filter by test name
+cargo test -p engraver-cli -- write   # filter by test name
 ```
 
 ### Device Workflow Tests
@@ -59,10 +59,10 @@ default — they never run in CI or during normal `cargo test`.
 
 ```bash
 # Linux
-sudo ENGRAVER_TEST_DEVICE=/dev/sdX cargo test -p engraver --test device_tests -- --ignored
+sudo ENGRAVER_TEST_DEVICE=/dev/sdX cargo test -p engraver-cli --test device_tests -- --ignored
 
 # macOS
-sudo ENGRAVER_TEST_DEVICE=/dev/disk4 cargo test -p engraver --test device_tests -- --ignored
+sudo ENGRAVER_TEST_DEVICE=/dev/disk4 cargo test -p engraver-cli --test device_tests -- --ignored
 ```
 
 > **WARNING**: All data on the test device will be permanently destroyed!

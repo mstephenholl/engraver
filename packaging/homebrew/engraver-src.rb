@@ -12,7 +12,7 @@ class EngraverSrc < Formula
   depends_on "rust" => :build
 
   def install
-    system "cargo", "build", "--release", "-p", "engraver"
+    system "cargo", "build", "--release", "-p", "engraver-cli"
     bin.install "target/release/engraver"
     
     # Generate and install shell completions

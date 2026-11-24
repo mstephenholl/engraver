@@ -1,5 +1,5 @@
 [package]
-name = "engraver"
+name = "engraver-cli"
 version = "0.1.0"
 edition = "2021"
 rust-version.workspace = true
@@ -17,9 +17,9 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace crates
-engraver-core = { path = "../engraver-core" }
-engraver-detect = { path = "../engraver-detect" }
-engraver-platform = { path = "../engraver-platform" }
+engraver-core = { version = "0.1.0", path = "../engraver-core" }
+engraver-detect = { version = "0.1.0", path = "../engraver-detect" }
+engraver-platform = { version = "0.1.0", path = "../engraver-platform" }
 
 # CLI framework
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }

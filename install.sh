@@ -45,6 +45,11 @@ Options:
 Environment Variables:
   INSTALL_DIR   Installation directory (default: /usr/local/bin)
   MAN_DIR       Man page directory (default: /usr/local/share/man/man1)
+  ENGRAVER_VERSION
+                Version to install, such as 0.1.0 (default: the latest release)
+  ENGRAVER_RELEASE_URL
+                Download release files from <url>/v<version>/<file>
+                (default: https://github.com/mstephenholl/engraver/releases/download)
 
 EOF
     exit 0
@@ -104,11 +109,39 @@ get_latest_version() {
         grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/'
 }
 
+# Refuse a downloaded file unless its SHA-256 is the one checksums.txt lists.
+# Runs in the main shell, so that error ends the script.
+verify_checksum() {
+    local file="$1"
+    local checksums="$2"
+    local name expected actual
+
+    name=$(basename "$file")
+    expected=$(awk -v name="$name" '$2 == name { print $1; exit }' "$checksums")
+    if [[ -z "$expected" ]]; then
+        error "checksums.txt has no entry for ${name}."
+    fi
+
+    if command -v sha256sum &>/dev/null; then
+        actual=$(sha256sum "$file")
+    elif command -v shasum &>/dev/null; then
+        actual=$(shasum -a 256 "$file")
+    else
+        error "Cannot check the download: neither sha256sum nor shasum is installed."
+    fi
+    actual="${actual%% *}"
+
+    if [[ "$actual" != "$expected" ]]; then
+        error "Checksum mismatch for ${name}: checksums.txt says ${expected}, the download is ${actual}."
+    fi
+}
+
 # Download and install
 install_binary() {
     local version="$1"
     local platform="$2"
-    local url="https://github.com/${REPO}/releases/download/v${version}/engraver-v${version}-${platform}.tar.gz"
+    local archive="engraver-v${version}-${platform}.tar.gz"
+    local release_url="${ENGRAVER_RELEASE_URL:-https://github.com/${REPO}/releases/download}/v${version}"
     local tmpdir
     
     tmpdir=$(mktemp -d)
@@ -116,7 +149,13 @@ install_binary() {
     trap "rm -rf $tmpdir" EXIT
 
     info "Downloading engraver v${version} for ${platform}..."
-    curl -fsSL "$url" | tar -xz -C "$tmpdir"
+    curl -fsSL "${release_url}/${archive}" -o "${tmpdir}/${archive}" ||
+        error "Could not download ${release_url}/${archive}"
+    curl -fsSL "${release_url}/checksums.txt" -o "${tmpdir}/checksums.txt" ||
+        error "Could not download ${release_url}/checksums.txt"
+
+    verify_checksum "${tmpdir}/${archive}" "${tmpdir}/checksums.txt"
+    tar -xzf "${tmpdir}/${archive}" -C "$tmpdir"
     
     local extract_dir="${tmpdir}/engraver-v${version}-${platform}"
     
@@ -128,7 +167,6 @@ install_binary() {
     else
         error "Cannot write to ${INSTALL_DIR}. Set INSTALL_DIR to a writable location or remove --no-sudo."
     fi
-    chmod +x "${INSTALL_DIR}/engraver"
     
     # Install completions
     install_completions "$extract_dir"
@@ -225,7 +263,7 @@ install_from_source() {
     git clone "https://github.com/${REPO}.git" "$tmpdir/engraver"
     cd "$tmpdir/engraver"
     
-    cargo build --release -p engraver
+    cargo build --release -p engraver-cli
     
     info "Installing to ${INSTALL_DIR}..."
     if [[ -w "$INSTALL_DIR" ]]; then
@@ -262,8 +300,12 @@ main() {
     local platform version
     platform=$(detect_platform)
     
-    # Try to get latest version from GitHub
-    if version=$(get_latest_version 2>/dev/null) && [[ -n "$version" ]]; then
+    # Install the version asked for, or else the latest release from GitHub
+    if [[ -n "${ENGRAVER_VERSION:-}" ]]; then
+        version="${ENGRAVER_VERSION#v}"
+        info "Version: v${version}"
+        install_binary "$version" "$platform"
+    elif version=$(get_latest_version 2>/dev/null) && [[ -n "$version" ]]; then
         info "Latest version: v${version}"
         install_binary "$version" "$platform"
     else

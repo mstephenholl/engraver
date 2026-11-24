@@ -25,7 +25,7 @@ pkgver() {
 
 build() {
     cd "${srcdir}/engraver"
-    cargo build --release -p engraver
+    cargo build --release -p engraver-cli
     
     # Generate completions
     mkdir -p completions
