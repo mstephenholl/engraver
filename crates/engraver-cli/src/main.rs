@@ -30,6 +30,7 @@ use tracing_subscriber::EnvFilter;
 mod macros;
 mod commands;
 mod progress;
+mod prompt;
 
 /// Engraver - A safe, fast tool for creating bootable USB drives
 #[derive(Parser)]
@@ -594,12 +595,12 @@ mod tests {
     }
 
     fn prompt_failure(kind: std::io::ErrorKind, message: &str) -> anyhow::Error {
-        commands::prompt_error(dialoguer::Error::IO(std::io::Error::new(kind, message)))
+        commands::into_answer(Err(std::io::Error::new(kind, message))).unwrap_err()
     }
 
     #[test]
     fn test_exit_for_ctrl_c_at_a_prompt_is_130_with_one_cancel_line() {
-        let err = prompt_failure(std::io::ErrorKind::Interrupted, "read interrupted");
+        let err = commands::into_answer(Ok(None)).unwrap_err();
 
         let exit = exit_for(&err);
 
