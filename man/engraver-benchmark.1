@@ -17,9 +17,11 @@ A color-coded progress bar indicates performance (red \(-> yellow \(-> green \(-
 Target device (e.g., /dev/sdb, /dev/disk2, \\\\.\\PhysicalDrive1)
 .TP
 \fB\-s\fR, \fB\-\-size\fR \fI<SIZE>\fR
-Amount of data to write for the test (e.g., 256M, 1G).
+Amount of data to write per pass, exactly (e.g., 256M, 1G).
+Must hold at least one block.
 Mutually exclusive with \fB\-\-test\-block\-sizes\fR.
-Default from config or 256M.
+Default from config or 256M, raised to ten blocks of the largest block size.
+This raise never applies to a size given with \fB\-\-size\fR.
 .TP
 \fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR
 Block size for writes (e.g., 4K, 1M, 4M).
@@ -74,8 +76,8 @@ Run 3 passes and output JSON for CI integration:
 All size values must be powers of 2. Block sizes are limited to 64 MB maximum.
 .PP
 The \fB\-\-size\fR and \fB\-\-test\-block\-sizes\fR options are mutually exclusive.
-When using \fB\-\-test\-block\-sizes\fR, each block size is tested with a proportional
-amount of data.
+When using \fB\-\-test\-block\-sizes\fR, each block size is tested with the same amount of
+data, ten blocks of the largest block size unless the configured test size is larger.
 .PP
 Default values can be configured in the configuration file under the \fB[benchmark]\fR section.
 See \fBengraver\-config\fR(1) for details.

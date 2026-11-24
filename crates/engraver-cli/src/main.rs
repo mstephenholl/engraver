@@ -202,7 +202,7 @@ enum Commands {
         /// Target device (e.g., /dev/sdb, \\.\PhysicalDrive1)
         target: String,
 
-        /// Amount of data to write for the test (e.g., 256M, 1G). Mutually exclusive with --test-block-sizes. Default from config or 256M
+        /// Amount of data to write per pass, exactly (e.g., 256M, 1G). Must hold at least one block. Mutually exclusive with --test-block-sizes. Default from config or 256M, raised to ten blocks of the largest block size when smaller
         #[arg(short, long)]
         size: Option<String>,
 
@@ -520,15 +520,12 @@ fn run() -> Result<()> {
                 block_size.unwrap_or_else(|| settings.benchmark.block_size.clone());
             let effective_pattern = pattern.unwrap_or_else(|| settings.benchmark.pattern.clone());
             let effective_passes = passes.unwrap_or(settings.benchmark.passes);
-            // For test_size: use CLI value if provided, otherwise use config default
-            // (but only when not using --test-block-sizes)
-            let effective_test_size = size.or_else(|| {
-                if test_block_sizes.is_none() {
-                    Some(settings.benchmark.test_size.clone())
-                } else {
-                    None
+            let effective_test_size = match size {
+                Some(size) => commands::benchmark::TestSize::Exact(size),
+                None => {
+                    commands::benchmark::TestSize::Default(settings.benchmark.test_size.clone())
                 }
-            });
+            };
             // JSON output: CLI flag overrides config
             let effective_json = json || settings.benchmark.json;
 

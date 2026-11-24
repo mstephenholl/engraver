@@ -388,7 +388,7 @@ cloud_chunk_size = "4M"
 | `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
 | `[behavior]` | `quiet` | Suppress non-error output | `false` |
 | `[benchmark]` | `block_size` | Default block size for benchmarks | `"32M"` |
-| `[benchmark]` | `test_size` | Default test data size | `"256M"` |
+| `[benchmark]` | `test_size` | Default test data size, raised to 10 blocks when smaller | `"256M"` |
 | `[benchmark]` | `pattern` | Default data pattern (`zeros`, `random`, `sequential`) | `"zeros"` |
 | `[benchmark]` | `passes` | Default number of benchmark passes | `1` |
 | `[benchmark]` | `json` | Output benchmark results in JSON format | `false` |
@@ -420,13 +420,15 @@ engraver benchmark /dev/sdb --json
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--size` | Amount of data to write | `256M` |
+| `--size` | Amount of data to write per pass, exactly as given. Must hold at least one block | `256M`, raised to 10 blocks |
 | `--block-size` | Block size for writes | `32M` |
 | `--pattern` | Data pattern: `zeros`, `random`, `sequential` | `zeros` |
 | `--passes` | Number of benchmark passes | `1` |
 | `--test-block-sizes` | Test multiple block sizes (comma-separated) | - |
 
 **Note:** `--size` and `--test-block-sizes` are mutually exclusive. All size values must be powers of 2, with block sizes limited to 64 MB maximum.
+
+Without `--size`, a pass writes the default size, or 10 blocks of the largest block size if that is more: 320 MB at the default 32M block size. A `--size` is never raised, and one smaller than the block size is refused. With `--passes`, each pass writes the size again from the start of the drive, and the JSON `summary.total_bytes_written` is the sum of the passes.
 
 **Warning:** Benchmarking is a destructive operation that will overwrite data on the target device.
 

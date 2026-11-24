@@ -33,6 +33,18 @@ pub enum BenchmarkError {
     #[error("Block size {0} is below minimum of 4 KB")]
     BlockSizeTooSmall(String),
 
+    /// The test size cannot hold one block of the chosen block size
+    #[error(
+        "Test size {size} is smaller than the block size {block}. \
+         Use a larger --size or a smaller --block-size"
+    )]
+    SizeSmallerThanBlock {
+        /// The test size, formatted for display
+        size: String,
+        /// The block size, formatted for display
+        block: String,
+    },
+
     /// Both --size and --test-block-sizes were specified
     #[error("Cannot use both --size and --test-block-sizes options")]
     MutuallyExclusiveOptions,
@@ -86,7 +98,7 @@ impl std::str::FromStr for DataPattern {
 /// Configuration for benchmark operations
 #[derive(Debug, Clone)]
 pub struct BenchmarkConfig {
-    /// Total bytes to write (user-specified, may be adjusted)
+    /// Bytes written in each pass
     pub test_size: u64,
     /// Block size for write operations
     pub block_size: u64,
@@ -124,11 +136,6 @@ impl BenchmarkConfig {
             return Err(BenchmarkError::NotPowerOfTwo(format_size(self.block_size)));
         }
 
-        // Check test size is power of 2
-        if !is_power_of_two(self.test_size) {
-            return Err(BenchmarkError::NotPowerOfTwo(format_size(self.test_size)));
-        }
-
         // Check block size bounds
         if self.block_size > MAX_BLOCK_SIZE {
             return Err(BenchmarkError::BlockSizeTooLarge(format_size(
@@ -142,20 +149,21 @@ impl BenchmarkConfig {
             )));
         }
 
+        if self.test_size < self.block_size {
+            return Err(BenchmarkError::SizeSmallerThanBlock {
+                size: format_size(self.test_size),
+                block: format_size(self.block_size),
+            });
+        }
+
         Ok(())
     }
 
-    /// Calculate the effective test size ensuring minimum blocks per pass
-    pub fn effective_test_size(&self) -> u64 {
-        let min_size = self.block_size * MIN_BLOCKS_PER_PASS;
-        self.test_size.max(min_size)
-    }
-
-    /// Calculate effective test size for multi-block-size testing
-    pub fn effective_test_size_for_block_sizes(base_size: u64, block_sizes: &[u64]) -> u64 {
+    /// The per-pass size when the caller names none: `base`, raised to at
+    /// least ten blocks of the largest of `block_sizes`.
+    pub fn default_test_size(base: u64, block_sizes: &[u64]) -> u64 {
         let largest_block = block_sizes.iter().copied().max().unwrap_or(0);
-        let min_size = largest_block * MIN_BLOCKS_PER_PASS;
-        base_size.max(min_size)
+        base.max(largest_block * MIN_BLOCKS_PER_PASS)
     }
 }
 
@@ -216,7 +224,7 @@ pub struct PassResult {
 pub struct BenchmarkResult {
     /// Device path that was benchmarked
     pub device_path: String,
-    /// Test size used in bytes
+    /// Bytes written in each pass
     pub test_size: u64,
     /// Block size used in bytes
     pub block_size: u64,
@@ -267,6 +275,8 @@ pub struct BlockSizeTestResult {
     pub block_size: u64,
     /// Human-readable block size
     pub block_size_display: String,
+    /// Bytes written for this block size
+    pub bytes_written: u64,
     /// Average speed achieved (bytes per second)
     pub average_speed_bps: u64,
     /// Human-readable speed
@@ -421,12 +431,12 @@ impl BenchmarkRunner {
     {
         self.config.validate()?;
 
-        let effective_size = self.config.effective_test_size();
+        let test_size = self.config.test_size;
         let block_size = self.config.block_size as usize;
         let data_source = BenchmarkDataSource::new(self.config.pattern, block_size);
 
         let mut passes = Vec::with_capacity(self.config.passes as usize);
-        let total_bytes_all_passes = effective_size * self.config.passes as u64;
+        let total_bytes_all_passes = test_size * self.config.passes as u64;
 
         for pass in 1..=self.config.passes {
             // Seek to beginning for each pass
@@ -435,10 +445,10 @@ impl BenchmarkRunner {
             let pass_result = self.run_pass(
                 &mut target,
                 &data_source,
-                effective_size,
+                test_size,
                 pass,
                 total_bytes_all_passes,
-                (pass - 1) as u64 * effective_size,
+                (pass - 1) as u64 * test_size,
                 &progress_callback,
             )?;
 
@@ -450,7 +460,7 @@ impl BenchmarkRunner {
 
         Ok(BenchmarkResult {
             device_path: device_path.to_string(),
-            test_size: effective_size,
+            test_size,
             block_size: self.config.block_size,
             pattern: self.config.pattern,
             passes,
@@ -554,7 +564,7 @@ impl BenchmarkRunner {
         }
     }
 
-    /// Run benchmarks at multiple block sizes
+    /// Run benchmarks at multiple block sizes, each writing `config.test_size`
     pub fn run_multi_block_sizes<W, F>(
         config: BenchmarkConfig,
         block_sizes: &[u64],
@@ -567,9 +577,6 @@ impl BenchmarkRunner {
         W: Write + Seek,
         F: Fn(&BenchmarkProgress, usize, usize), // progress, current_test, total_tests
     {
-        let effective_size =
-            BenchmarkConfig::effective_test_size_for_block_sizes(config.test_size, block_sizes);
-
         let mut results = Vec::with_capacity(block_sizes.len());
 
         for (idx, &block_size) in block_sizes.iter().enumerate() {
@@ -578,7 +585,7 @@ impl BenchmarkRunner {
             }
 
             let test_config = BenchmarkConfig {
-                test_size: effective_size,
+                test_size: config.test_size,
                 block_size,
                 pattern: config.pattern,
                 passes: 1, // Single pass per block size
@@ -601,6 +608,7 @@ impl BenchmarkRunner {
             results.push(BlockSizeTestResult {
                 block_size,
                 block_size_display: format_size(block_size),
+                bytes_written: result.summary.total_bytes_written,
                 average_speed_bps: result.summary.average_speed_bps,
                 speed_display: format_speed(result.summary.average_speed_bps),
             });
@@ -852,22 +860,34 @@ mod tests {
     }
 
     #[test]
-    fn test_effective_test_size() {
-        // With small block size, use requested size
-        let config = BenchmarkConfig::new(256 * 1024 * 1024, 4 * 1024 * 1024);
-        assert_eq!(config.effective_test_size(), 256 * 1024 * 1024);
-
-        // With large block size, scale up
-        let config = BenchmarkConfig::new(256 * 1024 * 1024, 64 * 1024 * 1024);
-        assert_eq!(config.effective_test_size(), 640 * 1024 * 1024); // 64M * 10
+    fn test_default_test_size_keeps_a_base_that_already_holds_ten_blocks() {
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(
+            BenchmarkConfig::default_test_size(256 * MIB, &[4 * MIB]),
+            256 * MIB
+        );
+        assert_eq!(
+            BenchmarkConfig::default_test_size(256 * MIB, &[]),
+            256 * MIB
+        );
     }
 
     #[test]
-    fn test_effective_test_size_for_block_sizes() {
-        let block_sizes = vec![4 * 1024, 1024 * 1024, 64 * 1024 * 1024];
-        let effective =
-            BenchmarkConfig::effective_test_size_for_block_sizes(256 * 1024 * 1024, &block_sizes);
-        assert_eq!(effective, 640 * 1024 * 1024); // 64M * 10
+    fn test_default_test_size_is_ten_blocks_of_the_largest_block_size() {
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(
+            BenchmarkConfig::default_test_size(256 * MIB, &[32 * MIB]),
+            320 * MIB
+        );
+        assert_eq!(
+            BenchmarkConfig::default_test_size(16 * MIB, &[32 * MIB]),
+            320 * MIB
+        );
+        let block_sizes = [4 * 1024, MIB, 64 * MIB];
+        assert_eq!(
+            BenchmarkConfig::default_test_size(256 * MIB, &block_sizes),
+            640 * MIB
+        );
     }
 
     #[test]
@@ -875,8 +895,18 @@ mod tests {
         let config = BenchmarkConfig::new(256 * 1024 * 1024, 4 * 1024 * 1024);
         assert!(config.validate().is_ok());
 
-        // Invalid: not power of 2
-        let config = BenchmarkConfig::new(100 * 1024 * 1024, 4 * 1024 * 1024);
+        let config = BenchmarkConfig::new(320 * 1024 * 1024, 32 * 1024 * 1024);
+        assert!(config.validate().is_ok());
+
+        let config = BenchmarkConfig::new(4 * 1024 * 1024, 4 * 1024 * 1024);
+        assert!(config.validate().is_ok());
+
+        let config = BenchmarkConfig::new(4 * 1024 * 1024, 64 * 1024 * 1024);
+        assert!(matches!(
+            config.validate(),
+            Err(BenchmarkError::SizeSmallerThanBlock { .. })
+        ));
+        let config = BenchmarkConfig::new(0, 4 * 1024);
         assert!(config.validate().is_err());
 
         // Invalid: block size too large
@@ -1031,20 +1061,6 @@ mod tests {
         assert_eq!(config.block_size, 1024 * 1024);
         assert_eq!(config.pattern, DataPattern::Zeros); // default
         assert_eq!(config.passes, 1); // default
-    }
-
-    #[test]
-    fn test_benchmark_config_effective_test_size_no_scale() {
-        // Small block size relative to test size - no scaling needed
-        let config = BenchmarkConfig::new(256 * 1024 * 1024, 4 * 1024);
-        assert_eq!(config.effective_test_size(), 256 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_effective_test_size_for_block_sizes_empty() {
-        let effective =
-            BenchmarkConfig::effective_test_size_for_block_sizes(256 * 1024 * 1024, &[]);
-        assert_eq!(effective, 256 * 1024 * 1024);
     }
 
     // -------------------------------------------------------------------------
@@ -1244,6 +1260,16 @@ mod tests {
         let err = BenchmarkError::BlockSizeTooSmall("1 KB".to_string());
         assert!(err.to_string().contains("below minimum"));
 
+        let err = BenchmarkError::SizeSmallerThanBlock {
+            size: "4 MB".to_string(),
+            block: "64 MB".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Test size 4 MB is smaller than the block size 64 MB. \
+             Use a larger --size or a smaller --block-size"
+        );
+
         let err = BenchmarkError::MutuallyExclusiveOptions;
         assert!(err.to_string().contains("Cannot use both"));
 
@@ -1267,9 +1293,7 @@ mod tests {
             passes: 1,
         };
 
-        // Both block sizes fit: max is 8K, so min test size = 8K*10 = 80K
-        // 80K is NOT power of 2, so use small block sizes that keep test_size valid
-        let block_sizes = vec![4 * 1024]; // single block size to avoid scaling issues
+        let block_sizes = vec![4 * 1024, 8 * 1024];
         let buffer = vec![0u8; 1024 * 1024];
         let cursor = Cursor::new(buffer);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -1284,8 +1308,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(results.len(), 1);
+        assert_eq!(results.len(), 2);
         assert_eq!(results[0].block_size, 4 * 1024);
+        assert_eq!(results[1].block_size, 8 * 1024);
+        assert!(results.iter().all(|r| r.bytes_written == 64 * 1024));
         assert!(!results[0].speed_display.is_empty());
         assert!(!results[0].block_size_display.is_empty());
     }

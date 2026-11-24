@@ -1690,6 +1690,56 @@ fn test_benchmark_size_smaller_than_one_block_is_refused_up_front() {
         );
 }
 
+const NON_POWER_OF_2_TEST_SIZE_CONFIG: &str = "[benchmark]\ntest_size = \"100M\"\n";
+
+fn benchmark_stderr_with_a_non_power_of_2_configured_test_size(args: &[&str]) -> String {
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, NON_POWER_OF_2_TEST_SIZE_CONFIG).unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_file.to_str().unwrap()])
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--block-size",
+            "4M",
+            "--yes",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn test_benchmark_size_ignores_a_configured_test_size_that_is_not_a_power_of_2() {
+    let stderr = benchmark_stderr_with_a_non_power_of_2_configured_test_size(&["--size", "32M"]);
+
+    assert!(
+        stderr.contains("privileges required") || stderr.contains("Device not found"),
+        "the run should get past argument validation, got: {stderr:?}"
+    );
+}
+
+#[test]
+fn test_benchmark_without_size_refuses_a_configured_test_size_that_is_not_a_power_of_2() {
+    let stderr = benchmark_stderr_with_a_non_power_of_2_configured_test_size(&[]);
+
+    assert!(stderr.contains("must be a power of 2: 100M"), "{stderr:?}");
+}
+
+#[test]
+fn test_benchmark_test_block_sizes_refuses_a_configured_test_size_that_is_not_a_power_of_2() {
+    let stderr = benchmark_stderr_with_a_non_power_of_2_configured_test_size(&[
+        "--test-block-sizes",
+        "4K,4M",
+    ]);
+
+    assert!(stderr.contains("must be a power of 2: 100M"), "{stderr:?}");
+}
+
 #[test]
 fn test_benchmark_block_size_too_large() {
     // Block size max is 64M

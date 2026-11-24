@@ -144,5 +144,8 @@ fn several_block_sizes_each_write_the_given_size() {
     .expect("every block size must run");
 
     assert_eq!(results.len(), 2);
+    for row in &results {
+        assert_eq!(row.bytes_written, size, "block size {}", row.block_size);
+    }
     assert_eq!(sink.extent, size);
 }
