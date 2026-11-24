@@ -1104,6 +1104,74 @@ mod tests {
         crate::commands::assert_cancelled(&err);
     }
 
+    #[derive(Default)]
+    struct ExtentSink {
+        position: u64,
+        extent: u64,
+    }
+
+    impl std::io::Write for ExtentSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.position += buf.len() as u64;
+            self.extent = self.extent.max(self.position);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl std::io::Seek for ExtentSink {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            match pos {
+                std::io::SeekFrom::Start(offset) => self.position = offset,
+                _ => return Err(std::io::ErrorKind::Unsupported.into()),
+            }
+            Ok(self.position)
+        }
+    }
+
+    #[test]
+    fn test_single_benchmark_writes_exactly_the_given_size() {
+        let mut sink = ExtentSink::default();
+
+        run_single_benchmark(
+            &mut sink,
+            "/dev/test",
+            4 * TEST_BLOCK,
+            TEST_BLOCK,
+            DataPattern::Zeros,
+            1,
+            true,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(sink.extent, 4 * TEST_BLOCK);
+    }
+
+    #[test]
+    fn test_multi_block_benchmark_writes_the_given_size_for_every_block_size() {
+        let mut sink = ExtentSink::default();
+        let size = 10 * 32 * 1024 * 1024;
+
+        run_multi_block_benchmark(
+            &mut sink,
+            "/dev/test",
+            size,
+            &[TEST_BLOCK, 32 * 1024 * 1024],
+            DataPattern::Zeros,
+            true,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(sink.extent, size);
+    }
+
     #[test]
     fn test_multi_block_benchmark_without_cancel_succeeds() {
         let mut device = scratch_device();

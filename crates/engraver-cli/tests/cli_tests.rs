@@ -1670,6 +1670,27 @@ fn test_benchmark_invalid_size_not_power_of_2() {
 }
 
 #[test]
+fn test_benchmark_size_smaller_than_one_block_is_refused_up_front() {
+    engraver()
+        .args([
+            "benchmark",
+            "/dev/nonexistent",
+            "--size",
+            "4M",
+            "--block-size",
+            "64M",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("smaller than the block size")
+                .and(predicate::str::contains("4 MB"))
+                .and(predicate::str::contains("64 MB")),
+        );
+}
+
+#[test]
 fn test_benchmark_block_size_too_large() {
     // Block size max is 64M
     engraver()
