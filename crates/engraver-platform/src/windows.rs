@@ -6,21 +6,24 @@ use crate::{DeviceInfo, OpenOptions, PlatformError, PlatformOps, RawDevice, Resu
 use std::io::{Read, Seek, SeekFrom, Write};
 
 #[cfg(target_os = "windows")]
+use crate::aligned::AlignedBuffer;
+#[cfg(target_os = "windows")]
 use std::ptr;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_HANDLE_EOF, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FlushFileBuffers, GetFileSizeEx, ReadFile, SetFilePointerEx, WriteFile,
-    FILE_BEGIN, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
+    CreateFileW, FlushFileBuffers, GetFileSizeEx, ReadFile, WriteFile, FILE_FLAG_NO_BUFFERING,
+    FILE_FLAG_WRITE_THROUGH, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Ioctl::{FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::IO::DeviceIoControl;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::IO::{OVERLAPPED, OVERLAPPED_0, OVERLAPPED_0_0};
 
 /// Windows platform implementation
 pub struct WindowsPlatform;
@@ -80,6 +83,10 @@ impl PlatformOps for WindowsPlatform {
 pub struct WindowsDevice {
     handle: HANDLE,
     info: DeviceInfo,
+    aligned_buffer: Option<AlignedBuffer>,
+    // A FILE_FLAG_NO_BUFFERING handle's own file pointer only moves to
+    // sector-aligned positions.
+    position: u64,
 }
 
 #[cfg(target_os = "windows")]
@@ -155,7 +162,16 @@ impl WindowsDevice {
             direct_io: options.direct_io,
         };
 
-        Ok(Self { handle, info })
+        let aligned_buffer = options
+            .direct_io
+            .then(|| AlignedBuffer::new(options.block_size * 2, options.block_size));
+
+        Ok(Self {
+            handle,
+            info,
+            aligned_buffer,
+            position: 0,
+        })
     }
 
     /// Lock the volume for exclusive access
@@ -254,116 +270,110 @@ impl RawDevice for WindowsDevice {
     }
 
     fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<usize> {
-        // Seek to offset
-        let mut new_pos: i64 = 0;
-        // SAFETY: SetFilePointerEx is called with a valid HANDLE. new_pos is a valid
-        // mutable reference to i64. The offset cast to i64 is safe for valid file offsets.
-        #[allow(unsafe_code)]
-        let result =
-            unsafe { SetFilePointerEx(self.handle, offset as i64, &mut new_pos, FILE_BEGIN) };
-
-        if result == 0 {
-            return Err(PlatformError::Io(std::io::Error::last_os_error()));
-        }
-
-        // Write data
-        let mut bytes_written: u32 = 0;
-        // SAFETY: WriteFile is called with a valid HANDLE. data.as_ptr() points to valid
-        // memory for the slice's lifetime (borrowed for this call). data.len() as u32 is
-        // safe for reasonable buffer sizes. bytes_written is a valid mutable reference.
-        #[allow(unsafe_code)]
-        let result = unsafe {
-            WriteFile(
-                self.handle,
-                data.as_ptr(),
-                data.len() as u32,
-                &mut bytes_written,
-                ptr::null_mut(),
-            )
-        };
-
-        if result == 0 {
-            Err(PlatformError::Io(std::io::Error::last_os_error()))
-        } else {
-            Ok(bytes_written as usize)
-        }
+        self.seek(SeekFrom::Start(offset))?;
+        self.write(data).map_err(PlatformError::Io)
     }
 
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize> {
-        // Seek to offset
-        let mut new_pos: i64 = 0;
-        #[allow(unsafe_code)]
-        let result =
-            unsafe { SetFilePointerEx(self.handle, offset as i64, &mut new_pos, FILE_BEGIN) };
-
-        if result == 0 {
-            return Err(PlatformError::Io(std::io::Error::last_os_error()));
-        }
-
-        // Read data
-        let mut bytes_read: u32 = 0;
-        #[allow(unsafe_code)]
-        let result = unsafe {
-            ReadFile(
-                self.handle,
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-                &mut bytes_read,
-                ptr::null_mut(),
-            )
-        };
-
-        if result == 0 {
-            Err(PlatformError::Io(std::io::Error::last_os_error()))
-        } else {
-            Ok(bytes_read as usize)
-        }
+        self.seek(SeekFrom::Start(offset))?;
+        self.read(buffer).map_err(PlatformError::Io)
     }
 }
 
 #[cfg(target_os = "windows")]
 impl Read for WindowsDevice {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut bytes_read: u32 = 0;
-        #[allow(unsafe_code)]
-        let result = unsafe {
-            ReadFile(
-                self.handle,
-                buf.as_mut_ptr(),
-                buf.len() as u32,
-                &mut bytes_read,
-                ptr::null_mut(),
-            )
+        let handle = self.handle;
+        let read = match self.aligned_buffer.as_mut() {
+            Some(aligned_buf) => {
+                aligned_buf.read_through(self.position, buf, |blocks, offset| {
+                    read_file_at(handle, blocks, offset)
+                })?
+            }
+            None => read_file_at(handle, buf, self.position)?,
         };
+        self.position += read as u64;
+        Ok(read)
+    }
+}
 
-        if result == 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(bytes_read as usize)
-        }
+#[cfg(target_os = "windows")]
+fn overlapped_at(offset: u64) -> OVERLAPPED {
+    OVERLAPPED {
+        Internal: 0,
+        InternalHigh: 0,
+        Anonymous: OVERLAPPED_0 {
+            Anonymous: OVERLAPPED_0_0 {
+                Offset: offset as u32,
+                OffsetHigh: (offset >> 32) as u32,
+            },
+        },
+        hEvent: ptr::null_mut(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn read_file_at(handle: HANDLE, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+    let mut overlapped = overlapped_at(offset);
+    let mut bytes_read: u32 = 0;
+    // SAFETY: ReadFile is called with a valid HANDLE opened without
+    // FILE_FLAG_OVERLAPPED, so it returns only once the read is done.
+    // buf.as_mut_ptr() points to buf.len() writable bytes, and bytes_read and
+    // overlapped are valid mutable references for the whole call.
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        ReadFile(
+            handle,
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            &mut bytes_read,
+            &mut overlapped,
+        )
+    };
+
+    if result != 0 {
+        return Ok(bytes_read as usize);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(ERROR_HANDLE_EOF as i32) {
+        Ok(0)
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn write_file_at(handle: HANDLE, data: &[u8], offset: u64) -> std::io::Result<usize> {
+    let mut overlapped = overlapped_at(offset);
+    let mut bytes_written: u32 = 0;
+    // SAFETY: WriteFile is called with a valid HANDLE opened without
+    // FILE_FLAG_OVERLAPPED, so it returns only once the write is done.
+    // data.as_ptr() points to data.len() readable bytes, and bytes_written and
+    // overlapped are valid mutable references for the whole call.
+    #[allow(unsafe_code)]
+    let result = unsafe {
+        WriteFile(
+            handle,
+            data.as_ptr(),
+            data.len() as u32,
+            &mut bytes_written,
+            &mut overlapped,
+        )
+    };
+
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(bytes_written as usize)
     }
 }
 
 #[cfg(target_os = "windows")]
 impl Write for WindowsDevice {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut bytes_written: u32 = 0;
-        #[allow(unsafe_code)]
-        let result = unsafe {
-            WriteFile(
-                self.handle,
-                buf.as_ptr(),
-                buf.len() as u32,
-                &mut bytes_written,
-                ptr::null_mut(),
-            )
-        };
-
-        if result == 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(bytes_written as usize)
-        }
+        let written = write_file_at(self.handle, buf, self.position)?;
+        self.position += written as u64;
+        Ok(written)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -381,21 +391,18 @@ impl Write for WindowsDevice {
 #[cfg(target_os = "windows")]
 impl Seek for WindowsDevice {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        let (offset, method) = match pos {
-            SeekFrom::Start(n) => (n as i64, FILE_BEGIN),
-            SeekFrom::End(n) => (n, windows_sys::Win32::Storage::FileSystem::FILE_END),
-            SeekFrom::Current(n) => (n, windows_sys::Win32::Storage::FileSystem::FILE_CURRENT),
+        let (base, delta) = match pos {
+            SeekFrom::Start(n) => (n, 0),
+            SeekFrom::End(n) => (self.info.size, n),
+            SeekFrom::Current(n) => (self.position, n),
         };
-
-        let mut new_pos: i64 = 0;
-        #[allow(unsafe_code)]
-        let result = unsafe { SetFilePointerEx(self.handle, offset, &mut new_pos, method) };
-
-        if result == 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(new_pos as u64)
-        }
+        self.position = base.checked_add_signed(delta).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "seek to a negative or overflowing position",
+            )
+        })?;
+        Ok(self.position)
     }
 }
 

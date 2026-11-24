@@ -1,7 +1,7 @@
 #![cfg(any(target_os = "linux", target_os = "windows"))]
 
 use engraver_platform::{open_device, OpenOptions, PlatformError, RawDevice};
-use std::io::{Read, Write};
+use std::io::Read;
 
 const BLOCK: usize = 4096;
 
@@ -98,6 +98,20 @@ fn reads_into_misaligned_slices_of_unaligned_lengths_return_the_file() {
 }
 
 #[test]
+fn reading_to_the_end_returns_every_byte_then_stops() {
+    let contents = pattern(2 * BLOCK);
+    let (_dir, path) = file_with(&contents);
+    let Some(mut device) = open_direct(&path, false) else {
+        return;
+    };
+
+    let mut read_back = Vec::new();
+    device.read_to_end(&mut read_back).unwrap();
+
+    assert_same_bytes(&read_back, &contents);
+}
+
+#[test]
 fn read_at_an_unaligned_offset_returns_the_bytes_there() {
     let contents = pattern(3 * BLOCK);
     let (_dir, path) = file_with(&contents);
@@ -115,6 +129,8 @@ fn read_at_an_unaligned_offset_returns_the_bytes_there() {
 #[cfg(target_os = "linux")]
 #[test]
 fn unaligned_writes_in_a_row_never_leave_a_gap() {
+    use std::io::Write;
+
     let (_dir, path) = file_with(&[0xFF; 3 * BLOCK]);
     let Some(mut device) = open_direct(&path, true) else {
         return;

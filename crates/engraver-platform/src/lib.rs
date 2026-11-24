@@ -292,6 +292,9 @@ pub fn is_linux_partition_of(mount_device: &str, device_path: &str) -> bool {
     bytes[digit_start..].iter().all(|b| b.is_ascii_digit())
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod aligned;
+
 // Platform-specific implementations
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
