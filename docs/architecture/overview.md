@@ -50,7 +50,7 @@ engraver/
 ### engraver-cli
 
 - Argument parsing (clap)
-- User interaction (dialoguer)
+- User interaction (console)
 - Progress display (indicatif)
 - Drive erasure (zero-fill)
 - JSON output for scripting
