@@ -13,7 +13,10 @@ pub(crate) fn read(path: &str, source_type: SourceType) -> Option<LengthHint> {
     let mut file = File::open(path).ok()?;
     match source_type {
         SourceType::Gzip => gzip(&mut file),
-        SourceType::Xz => xz(&mut file),
+        SourceType::Xz => {
+            let data_end = data_end(&file);
+            xz(&mut file, data_end)
+        }
         SourceType::Zstd => zstd(&mut file),
         _ => None,
     }
@@ -60,11 +63,15 @@ const XZ_FOOTER_LEN: u64 = 12;
 /// An xz file is one or more streams, each followed by zero padding in
 /// multiples of four bytes. Each stream's index records its blocks'
 /// uncompressed size, and liblzma checks the blocks against it.
-fn xz<R: Read + Seek>(file: &mut R) -> Option<LengthHint> {
+///
+/// `data_end` is where the file's last data region ends, if the filesystem
+/// says. The bytes after it are a hole, so they are zeros.
+fn xz<R: Read + Seek>(file: &mut R, data_end: Option<u64>) -> Option<LengthHint> {
     let mut end = file.seek(SeekFrom::End(0)).ok()?;
+    let mut zeros_from = data_end.unwrap_or(end);
     let mut total = None;
     loop {
-        let padding = trailing_zeros(file, end)?;
+        let padding = trailing_zeros(file, end, zeros_from)?;
         let stream = if padding % 4 == 0 {
             xz_stream(file, end - padding)
         } else {
@@ -84,6 +91,7 @@ fn xz<R: Read + Seek>(file: &mut R) -> Option<LengthHint> {
         }
         total = Some(sum);
         end = start;
+        zeros_from = end;
     }
 }
 
@@ -208,9 +216,11 @@ fn crc_matches(data: &[u8], stored: &[u8]) -> bool {
     <[u8; 4]>::try_from(stored).is_ok_and(|s| u32::from_le_bytes(s) == crc32fast::hash(data))
 }
 
-fn trailing_zeros<R: Read + Seek>(file: &mut R, end: u64) -> Option<u64> {
+/// The length of the zero run that ends at `end`. The bytes from `zeros_from`
+/// to `end` are known to be zeros, so the scan starts at `zeros_from`.
+fn trailing_zeros<R: Read + Seek>(file: &mut R, end: u64, zeros_from: u64) -> Option<u64> {
     let mut buf = [0u8; 4096];
-    let mut pos = end;
+    let mut pos = zeros_from.min(end);
     while pos > 0 {
         let n = pos.min(buf.len() as u64);
         let chunk = &mut buf[..n as usize];
@@ -223,6 +233,50 @@ fn trailing_zeros<R: Read + Seek>(file: &mut R, end: u64) -> Option<u64> {
         }
     }
     Some(end - pos)
+}
+
+/// Where the file's last data region ends. A file with holes, such as one
+/// made by `truncate`, ends in a hole whose zeros the filesystem never
+/// stores, so reading them back is wasted work. `None` when the filesystem
+/// or the platform cannot say, and the caller then scans the whole tail.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd"
+))]
+fn data_end(file: &File) -> Option<u64> {
+    use std::os::fd::AsRawFd;
+
+    let fd = file.as_raw_fd();
+    let seek = |offset: libc::off_t, whence| {
+        // SAFETY: lseek only moves the offset of a descriptor that `file`
+        // keeps open for the whole call.
+        #[allow(unsafe_code)]
+        let at = unsafe { libc::lseek(fd, offset, whence) };
+        (at >= 0).then_some(at)
+    };
+
+    let mut end = 0;
+    loop {
+        let Some(data) = seek(end, libc::SEEK_DATA) else {
+            // ENXIO means no data at or after `end`, and anything else
+            // means the filesystem cannot tell.
+            let no_more_data = std::io::Error::last_os_error().raw_os_error() == Some(libc::ENXIO);
+            return no_more_data.then(|| u64::try_from(end).ok()).flatten();
+        };
+        end = seek(data, libc::SEEK_HOLE).filter(|&hole| hole > data)?;
+    }
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "freebsd"
+)))]
+fn data_end(_: &File) -> Option<u64> {
+    None
 }
 
 fn read_array<R: Read + Seek, const N: usize>(file: &mut R, offset: u64) -> Option<[u8; N]> {
