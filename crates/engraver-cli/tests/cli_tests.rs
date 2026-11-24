@@ -1314,6 +1314,81 @@ fn test_config_path_silent_mode() {
         .stdout(predicate::str::is_empty());
 }
 
+#[test]
+fn test_config_path_json_prints_the_path_as_json() {
+    let (_temp_dir, config_file) = setup_config_test();
+    let config_path = config_file.to_str().unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_path, "config", "--path", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout_as_json(&output),
+        serde_json::json!({ "path": config_path })
+    );
+    assert!(!config_file.exists(), "--path must not create the file");
+}
+
+#[test]
+fn test_config_path_json_names_the_default_path_without_config_file() {
+    let output = engraver()
+        .args(["config", "--path", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let path = stdout_as_json(&output)["path"]
+        .as_str()
+        .expect("path should be a string")
+        .to_owned();
+    assert!(path.ends_with("engraver_config.toml"), "got {path:?}");
+}
+
+#[test]
+fn test_config_init_json_reports_the_created_file() {
+    let (_temp_dir, config_file) = setup_config_test();
+    let config_path = config_file.to_str().unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_path, "config", "--init", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout_as_json(&output),
+        serde_json::json!({ "path": config_path, "created": true })
+    );
+    assert!(fs::read_to_string(&config_file)
+        .unwrap()
+        .contains("[write]"));
+}
+
+#[test]
+fn test_config_init_json_reports_an_existing_file_left_alone() {
+    let (_temp_dir, config_file) = setup_config_test();
+    let config_path = config_file.to_str().unwrap();
+    fs::write(&config_file, "[write]\nverify = true").unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_path, "config", "--init", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        stdout_as_json(&output),
+        serde_json::json!({ "path": config_path, "created": false })
+    );
+    assert_eq!(
+        fs::read_to_string(&config_file).unwrap(),
+        "[write]\nverify = true"
+    );
+}
+
 // ============================================================================
 // JSON Output Tests
 // ============================================================================
