@@ -726,6 +726,7 @@ dependencies = [
  "criterion",
  "dirs-next",
  "flate2",
+ "libc",
  "md-5",
  "object_store",
  "rand",

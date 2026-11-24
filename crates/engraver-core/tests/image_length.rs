@@ -111,6 +111,43 @@ fn xz_reports_the_exact_image_length() {
     assert_exact("xz", &padded_after, one.len(), "padding after the stream");
 }
 
+/// A sparse file ends in a hole of zeros, which the filesystem can skip without
+/// reading. The size check has to do the same, or it reads the hole 4 KiB at a
+/// time. The work runs on a thread so a slow check fails the test promptly.
+#[cfg(unix)]
+#[test]
+fn xz_reports_the_exact_length_for_a_sparse_terabyte_of_padding() {
+    use std::os::unix::fs::MetadataExt;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const TIB: u64 = 1 << 40;
+    let one = image(300_000, 0);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.img.xz");
+    std::fs::write(&path, xz(&one)).unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    if file.set_len(TIB).is_err() || file.metadata().unwrap().blocks() * 512 > 1024 * 1024 {
+        eprintln!("skipped: this filesystem cannot hold a 1 TiB sparse file");
+        return;
+    }
+    drop(file);
+
+    let path = path.to_str().unwrap().to_owned();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let validated = validate_source(&path).unwrap();
+        let opened = Source::open(&path).unwrap().info().clone();
+        let _ = tx.send((validated.size, opened.size));
+    });
+    let sizes = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the size check did not finish within 10 s");
+    let len = Some(one.len() as u64);
+    assert_eq!(sizes, (len, len), "validate_source, Source::open");
+}
+
 #[test]
 fn gzip_reports_its_last_member_as_a_lower_bound() {
     let one = image(300_000, 0);
