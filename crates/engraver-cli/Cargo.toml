@@ -29,7 +29,6 @@ clap_mangen = "0.3"
 # Progress bars and terminal UI
 indicatif = "0.18"
 console = "0.16"
-dialoguer = "0.12"
 
 # Error handling
 anyhow = "1"
@@ -52,6 +51,22 @@ flate2 = { workspace = true }
 xz2 = { workspace = true }
 zstd = { workspace = true }
 cargo-husky = { workspace = true }
+
+# The prompt tests drive a prompt on a pseudo-terminal: a pty on Unix and a
+# ConPTY on Windows.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 
 [features]
 default = ["partition-info"]
