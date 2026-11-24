@@ -1194,6 +1194,81 @@ fn test_config_path_silent_mode() {
 }
 
 // ============================================================================
+// JSON Output Tests
+// ============================================================================
+//
+// `--json` output is for scripts, so stdout must hold the JSON document and
+// nothing else. Log lines belong on stderr.
+
+/// Parse stdout as one JSON document, showing the raw text when it is not one.
+fn stdout_as_json(output: &std::process::Output) -> serde_json::Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout is not a JSON document ({e}):\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    })
+}
+
+#[test]
+fn test_list_json_stdout_is_json_with_verbose_logging() {
+    // -v turns on debug logging, which must not share stdout with the JSON
+    for args in [
+        ["-v", "list", "--json"].as_slice(),
+        ["-v", "list", "--json", "--all"].as_slice(),
+    ] {
+        let output = engraver().args(args).output().unwrap();
+
+        assert!(output.status.success(), "{args:?} failed");
+        assert!(stdout_as_json(&output).is_array(), "{args:?}");
+    }
+}
+
+#[test]
+fn test_json_stdout_is_json_when_config_file_is_invalid() {
+    // A config file that does not parse logs a warning at the default log level
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, "this is [not valid toml").unwrap();
+
+    for command in [
+        ["list", "--json"].as_slice(),
+        ["list", "--json", "--all"].as_slice(),
+        ["config", "--json"].as_slice(),
+    ] {
+        let output = engraver()
+            .args(["--config-file", config_file.to_str().unwrap()])
+            .args(command)
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "{command:?} failed");
+        stdout_as_json(&output);
+    }
+}
+
+#[test]
+fn test_logs_go_to_stderr_without_colour_codes_when_piped() {
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, "this is [not valid toml").unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config_file.to_str().unwrap()])
+        .args(["config", "--json"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Failed to parse config file"),
+        "the warning should be on stderr, got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "stderr is not a terminal, so it should have no ANSI colour codes, got: {stderr:?}"
+    );
+}
+
+// ============================================================================
 // Benchmark Command Tests
 // ============================================================================
 
