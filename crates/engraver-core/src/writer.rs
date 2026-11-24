@@ -12,6 +12,7 @@ use crate::verifier::ChecksumAlgorithm;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -396,7 +397,12 @@ impl Writer {
     /// # Arguments
     /// * `source` - Readable source (file, network stream, etc.)
     /// * `target` - Writable target (device, file, etc.)
-    /// * `source_size` - Total size of source in bytes
+    /// * `source_size` - Image length in bytes as written to the target, or 0
+    ///   if unknown. For a compressed source that is the decompressed length,
+    ///   not the file size. A nonzero value is checked: a source that ends
+    ///   short fails with [`Error::SourceTooShort`], and one with more bytes
+    ///   fails with [`Error::SourceTooLong`] before the block that crosses
+    ///   `source_size` is written.
     ///
     /// # Returns
     /// * `Ok(WriteResult)` - Write completed successfully
@@ -417,7 +423,10 @@ impl Writer {
     /// # Arguments
     /// * `source` - Readable source (already seeked to start_offset)
     /// * `target` - Writable target (device, file, etc.)
-    /// * `source_size` - Total size of source in bytes
+    /// * `source_size` - Full image length in bytes as written to the target
+    ///   (not the length of the remaining source), or 0 if unknown. A nonzero
+    ///   value is checked as in [`Writer::write`], counting `start_offset`
+    ///   toward the total.
     /// * `start_offset` - Byte offset to start writing from
     ///
     /// # Returns
@@ -440,15 +449,17 @@ impl Writer {
     /// Write from source to target with parallel verification
     ///
     /// This method calculates a checksum of the source data during the write operation,
-    /// then reads back the written data to verify it matches. This is more efficient than
-    /// a separate verification pass because the source only needs to be read once.
+    /// then reads back exactly the bytes it wrote to verify they match. This is more
+    /// efficient than a separate verification pass because the source only needs to be
+    /// read once.
     ///
     /// Requires `checksum_algorithm` to be set in the config.
     ///
     /// # Arguments
     /// * `source` - Readable source
     /// * `target` - Target device (must be readable for verification)
-    /// * `source_size` - Total size of source in bytes
+    /// * `source_size` - Image length in bytes as written to the target, or 0
+    ///   if unknown. A nonzero value is checked as in [`Writer::write`].
     ///
     /// # Returns
     /// * `Ok(WriteResult)` - Write completed with verification results
@@ -479,7 +490,8 @@ impl Writer {
                 Error::InvalidConfig("checksum_algorithm must be set for verification".to_string())
             })?;
 
-            let target_checksum = self.calculate_checksum(&mut target, source_size, algorithm)?;
+            let target_checksum =
+                self.calculate_checksum(&mut target, result.bytes_written, algorithm)?;
 
             result.verified = Some(&target_checksum == source_checksum);
             result.target_checksum = Some(target_checksum);
@@ -594,6 +606,11 @@ impl Writer {
 
             // Read a block from source
             let bytes_read = read_exact_or_eof(&mut source, &mut buffer)?;
+            check_source_length(
+                NonZeroU64::new(source_size),
+                progress.bytes_written,
+                bytes_read,
+            )?;
 
             if bytes_read == 0 {
                 break; // EOF
@@ -701,6 +718,11 @@ impl Writer {
 
             // Read a block from source
             let bytes_read = read_exact_or_eof(&mut source, &mut buffer)?;
+            check_source_length(
+                NonZeroU64::new(source_size),
+                progress.bytes_written,
+                bytes_read,
+            )?;
 
             if bytes_read == 0 {
                 break; // EOF
@@ -901,6 +923,28 @@ impl SpeedTracker {
         } else {
             0
         }
+    }
+}
+
+fn check_source_length(
+    expected: Option<NonZeroU64>,
+    bytes_written: u64,
+    bytes_read: usize,
+) -> Result<()> {
+    let Some(expected) = expected.map(NonZeroU64::get) else {
+        return Ok(());
+    };
+
+    let total = bytes_written + bytes_read as u64;
+    if total > expected {
+        Err(Error::SourceTooLong { expected })
+    } else if bytes_read == 0 && total < expected {
+        Err(Error::SourceTooShort {
+            expected,
+            actual: total,
+        })
+    } else {
+        Ok(())
     }
 }
 

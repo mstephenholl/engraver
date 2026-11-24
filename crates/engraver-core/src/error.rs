@@ -87,6 +87,22 @@ pub enum Error {
         target_size: u64,
     },
 
+    /// The source ended before producing the expected number of bytes
+    #[error("Source is shorter than expected: it ended after {actual} bytes, expected {expected}")]
+    SourceTooShort {
+        /// Expected source length in bytes
+        expected: u64,
+        /// Bytes the source actually produced
+        actual: u64,
+    },
+
+    /// The source produced more than the expected number of bytes
+    #[error("Source is longer than expected: it has more than the expected {expected} bytes")]
+    SourceTooLong {
+        /// Expected source length in bytes
+        expected: u64,
+    },
+
     /// Checksum mismatch
     #[error("Checksum mismatch: expected {expected}, got {actual}")]
     ChecksumMismatch {
@@ -146,6 +162,20 @@ mod tests {
         assert!(msg.contains("1024"));
         assert!(msg.contains("abc123"));
         assert!(msg.contains("def456"));
+    }
+
+    #[test]
+    fn test_source_length_errors_name_the_expected_length() {
+        let short = Error::SourceTooShort {
+            expected: 65536,
+            actual: 1000,
+        }
+        .to_string();
+        assert!(short.contains("65536"));
+        assert!(short.contains("1000"));
+
+        let long = Error::SourceTooLong { expected: 65536 }.to_string();
+        assert!(long.contains("65536"));
     }
 
     #[test]
