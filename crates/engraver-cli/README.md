@@ -259,7 +259,7 @@ Engraver includes multiple safety features to prevent accidental data loss:
 1. **System drive detection**: Refuses to write to drives containing system partitions
 2. **Confirmation prompt**: Requires explicit confirmation before writing
 3. **Mount point display**: Shows what will be unmounted
-4. **Size validation**: Refuses an image larger than the target. A compressed image is measured by the length its file records: exact for `.xz`, a lower bound for `.gz` and `.zst`, none for `.bz2`. An image that cannot be measured is written until the drive fills, and the write then fails with `No space left on device`
+4. **Size validation**: Refuses an image larger than the target. A local compressed image is measured by the length its file records: exact for `.xz`, a lower bound for `.gz` and `.zst`, none for `.bz2`. A compressed image from a URL or cloud storage isn't measured. An image that cannot be measured is written until the drive fills, and the write then fails with `No space left on device`
 5. **USB speed warnings**: Alerts if USB 3.0 device runs at USB 2.0 speed
 
 To bypass safety checks (DANGEROUS!):
