@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795534076295,
+  "lastUpdate": 1795552868640,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -1869,6 +1869,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "block_size/SHA-256/1MB",
             "value": 104.13,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b02b852ebb36965aa91e3d3124f8986227fcf42a",
+          "message": "fix(cli): read Ctrl+C at a prompt as a key (#74)\n\n* refactor(cli): put the yes/no prompt behind prompt::ask\n\nThe prompt is the one place that reads a key at a terminal, and today it\nis inlined in `confirm` with a dialoguer error type leaking into\n`prompt_error` and the exit-code tests. Move it into a self-contained\n`prompt.rs` that returns `io::Result<Option<bool>>`, where `None` means\nCtrl+C, so an integration test can compile the file and drive it on a\npseudo-terminal.\n\n`confirm` keeps its signature and callers and is the one place that turns\n`None` into a cancelled run. `prompt_error` goes away. The behavior is\nunchanged except that a prompt with no terminal now reads `Error: not a\nterminal` instead of `Error: IO error: not a terminal`.\n\n* test(cli): show Ctrl+C at a prompt waking the signal handler\n\nNo command reaches a prompt without root and a drive, so run\n`prompt::ask` itself on a real pseudo-terminal: a pty on Unix and a\nConPTY on Windows. The test binary re-runs itself as the child with a\n`ctrlc` handler installed as in `engraver`, so the handler's marker and\nthe child's exit code show what Ctrl+C did.\n\nOn Unix a prompt that has read Ctrl+C raises SIGINT itself, so the\nhandler runs and prints its own line next to the caller's. On Windows\nconsole keeps Ctrl+C a console control event, so the handler runs and\nthe prompt keeps waiting. The Ctrl+C test fails on every OS at this\ncommit. The y, n, Enter and ignored-key tests pass.\n\n* test(cli): keep the ConPTY child on the pseudo console\n\nA child started without `STARTF_USESTDHANDLES` keeps the parent's\nstandard handles when those are redirected, as they are under a test\nrunner, so on Windows it wrote to the runner's pipe, found no terminal\nand answered \"not a terminal\" instead of drawing the prompt on the\npseudo console. Name the three standard handles invalid so the child\ntakes the pseudo console for its input and output.\n\nOn windows-latest the Ctrl+C test now fails the way the design says:\nthe handler runs and the prompt keeps waiting until the 10 s timeout.\nThe y, n, Enter and ignored-key tests pass.\n\n* fix(cli): read Ctrl+C at a prompt as a key\n\nCtrl+C at a yes/no prompt must print `Cancelled.` and exit 130 on every\nplatform. It did not. dialoguer reads keys with `Term::read_key`, which on\nUnix raises SIGINT on itself when it reads Ctrl+C. That woke the process's\nCtrl+C handler, which printed `Cancelling... Press Ctrl+C again to force\nexit` on its own thread and raced the `Cancelled.` from `main`; 11 of 20\nruns printed both. On Windows `read_key` keeps processed input on, so\nCtrl+C became a console control event for the handler and the prompt kept\nwaiting.\n\nDraw the prompt with `Term::stderr()` and read keys with `read_key_raw`,\nwhich returns `Key::CtrlC` on both platforms and raises nothing. `y`, `n`\nand Enter answer as before, other keys are ignored, and a stderr that is\nnot a terminal is still refused. The cursor is no longer hidden, so a\nfailed prompt has nothing to restore. That was the only use of dialoguer,\nso drop the dependency.\n\nThe prompt tests from the previous commits now pass on Linux, macOS and\nWindows. Windows has passed the Ctrl+C test, so the README no longer\nlimits the exit code to Linux and macOS.",
+          "timestamp": "2026-11-24T15:35:04-05:00",
+          "tree_id": "d2bb6c3f80d7c735a144c03e4be37867dd6feab1",
+          "url": "https://github.com/mstephenholl/engraver/commit/b02b852ebb36965aa91e3d3124f8986227fcf42a"
+        },
+        "date": 1795552868250,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 79.49,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 82,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 79.35,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 79.46,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 79.61,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 15762.47,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 64698.03,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1263.05,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 79.67,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 6519.9,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 57484.76,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 448.7,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 28.13,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 6286.59,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 58113.95,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 431.01,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 26.99,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 51897.2,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 67197.04,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 11168.85,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 806.19,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 17252.34,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1956.51,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 117.74,
             "unit": "iter/sec"
           }
         ]
