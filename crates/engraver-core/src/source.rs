@@ -28,6 +28,8 @@ use crate::settings::{NetworkSettings, WriteSettings};
 use crate::settings::{DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_VALIDATION_TIMEOUT_SECS};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
+#[cfg(feature = "compression")]
+use std::io::BufRead;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -434,10 +436,130 @@ impl Seek for LocalFileSource {
 // Compressed Source Wrappers
 // ============================================================================
 
+/// A decoder for one gzip member or bzip2 stream. It returns its input when
+/// the member ends, with the bytes after the member unread.
+#[cfg(feature = "compression")]
+trait Member: Read + Sized {
+    type Input: BufRead;
+
+    fn start(input: Self::Input) -> Self;
+    fn into_input(self) -> Self::Input;
+}
+
+#[cfg(feature = "compression")]
+impl<R: BufRead> Member for flate2::bufread::GzDecoder<R> {
+    type Input = R;
+
+    fn start(input: R) -> Self {
+        Self::new(input)
+    }
+
+    fn into_input(self) -> R {
+        self.into_inner()
+    }
+}
+
+#[cfg(feature = "compression")]
+impl<R: BufRead> Member for bzip2::bufread::BzDecoder<R> {
+    type Input = R;
+
+    fn start(input: R) -> Self {
+        Self::new(input)
+    }
+
+    fn into_input(self) -> R {
+        self.into_inner()
+    }
+}
+
+/// Input buffer for a member decoder. Matches the buffer flate2's own
+/// `read` adapters use.
+#[cfg(feature = "compression")]
+const MEMBER_INPUT_BUFFER_SIZE: usize = 32 * 1024;
+
+/// Decodes the back-to-back members of a gzip or bzip2 file and accepts zero
+/// bytes after the last one.
+///
+/// GNU gzip and bzip2 accept a file padded with zeros, as tape and block
+/// device tools leave it. `MultiGzDecoder` and `MultiBzDecoder` read the
+/// zeros as the header of another member and fail. No member starts with a
+/// zero byte, so zeros where a member would start are padding. Any other data
+/// after the zeros is an error.
+#[cfg(feature = "compression")]
+struct Members<M: Member> {
+    member: Option<M>,
+}
+
+#[cfg(feature = "compression")]
+impl<M: Member> Members<M> {
+    fn new(input: M::Input) -> Self {
+        Self {
+            member: Some(M::start(input)),
+        }
+    }
+}
+
+#[cfg(feature = "compression")]
+impl<M: Member> Read for Members<M> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let Some(member) = self.member.as_mut() else {
+                return Ok(0);
+            };
+            let n = member.read(buf)?;
+            if n > 0 || buf.is_empty() {
+                return Ok(n);
+            }
+
+            if let Some(member) = self.member.take() {
+                let mut input = member.into_input();
+                match skip_zero_padding(&mut input)? {
+                    AfterMember::NextMember => self.member = Some(M::start(input)),
+                    AfterMember::End => {}
+                }
+            }
+        }
+    }
+}
+
+/// What follows a member that has ended.
+#[cfg(feature = "compression")]
+enum AfterMember {
+    End,
+    NextMember,
+}
+
+/// Skips zero padding and returns whether the input then ends or another member starts.
+#[cfg(feature = "compression")]
+fn skip_zero_padding(input: &mut impl BufRead) -> std::io::Result<AfterMember> {
+    let mut padded = false;
+    loop {
+        let buf = input.fill_buf()?;
+        if buf.is_empty() {
+            return Ok(AfterMember::End);
+        }
+
+        let zeros = buf.iter().take_while(|&&b| b == 0).count();
+        if zeros < buf.len() {
+            return if padded || zeros > 0 {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "data follows zero padding after the last compressed member",
+                ))
+            } else {
+                Ok(AfterMember::NextMember)
+            };
+        }
+
+        padded = true;
+        input.consume(zeros);
+    }
+}
+
 /// Wrapper for gzip-compressed sources
 #[cfg(feature = "compression")]
 pub struct GzipSource<R: Read> {
-    decoder: flate2::read::GzDecoder<R>,
+    decoder: Members<flate2::bufread::GzDecoder<BufReader<R>>>,
     info: SourceInfo,
 }
 
@@ -446,7 +568,7 @@ impl<R: Read> GzipSource<R> {
     /// Create a new gzip source
     pub fn new(reader: R, info: SourceInfo) -> Self {
         Self {
-            decoder: flate2::read::GzDecoder::new(reader),
+            decoder: Members::new(BufReader::with_capacity(MEMBER_INPUT_BUFFER_SIZE, reader)),
             info,
         }
     }
@@ -476,7 +598,7 @@ impl<R: Read> XzSource<R> {
     /// Create a new xz source
     pub fn new(reader: R, info: SourceInfo) -> Self {
         Self {
-            decoder: xz2::read::XzDecoder::new(reader),
+            decoder: xz2::read::XzDecoder::new_multi_decoder(reader),
             info,
         }
     }
@@ -528,7 +650,7 @@ impl<R: Read> Read for ZstdSource<'_, R> {
 /// Wrapper for bzip2-compressed sources
 #[cfg(feature = "compression")]
 pub struct Bzip2Source<R: Read> {
-    decoder: bzip2::read::BzDecoder<R>,
+    decoder: Members<bzip2::bufread::BzDecoder<BufReader<R>>>,
     info: SourceInfo,
 }
 
@@ -537,7 +659,7 @@ impl<R: Read> Bzip2Source<R> {
     /// Create a new bzip2 source
     pub fn new(reader: R, info: SourceInfo) -> Self {
         Self {
-            decoder: bzip2::read::BzDecoder::new(reader),
+            decoder: Members::new(BufReader::with_capacity(MEMBER_INPUT_BUFFER_SIZE, reader)),
             info,
         }
     }
