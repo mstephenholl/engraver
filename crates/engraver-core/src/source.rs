@@ -227,8 +227,16 @@ pub fn detect_source_type(path: &str) -> SourceType {
         return SourceType::Remote;
     }
 
-    // Check compression by extension
-    let lower = path.to_lowercase();
+    type_from_extension(path)
+}
+
+/// Source type a file name's extension implies: a compressed type, or
+/// `LocalFile` when the extension names no compression.
+///
+/// The one place the extension rules live. Local paths and cloud URIs are
+/// passed whole; an http(s) URL passes `http_url_path(url)`.
+fn type_from_extension(name: &str) -> SourceType {
+    let lower = name.to_lowercase();
     if lower.ends_with(".gz") || lower.ends_with(".gzip") {
         SourceType::Gzip
     } else if lower.ends_with(".xz") {
@@ -240,6 +248,14 @@ pub fn detect_source_type(path: &str) -> SourceType {
     } else {
         SourceType::LocalFile
     }
+}
+
+/// Path of an http(s) URL, without its host, `?query` or `#fragment`.
+#[cfg(feature = "remote")]
+fn http_url_path(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let rest = &rest[..rest.find(['?', '#']).unwrap_or(rest.len())];
+    rest.find('/').map_or("", |slash| &rest[slash..])
 }
 
 /// Detect compression type from magic bytes
@@ -352,6 +368,20 @@ impl SourceInfo {
             etag: None,
             source_header_hash: None,
         }
+    }
+
+    /// Describe a compressed remote or cloud object that is decompressed as
+    /// it is read.
+    ///
+    /// The decompressed length is unknown, and a Range offset counts
+    /// compressed bytes while a resume offset counts decompressed ones, so
+    /// the source cannot resume. `compressed_size` keeps the length of the
+    /// download.
+    #[cfg(any(feature = "remote", feature = "s3", feature = "gcs", feature = "azure"))]
+    fn decompressed(mut self) -> Self {
+        self.size = None;
+        self.resumable = false;
+        self
     }
 }
 
@@ -1277,28 +1307,16 @@ impl Source {
             }
 
             #[cfg(feature = "remote")]
-            SourceType::Remote => {
-                let http_source = HttpSource::open_with_resume(path, offset)?;
-                Ok(Source::Http(http_source))
-            }
+            SourceType::Remote => open_http(path, offset),
 
             #[cfg(feature = "s3")]
-            SourceType::S3 => {
-                let cloud_source = CloudSource::open_with_resume(path, offset)?;
-                Ok(Source::Cloud(cloud_source))
-            }
+            SourceType::S3 => open_cloud(path, offset),
 
             #[cfg(feature = "gcs")]
-            SourceType::Gcs => {
-                let cloud_source = CloudSource::open_with_resume(path, offset)?;
-                Ok(Source::Cloud(cloud_source))
-            }
+            SourceType::Gcs => open_cloud(path, offset),
 
             #[cfg(feature = "azure")]
-            SourceType::Azure => {
-                let cloud_source = CloudSource::open_with_resume(path, offset)?;
-                Ok(Source::Cloud(cloud_source))
-            }
+            SourceType::Azure => open_cloud(path, offset),
 
             #[cfg(not(feature = "compression"))]
             SourceType::Gzip | SourceType::Xz | SourceType::Zstd | SourceType::Bzip2 => {
@@ -1307,10 +1325,7 @@ impl Source {
                         "Cannot resume from compressed source".to_string(),
                     ));
                 }
-                Err(Error::InvalidConfig(
-                    "Compression support not enabled. Rebuild with 'compression' feature."
-                        .to_string(),
-                ))
+                Err(compression_disabled())
             }
 
             #[cfg(not(feature = "remote"))]
@@ -1378,9 +1393,26 @@ impl Source {
         self.info().seekable
     }
 
-    /// Check if this source is compressed
+    /// Whether this source is decompressed as it is read.
     pub fn is_compressed(&self) -> bool {
-        self.info().source_type.is_compressed()
+        match self {
+            #[cfg(feature = "compression")]
+            Source::Gzip(_) | Source::Xz(_) | Source::Zstd(_) | Source::Bzip2(_) => true,
+            #[cfg(all(feature = "remote", feature = "compression"))]
+            Source::HttpGzip(_)
+            | Source::HttpXz(_)
+            | Source::HttpZstd(_)
+            | Source::HttpBzip2(_) => true,
+            #[cfg(all(
+                any(feature = "s3", feature = "gcs", feature = "azure"),
+                feature = "compression"
+            ))]
+            Source::CloudGzip(_)
+            | Source::CloudXz(_)
+            | Source::CloudZstd(_)
+            | Source::CloudBzip2(_) => true,
+            _ => false,
+        }
     }
 }
 
@@ -1509,6 +1541,113 @@ fn open_file_buffered_with_size(path: &str, buffer_size: usize) -> Result<BufRea
     })?;
 
     Ok(BufReader::with_capacity(buffer_size, file))
+}
+
+/// The error for opening a compressed source in a build without `compression`
+#[cfg(not(feature = "compression"))]
+fn compression_disabled() -> Error {
+    Error::InvalidConfig(
+        "Compression support not enabled. Rebuild with 'compression' feature.".to_string(),
+    )
+}
+
+/// Reject resuming a compressed source
+///
+/// A resume offset counts decompressed bytes, which no Range request can seek
+/// to, so a non-zero offset on a compressed source is an error.
+#[cfg(any(feature = "remote", feature = "s3", feature = "gcs", feature = "azure"))]
+fn ensure_not_resuming(compression: SourceType, offset: u64) -> Result<()> {
+    if compression.is_compressed() && offset > 0 {
+        return Err(Error::InvalidConfig(format!(
+            "Cannot resume from compressed {} source",
+            compression.extension().unwrap_or("")
+        )));
+    }
+    Ok(())
+}
+
+/// Open an http(s) URL
+///
+/// A URL whose path has a compression extension is decompressed as it is
+/// read, the same as a local file with that extension.
+#[cfg(feature = "remote")]
+fn open_http(url: &str, offset: u64) -> Result<Source> {
+    let compression = type_from_extension(http_url_path(url));
+    ensure_not_resuming(compression, offset)?;
+
+    match compression {
+        #[cfg(feature = "compression")]
+        SourceType::Gzip => {
+            let http = HttpSource::open(url)?;
+            let info = http.info().clone().decompressed();
+            Ok(Source::HttpGzip(GzipSource::new(http, info)))
+        }
+        #[cfg(feature = "compression")]
+        SourceType::Xz => {
+            let http = HttpSource::open(url)?;
+            let info = http.info().clone().decompressed();
+            Ok(Source::HttpXz(XzSource::new(http, info)))
+        }
+        #[cfg(feature = "compression")]
+        SourceType::Zstd => {
+            let http = HttpSource::open(url)?;
+            let info = http.info().clone().decompressed();
+            Ok(Source::HttpZstd(Box::new(ZstdSource::new(http, info)?)))
+        }
+        #[cfg(feature = "compression")]
+        SourceType::Bzip2 => {
+            let http = HttpSource::open(url)?;
+            let info = http.info().clone().decompressed();
+            Ok(Source::HttpBzip2(Bzip2Source::new(http, info)))
+        }
+        #[cfg(not(feature = "compression"))]
+        SourceType::Gzip | SourceType::Xz | SourceType::Zstd | SourceType::Bzip2 => {
+            Err(compression_disabled())
+        }
+        _ => Ok(Source::Http(HttpSource::open_with_resume(url, offset)?)),
+    }
+}
+
+/// Open an S3, GCS or Azure object
+///
+/// An object whose key has a compression extension is decompressed as it is
+/// read, the same as a local file with that extension.
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+fn open_cloud(uri: &str, offset: u64) -> Result<Source> {
+    let compression = type_from_extension(uri);
+    ensure_not_resuming(compression, offset)?;
+
+    match compression {
+        #[cfg(feature = "compression")]
+        SourceType::Gzip => {
+            let cloud = CloudSource::open(uri)?;
+            let info = cloud.info().clone().decompressed();
+            Ok(Source::CloudGzip(GzipSource::new(cloud, info)))
+        }
+        #[cfg(feature = "compression")]
+        SourceType::Xz => {
+            let cloud = CloudSource::open(uri)?;
+            let info = cloud.info().clone().decompressed();
+            Ok(Source::CloudXz(XzSource::new(cloud, info)))
+        }
+        #[cfg(feature = "compression")]
+        SourceType::Zstd => {
+            let cloud = CloudSource::open(uri)?;
+            let info = cloud.info().clone().decompressed();
+            Ok(Source::CloudZstd(Box::new(ZstdSource::new(cloud, info)?)))
+        }
+        #[cfg(feature = "compression")]
+        SourceType::Bzip2 => {
+            let cloud = CloudSource::open(uri)?;
+            let info = cloud.info().clone().decompressed();
+            Ok(Source::CloudBzip2(Bzip2Source::new(cloud, info)))
+        }
+        #[cfg(not(feature = "compression"))]
+        SourceType::Gzip | SourceType::Xz | SourceType::Zstd | SourceType::Bzip2 => {
+            Err(compression_disabled())
+        }
+        _ => Ok(Source::Cloud(CloudSource::open_with_resume(uri, offset)?)),
+    }
 }
 
 /// Get the size of a source without opening it for reading
@@ -1643,7 +1782,13 @@ pub fn validate_source_with_settings(
                     });
                 }
 
-                let size = response.content_length();
+                // reqwest's `content_length()` is the size of the body, which
+                // is 0 for a HEAD response, so read the header itself.
+                let size = response
+                    .headers()
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
                 let resumable = response
                     .headers()
                     .get("accept-ranges")
@@ -1651,7 +1796,7 @@ pub fn validate_source_with_settings(
                     .map(|v| v == "bytes")
                     .unwrap_or(false);
 
-                Ok(SourceInfo {
+                let info = SourceInfo {
                     path: path.to_string(),
                     source_type: SourceType::Remote,
                     compressed_size: size,
@@ -1669,7 +1814,12 @@ pub fn validate_source_with_settings(
                         .and_then(|v| v.to_str().ok())
                         .map(String::from),
                     source_header_hash: None,
-                })
+                };
+                if type_from_extension(http_url_path(path)).is_compressed() {
+                    Ok(info.decompressed())
+                } else {
+                    Ok(info)
+                }
             }
             #[cfg(not(feature = "remote"))]
             {
@@ -1714,7 +1864,7 @@ fn validate_cloud_source(path: &str, source_type: SourceType) -> Result<SourceIn
             source: Some(Box::new(e)),
         })?;
 
-    Ok(SourceInfo {
+    let info = SourceInfo {
         path: path.to_string(),
         source_type,
         compressed_size: Some(meta.size),
@@ -1724,7 +1874,12 @@ fn validate_cloud_source(path: &str, source_type: SourceType) -> Result<SourceIn
         content_type: None,
         etag: meta.e_tag,
         source_header_hash: None,
-    })
+    };
+    if type_from_extension(path).is_compressed() {
+        Ok(info.decompressed())
+    } else {
+        Ok(info)
+    }
 }
 
 // ============================================================================
@@ -1845,6 +2000,75 @@ mod tests {
     fn test_detect_source_type_bzip2() {
         assert_eq!(detect_source_type("file.iso.bz2"), SourceType::Bzip2);
         assert_eq!(detect_source_type("file.iso.bzip2"), SourceType::Bzip2);
+    }
+
+    // -------------------------------------------------------------------------
+    // type_from_extension / http_url_path tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_type_from_extension_cloud_object_keys() {
+        let cases = [
+            ("s3://bucket/disk.img.gz", SourceType::Gzip),
+            ("s3://bucket/dir/DISK.IMG.XZ", SourceType::Xz),
+            ("s3://bucket/disk.img", SourceType::LocalFile),
+            ("gs://bucket/disk.img.zst", SourceType::Zstd),
+            ("gs://bucket/dir/disk.img.zstd", SourceType::Zstd),
+            ("gs://bucket/disk.xz.img", SourceType::LocalFile),
+            ("azure://account/container/disk.img.bz2", SourceType::Bzip2),
+            (
+                "azure://account/container/dir/disk.img.bzip2",
+                SourceType::Bzip2,
+            ),
+            ("azure://account/container/gz", SourceType::LocalFile),
+        ];
+
+        for (uri, expected) in cases {
+            assert_eq!(type_from_extension(uri), expected, "{uri}");
+        }
+    }
+
+    #[cfg(feature = "remote")]
+    #[test]
+    fn test_http_url_path_drops_host_query_and_fragment() {
+        let cases = [
+            ("http://host/a/b.img.gz", "/a/b.img.gz"),
+            ("https://host:8080/b.img.gz?download=1", "/b.img.gz"),
+            ("https://host/b.img.gz#section", "/b.img.gz"),
+            ("https://host/b.img.gz?a=1#section", "/b.img.gz"),
+            ("https://host/b.img?file=disk.gz", "/b.img"),
+            ("https://host/a?b/c.gz", "/a"),
+            ("https://host/", "/"),
+            ("https://host?file=disk.gz", ""),
+        ];
+
+        for (url, expected) in cases {
+            assert_eq!(http_url_path(url), expected, "{url}");
+        }
+    }
+
+    #[cfg(feature = "remote")]
+    #[test]
+    fn test_http_url_compression_comes_from_the_path_only() {
+        let cases = [
+            ("https://example.com/disk.img.xz", SourceType::Xz),
+            (
+                "https://example.com/disk.img.gz?download=1",
+                SourceType::Gzip,
+            ),
+            ("https://example.com/DISK.IMG.ZST#top", SourceType::Zstd),
+            (
+                "https://example.com/disk.img?file=disk.gz",
+                SourceType::LocalFile,
+            ),
+            // A host name is not a file name.
+            ("https://mirror.xz", SourceType::LocalFile),
+            ("https://mirror.xz?file=disk.gz", SourceType::LocalFile),
+        ];
+
+        for (url, expected) in cases {
+            assert_eq!(type_from_extension(http_url_path(url)), expected, "{url}");
+        }
     }
 
     #[cfg(feature = "s3")]
