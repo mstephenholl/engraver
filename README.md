@@ -190,7 +190,7 @@ Compressed images cannot be resumed if interrupted.
 
 ### Size check
 
-A compressed file's size isn't the image's size, so the size check uses the length the file records:
+A compressed file's size isn't the image's size, so for a local file the size check uses the length the file records:
 
 | Format | Recorded length | Check |
 |--------|-----------------|-------|
@@ -199,7 +199,7 @@ A compressed file's size isn't the image's size, so the size check uses the leng
 | `.zst` | The first frame's content size, if it has one | Refuses an image that is surely too big |
 | `.bz2` | None | Refuses only a compressed file larger than the drive |
 
-An image the check cannot measure is written until the drive fills. The write then fails with `No space left on device`.
+A compressed image from a URL or cloud storage isn't measured. An image the check cannot measure is written until the drive fills. The write then fails with `No space left on device`.
 
 ## Erasing Drives
 
