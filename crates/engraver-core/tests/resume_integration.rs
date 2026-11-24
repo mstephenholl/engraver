@@ -61,6 +61,7 @@ fn local_source_info_with_hash(path: &std::path::Path, size: u64) -> SourceInfo 
         source_type: SourceType::LocalFile,
         compressed_size: Some(size),
         size: Some(size),
+        min_size: None,
         seekable: true,
         resumable: false,
         content_type: None,

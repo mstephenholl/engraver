@@ -23,6 +23,8 @@
 //! ```
 
 use crate::error::{Error, Result};
+#[cfg(feature = "compression")]
+use crate::length_hint::{self, LengthHint};
 use crate::settings::{NetworkSettings, WriteSettings};
 #[cfg(feature = "remote")]
 use crate::settings::{DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_VALIDATION_TIMEOUT_SECS};
@@ -318,6 +320,10 @@ pub struct SourceInfo {
     /// Uncompressed size (if known)
     pub size: Option<u64>,
 
+    /// A lower bound on the uncompressed size, when `size` is unknown and a
+    /// local compressed file's framing proves one
+    pub min_size: Option<u64>,
+
     /// Whether the source supports seeking
     pub seekable: bool,
 
@@ -347,6 +353,7 @@ impl SourceInfo {
             source_type: detect_source_type(path),
             compressed_size: Some(size),
             size: Some(size),
+            min_size: None,
             seekable: true,
             resumable: false,
             content_type: None,
@@ -362,12 +369,30 @@ impl SourceInfo {
             source_type,
             compressed_size: Some(compressed_size),
             size: None, // Unknown until decompressed
+            min_size: None,
             seekable: false,
             resumable: false,
             content_type: None,
             etag: None,
             source_header_hash: None,
         }
+    }
+
+    fn local_compressed(path: &str, compressed_size: u64, source_type: SourceType) -> Self {
+        let info = Self::compressed(path, compressed_size, source_type);
+        #[cfg(feature = "compression")]
+        let info = match length_hint::read(path, source_type) {
+            Some(LengthHint::Exact(size)) => Self {
+                size: Some(size),
+                ..info
+            },
+            Some(LengthHint::AtLeast(min)) => Self {
+                min_size: Some(min),
+                ..info
+            },
+            None => info,
+        };
+        info
     }
 
     /// Describe a compressed remote or cloud object that is decompressed as
@@ -902,6 +927,7 @@ impl HttpSource {
             source_type: SourceType::Remote,
             compressed_size: total_size,
             size: total_size,
+            min_size: None,
             seekable: false,
             resumable: accept_ranges,
             content_type,
@@ -1049,6 +1075,7 @@ impl CloudSource {
             source_type,
             compressed_size: Some(total_size),
             size: Some(total_size),
+            min_size: None,
             seekable: false,
             resumable: true, // Cloud storage supports Range headers
             content_type: None,
@@ -1308,7 +1335,7 @@ impl Source {
                 }
                 let file = open_file_buffered(path)?;
                 let compressed_size = file.get_ref().metadata()?.len();
-                let info = SourceInfo::compressed(path, compressed_size, SourceType::Gzip);
+                let info = SourceInfo::local_compressed(path, compressed_size, SourceType::Gzip);
                 Ok(Source::Gzip(GzipSource::new(file, info)))
             }
 
@@ -1321,7 +1348,7 @@ impl Source {
                 }
                 let file = open_file_buffered(path)?;
                 let compressed_size = file.get_ref().metadata()?.len();
-                let info = SourceInfo::compressed(path, compressed_size, SourceType::Xz);
+                let info = SourceInfo::local_compressed(path, compressed_size, SourceType::Xz);
                 Ok(Source::Xz(XzSource::new(file, info)))
             }
 
@@ -1334,7 +1361,7 @@ impl Source {
                 }
                 let file = open_file_buffered(path)?;
                 let compressed_size = file.get_ref().metadata()?.len();
-                let info = SourceInfo::compressed(path, compressed_size, SourceType::Zstd);
+                let info = SourceInfo::local_compressed(path, compressed_size, SourceType::Zstd);
                 Ok(Source::Zstd(Box::new(ZstdSource::new(file, info)?)))
             }
 
@@ -1347,7 +1374,7 @@ impl Source {
                 }
                 let file = open_file_buffered(path)?;
                 let compressed_size = file.get_ref().metadata()?.len();
-                let info = SourceInfo::compressed(path, compressed_size, SourceType::Bzip2);
+                let info = SourceInfo::local_compressed(path, compressed_size, SourceType::Bzip2);
                 Ok(Source::Bzip2(Bzip2Source::new(file, info)))
             }
 
@@ -1765,7 +1792,7 @@ pub fn validate_source_with_settings(
 
             let size = metadata.len();
             if source_type.is_compressed() {
-                Ok(SourceInfo::compressed(path, size, source_type))
+                Ok(SourceInfo::local_compressed(path, size, source_type))
             } else {
                 Ok(SourceInfo::local(path, size))
             }
@@ -1840,6 +1867,7 @@ pub fn validate_source_with_settings(
                     source_type: SourceType::Remote,
                     compressed_size: size,
                     size,
+                    min_size: None,
                     seekable: false,
                     resumable,
                     content_type: response
@@ -1908,6 +1936,7 @@ fn validate_cloud_source(path: &str, source_type: SourceType) -> Result<SourceIn
         source_type,
         compressed_size: Some(meta.size),
         size: Some(meta.size),
+        min_size: None,
         seekable: false,
         resumable: true,
         content_type: None,

@@ -158,6 +158,7 @@ enum Capacity {
     Fits,
     /// The image, of this many bytes, is larger than the drive
     TooLarge(u64),
+    AtLeastTooLarge(u64),
     /// The compressed file alone, of this many bytes, is larger than the drive
     CompressedTooLarge(u64),
     /// The image length is not known, so it cannot be told
@@ -165,17 +166,19 @@ enum Capacity {
 }
 
 /// Judge whether the source's image fits on a drive of `drive_size` bytes
-///
-/// A source with no image length is `Unknown`, unless its compressed file
-/// alone is larger than the drive.
 fn capacity(source_info: &engraver_core::SourceInfo, drive_size: u64) -> Capacity {
-    match (source_info.size, source_info.compressed_size) {
-        (Some(size), _) if size > drive_size => Capacity::TooLarge(size),
-        (Some(_), _) => Capacity::Fits,
-        (None, Some(compressed)) if compressed > drive_size => {
+    match (
+        source_info.size,
+        source_info.min_size,
+        source_info.compressed_size,
+    ) {
+        (Some(size), _, _) if size > drive_size => Capacity::TooLarge(size),
+        (Some(_), _, _) => Capacity::Fits,
+        (None, Some(min), _) if min > drive_size => Capacity::AtLeastTooLarge(min),
+        (None, _, Some(compressed)) if compressed > drive_size => {
             Capacity::CompressedTooLarge(compressed)
         }
-        (None, _) => Capacity::Unknown,
+        (None, _, _) => Capacity::Unknown,
     }
 }
 
@@ -238,6 +241,11 @@ fn validate_target_device<'a>(
         Capacity::TooLarge(size) => bail!(
             "Source ({}) is larger than target ({})",
             format_size(size),
+            format_size(target_drive.size)
+        ),
+        Capacity::AtLeastTooLarge(min) => bail!(
+            "Image is at least {} once decompressed, larger than target ({})",
+            format_size(min),
             format_size(target_drive.size)
         ),
         Capacity::CompressedTooLarge(compressed) => bail!(
