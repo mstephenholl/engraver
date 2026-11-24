@@ -2,13 +2,14 @@
 //!
 //! Uses O_DIRECT for direct I/O and standard POSIX file operations.
 
+use crate::aligned::AlignedBuffer;
 use crate::{
     align_up, bytes_consumed_from_aligned_write, is_aligned, is_linux_partition_of, DeviceInfo,
     OpenOptions, PlatformError, PlatformOps, RawDevice, Result,
 };
 use std::fs::{File, OpenOptions as StdOpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+use std::os::unix::fs::{FileExt, FileTypeExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::process::Command;
@@ -58,42 +59,6 @@ pub struct LinuxDevice {
     info: DeviceInfo,
     /// Aligned buffer for direct I/O operations
     aligned_buffer: Option<AlignedBuffer>,
-}
-
-/// Aligned buffer for O_DIRECT operations
-struct AlignedBuffer {
-    data: Vec<u8>,
-    alignment: usize,
-}
-
-impl AlignedBuffer {
-    fn new(size: usize, alignment: usize) -> Self {
-        // Allocate with extra space for alignment
-        let total_size = size + alignment;
-        let data = vec![0u8; total_size];
-        Self { data, alignment }
-    }
-
-    /// Returns an aligned slice for reading.
-    ///
-    /// This is the immutable counterpart to [`Self::as_aligned_slice_mut`].
-    #[allow(dead_code)] // Provided for API completeness
-    fn as_aligned_slice(&self, len: usize) -> &[u8] {
-        let ptr = self.data.as_ptr();
-        let aligned_ptr = align_up(ptr as usize, self.alignment) as *const u8;
-        let offset = aligned_ptr as usize - ptr as usize;
-        &self.data[offset..offset + len]
-    }
-
-    fn as_aligned_slice_mut(&mut self, len: usize) -> &mut [u8] {
-        if self.data.len() < len + self.alignment {
-            self.data = vec![0u8; len + self.alignment];
-        }
-        let ptr = self.data.as_ptr();
-        let aligned_ptr = align_up(ptr as usize, self.alignment) as *mut u8;
-        let offset = aligned_ptr as usize - ptr as usize;
-        &mut self.data[offset..offset + len]
-    }
 }
 
 /// The `custom_flags` for opening a device
@@ -202,110 +167,41 @@ impl RawDevice for LinuxDevice {
     }
 
     fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<usize> {
-        // Seek to offset
+        self.check_offset(offset)?;
         self.file.seek(SeekFrom::Start(offset))?;
-
-        if self.info.direct_io {
-            // For O_DIRECT, we need aligned buffers and offsets
-            let block_size = self.info.block_size as usize;
-
-            if !is_aligned(offset as usize, block_size) {
-                return Err(PlatformError::AlignmentError(format!(
-                    "Offset {} is not aligned to block size {}",
-                    offset, block_size
-                )));
-            }
-
-            // If data is already aligned, write directly
-            if is_aligned(data.as_ptr() as usize, block_size) && is_aligned(data.len(), block_size)
-            {
-                return self.file.write(data).map_err(PlatformError::Io);
-            }
-
-            // Use aligned buffer
-            if let Some(ref mut buffer) = self.aligned_buffer {
-                let aligned_len = align_up(data.len(), block_size);
-                let aligned_slice = buffer.as_aligned_slice_mut(aligned_len);
-
-                // Copy data to aligned buffer
-                aligned_slice[..data.len()].copy_from_slice(data);
-                // Zero pad the rest
-                for byte in &mut aligned_slice[data.len()..aligned_len] {
-                    *byte = 0;
-                }
-
-                let written = self
-                    .file
-                    .write(&aligned_slice[..aligned_len])
-                    .map_err(PlatformError::Io)?;
-                Ok(bytes_consumed_from_aligned_write(written, data.len()))
-            } else {
-                // Fallback to regular write
-                self.file.write(data).map_err(PlatformError::Io)
-            }
-        } else {
-            self.file.write(data).map_err(PlatformError::Io)
-        }
+        self.write(data).map_err(PlatformError::Io)
     }
 
     fn read_at(&mut self, offset: u64, buffer: &mut [u8]) -> Result<usize> {
         self.file.seek(SeekFrom::Start(offset))?;
+        self.read(buffer).map_err(PlatformError::Io)
+    }
+}
 
-        if self.info.direct_io {
-            let block_size = self.info.block_size as usize;
-
-            if !is_aligned(offset as usize, block_size) {
-                return Err(PlatformError::AlignmentError(format!(
-                    "Offset {} is not aligned to block size {}",
-                    offset, block_size
-                )));
-            }
-
-            // If buffer is aligned, read directly
-            if is_aligned(buffer.as_ptr() as usize, block_size)
-                && is_aligned(buffer.len(), block_size)
-            {
-                return self.file.read(buffer).map_err(PlatformError::Io);
-            }
-
-            // Use aligned buffer
-            if let Some(ref mut aligned_buf) = self.aligned_buffer {
-                let aligned_len = align_up(buffer.len(), block_size);
-                let aligned_slice = aligned_buf.as_aligned_slice_mut(aligned_len);
-
-                let bytes_read = self.file.read(&mut aligned_slice[..aligned_len])?;
-                let copy_len = bytes_read.min(buffer.len());
-                buffer[..copy_len].copy_from_slice(&aligned_slice[..copy_len]);
-                Ok(copy_len)
-            } else {
-                self.file.read(buffer).map_err(PlatformError::Io)
-            }
-        } else {
-            self.file.read(buffer).map_err(PlatformError::Io)
+impl LinuxDevice {
+    fn check_offset(&self, offset: u64) -> Result<()> {
+        let block_size = self.info.block_size as usize;
+        if self.info.direct_io && !is_aligned(offset as usize, block_size) {
+            return Err(PlatformError::AlignmentError(format!(
+                "Offset {} is not aligned to block size {}",
+                offset, block_size
+            )));
         }
+        Ok(())
     }
 }
 
 impl Read for LinuxDevice {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.info.direct_io
-            && (!is_aligned(buf.len(), self.info.block_size as usize)
-                || !is_aligned(buf.as_ptr() as usize, self.info.block_size as usize))
-        {
-            let block_size = self.info.block_size as usize;
-            if let Some(ref mut aligned_buf) = self.aligned_buffer {
-                let aligned_len = align_up(buf.len(), block_size);
-                let aligned_slice = aligned_buf.as_aligned_slice_mut(aligned_len);
-                let bytes_read = self.file.read(&mut aligned_slice[..aligned_len])?;
-                let copy_len = bytes_read.min(buf.len());
-                buf[..copy_len].copy_from_slice(&aligned_slice[..copy_len]);
-                Ok(copy_len)
-            } else {
-                self.file.read(buf)
-            }
-        } else {
-            self.file.read(buf)
-        }
+        let Some(aligned_buf) = self.aligned_buffer.as_mut() else {
+            return self.file.read(buf);
+        };
+        let pos = self.file.stream_position()?;
+        let file = &self.file;
+        let read =
+            aligned_buf.read_through(pos, buf, |blocks, offset| file.read_at(blocks, offset))?;
+        self.file.seek(SeekFrom::Start(pos + read as u64))?;
+        Ok(read)
     }
 }
 
@@ -324,7 +220,12 @@ impl Write for LinuxDevice {
                     *byte = 0;
                 }
                 let written = self.file.write(&aligned_slice[..aligned_len])?;
-                Ok(bytes_consumed_from_aligned_write(written, buf.len()))
+                let consumed = bytes_consumed_from_aligned_write(written, buf.len());
+                if written > consumed {
+                    self.file
+                        .seek(SeekFrom::Current(consumed as i64 - written as i64))?;
+                }
+                Ok(consumed)
             } else {
                 self.file.write(buf)
             }
@@ -512,37 +413,6 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-
-    // -------------------------------------------------------------------------
-    // AlignedBuffer tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_aligned_buffer_creation() {
-        let buffer = AlignedBuffer::new(4096, 512);
-        assert!(buffer.data.len() >= 4096);
-    }
-
-    #[test]
-    fn test_aligned_buffer_slice() {
-        let buffer = AlignedBuffer::new(4096, 512);
-        let slice = buffer.as_aligned_slice(1024);
-        assert_eq!(slice.len(), 1024);
-        // Check alignment
-        assert!(is_aligned(slice.as_ptr() as usize, 512));
-    }
-
-    #[test]
-    fn test_aligned_buffer_mut_slice() {
-        let mut buffer = AlignedBuffer::new(4096, 512);
-        let slice = buffer.as_aligned_slice_mut(1024);
-        assert_eq!(slice.len(), 1024);
-        assert!(is_aligned(slice.as_ptr() as usize, 512));
-
-        // Should be writable
-        slice[0] = 42;
-        assert_eq!(slice[0], 42);
-    }
 
     // -------------------------------------------------------------------------
     // LinuxDevice tests with temp files
@@ -912,32 +782,6 @@ tmpfs /tmp tmpfs rw,nosuid 0 0
         let mut buffer = vec![];
         let n = device.read_at(0, &mut buffer).unwrap();
         assert_eq!(n, 0);
-    }
-
-    // -------------------------------------------------------------------------
-    // AlignedBuffer additional tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_aligned_buffer_various_alignments() {
-        for alignment in [512, 1024, 4096] {
-            let buffer = AlignedBuffer::new(alignment * 2, alignment);
-            let slice = buffer.as_aligned_slice(alignment);
-            assert!(is_aligned(slice.as_ptr() as usize, alignment));
-        }
-    }
-
-    #[test]
-    fn test_aligned_buffer_write_and_read() {
-        let mut buffer = AlignedBuffer::new(4096, 512);
-
-        // Write to aligned slice
-        let slice = buffer.as_aligned_slice_mut(100);
-        slice[0..5].copy_from_slice(b"hello");
-
-        // Read back
-        let slice = buffer.as_aligned_slice(100);
-        assert_eq!(&slice[0..5], b"hello");
     }
 
     // -------------------------------------------------------------------------
