@@ -22,12 +22,17 @@ use engraver_platform::{has_elevated_privileges, open_device, unmount_device, Op
 
 use super::{cancelled, confirm};
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum TestSize {
+    Exact(String),
+    Default(String),
+}
+
 /// Arguments for the benchmark command
 pub struct BenchmarkArgs {
     /// Target device path
     pub target: String,
-    /// Test size (e.g., "256M", "1G")
-    pub test_size: Option<String>,
+    pub test_size: TestSize,
     /// Block size (e.g., "4M")
     pub block_size: String,
     /// Data pattern: zeros, random, sequential
@@ -106,17 +111,19 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
         vec![]
     };
 
-    // Calculate test size
-    let base_test_size = if let Some(ref size_str) = args.test_size {
-        parse_size(size_str).map_err(|e| anyhow::anyhow!("{}", e))?
-    } else {
-        256 * 1024 * 1024 // 256 MB default
-    };
+    let test_size = resolve_test_size(
+        &args,
+        if is_multi_block {
+            &block_sizes
+        } else {
+            std::slice::from_ref(&block_size)
+        },
+    )?;
 
     // Step 4: Display configuration
     display_benchmark_info(
         target_drive,
-        base_test_size,
+        test_size,
         block_size,
         &pattern,
         args.passes,
@@ -158,7 +165,7 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
         run_multi_block_benchmark(
             &mut *device,
             &target_drive.path,
-            base_test_size,
+            test_size,
             &block_sizes,
             pattern,
             args.json,
@@ -169,7 +176,7 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
         run_single_benchmark(
             &mut *device,
             &target_drive.path,
-            base_test_size,
+            test_size,
             block_size,
             pattern,
             args.passes,
@@ -195,10 +202,20 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
     result
 }
 
+fn resolve_test_size(args: &BenchmarkArgs, block_sizes: &[u64]) -> Result<u64> {
+    match &args.test_size {
+        TestSize::Exact(size_str) => Ok(parse_size(size_str)?),
+        TestSize::Default(size_str) => {
+            let base = parse_size(size_str)?;
+            Ok(BenchmarkConfig::default_test_size(base, block_sizes))
+        }
+    }
+}
+
 /// Validate command arguments before any I/O
 fn validate_args(args: &BenchmarkArgs) -> Result<()> {
     // Check mutual exclusivity
-    if args.test_size.is_some() && args.test_block_sizes.is_some() {
+    if matches!(args.test_size, TestSize::Exact(_)) && args.test_block_sizes.is_some() {
         bail!(
             "Cannot use both --size and --test-block-sizes options.\n\
              Use --size for a single block size benchmark, or --test-block-sizes to test multiple block sizes."
@@ -206,11 +223,14 @@ fn validate_args(args: &BenchmarkArgs) -> Result<()> {
     }
 
     // Validate test size if provided
-    if let Some(ref size_str) = args.test_size {
+    if let TestSize::Exact(size_str) = &args.test_size {
         let size = parse_size(size_str).map_err(|e| anyhow::anyhow!("{}", e))?;
         if !is_power_of_two(size) {
             bail!("Test size must be a power of 2: {}", size_str);
         }
+    }
+    if let TestSize::Default(size_str) = &args.test_size {
+        parse_size(size_str).map_err(|e| anyhow::anyhow!("{}", e))?;
     }
 
     // Validate block size
@@ -223,6 +243,13 @@ fn validate_args(args: &BenchmarkArgs) -> Result<()> {
     }
     if block_size < 4 * 1024 {
         bail!("Block size cannot be less than 4 KB: {}", args.block_size);
+    }
+
+    if let TestSize::Exact(size_str) = &args.test_size {
+        let size = parse_size(size_str).map_err(|e| anyhow::anyhow!("{}", e))?;
+        BenchmarkConfig::new(size, block_size)
+            .validate()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
     }
 
     // Validate test block sizes if provided
@@ -314,15 +341,19 @@ fn display_benchmark_info(
     if is_multi_block {
         let sizes_display: Vec<String> = block_sizes.iter().map(|s| format_size(*s)).collect();
         println_if!(silent, "  Block sizes: {}", sizes_display.join(", "));
-        let effective_size =
-            BenchmarkConfig::effective_test_size_for_block_sizes(test_size, block_sizes);
         println_if!(
             silent,
             "  Test size: {} (per block size)",
-            format_size(effective_size)
+            format_size(test_size)
         );
     } else {
-        println_if!(silent, "  Test size: {}", format_size(test_size));
+        let per_pass = if passes > 1 { " per pass" } else { "" };
+        println_if!(
+            silent,
+            "  Test size: {}{}",
+            format_size(test_size),
+            per_pass
+        );
         println_if!(silent, "  Block size: {}", format_size(block_size));
     }
 
@@ -424,8 +455,7 @@ where
         passes,
     };
 
-    let effective_size = config.effective_test_size();
-    let total_bytes = effective_size * passes as u64;
+    let total_bytes = test_size * passes as u64;
 
     println_if!(silent, "\n{} Benchmarking...", style("▶").cyan());
 
@@ -480,7 +510,7 @@ where
 fn run_multi_block_benchmark<W>(
     device: &mut W,
     device_path: &str,
-    base_test_size: u64,
+    test_size: u64,
     block_sizes: &[u64],
     pattern: DataPattern,
     json: bool,
@@ -490,8 +520,6 @@ fn run_multi_block_benchmark<W>(
 where
     W: std::io::Write + std::io::Seek + ?Sized,
 {
-    let effective_size =
-        BenchmarkConfig::effective_test_size_for_block_sizes(base_test_size, block_sizes);
     let total_tests = block_sizes.len();
 
     println_if!(
@@ -518,7 +546,7 @@ where
         );
 
         let test_config = BenchmarkConfig {
-            test_size: effective_size,
+            test_size,
             block_size,
             pattern,
             passes: 1,
@@ -530,7 +558,7 @@ where
         let pb = if silent {
             ProgressBar::hidden()
         } else {
-            let pb = ProgressBar::new(effective_size);
+            let pb = ProgressBar::new(test_size);
             pb.set_style(get_progress_style(0));
             pb
         };
@@ -565,6 +593,7 @@ where
                 results.push(BlockSizeTestResult {
                     block_size,
                     block_size_display: format_size(block_size),
+                    bytes_written: bench_result.summary.total_bytes_written,
                     average_speed_bps: speed,
                     speed_display: engraver_core::benchmark::format_speed(speed),
                 });
@@ -649,6 +678,21 @@ fn output_human_readable(result: &BenchmarkResult, silent: bool) {
         "  Total Time:     {}",
         engraver_core::benchmark::format_duration(result.summary.total_elapsed)
     );
+    let passes = result.passes.len();
+    if passes > 1 {
+        println_if!(
+            silent,
+            "  Data Written:   {} passes x {}",
+            passes,
+            format_size(result.test_size)
+        );
+    } else {
+        println_if!(
+            silent,
+            "  Data Written:   {}",
+            format_size(result.summary.total_bytes_written)
+        );
+    }
     println_if!(silent);
     println_if!(silent, "{} Benchmark complete!", style("✓").green().bold());
 }
@@ -683,6 +727,14 @@ fn output_multi_block_human(results: &[BlockSizeTestResult], silent: bool) {
 
     println_if!(silent, "  └──────────────┴────────────────┘");
 
+    if let Some(first) = results.first() {
+        println_if!(
+            silent,
+            "  Data written per block size: {}",
+            format_size(first.bytes_written)
+        );
+    }
+
     if let Some(opt) = optimal {
         println_if!(silent);
         println_if!(
@@ -711,7 +763,7 @@ mod tests {
     fn test_benchmark_args_creation() {
         let args = BenchmarkArgs {
             target: "/dev/sdb".to_string(),
-            test_size: Some("256M".to_string()),
+            test_size: TestSize::Exact("256M".to_string()),
             block_size: "4M".to_string(),
             pattern: "zeros".to_string(),
             passes: 1,
@@ -723,7 +775,7 @@ mod tests {
         };
 
         assert_eq!(args.target, "/dev/sdb");
-        assert_eq!(args.test_size, Some("256M".to_string()));
+        assert_eq!(args.test_size, TestSize::Exact("256M".to_string()));
         assert_eq!(args.block_size, "4M");
         assert_eq!(args.pattern, "zeros");
         assert_eq!(args.passes, 1);
@@ -735,7 +787,7 @@ mod tests {
     fn test_json_and_silent_hide_status_lines() {
         let args = |json, silent| BenchmarkArgs {
             target: "/dev/sdb".to_string(),
-            test_size: None,
+            test_size: TestSize::Default("256M".to_string()),
             block_size: "4M".to_string(),
             pattern: "zeros".to_string(),
             passes: 1,
@@ -760,7 +812,7 @@ mod tests {
     fn test_validate_args_valid() {
         let args = BenchmarkArgs {
             target: "/dev/sdb".to_string(),
-            test_size: Some("256M".to_string()),
+            test_size: TestSize::Exact("256M".to_string()),
             block_size: "4M".to_string(),
             pattern: "zeros".to_string(),
             passes: 1,
@@ -778,7 +830,7 @@ mod tests {
     fn test_validate_args_mutual_exclusion() {
         let args = BenchmarkArgs {
             target: "/dev/sdb".to_string(),
-            test_size: Some("256M".to_string()),
+            test_size: TestSize::Exact("256M".to_string()),
             block_size: "4M".to_string(),
             pattern: "zeros".to_string(),
             passes: 1,
@@ -799,7 +851,7 @@ mod tests {
     fn test_validate_args_block_size_too_large() {
         let args = BenchmarkArgs {
             target: "/dev/sdb".to_string(),
-            test_size: None,
+            test_size: TestSize::Default("256M".to_string()),
             block_size: "128M".to_string(),
             pattern: "zeros".to_string(),
             passes: 1,
@@ -820,7 +872,7 @@ mod tests {
     fn test_validate_args_block_size_too_small() {
         let args = BenchmarkArgs {
             target: "/dev/sdb".to_string(),
-            test_size: None,
+            test_size: TestSize::Default("256M".to_string()),
             block_size: "1K".to_string(),
             pattern: "zeros".to_string(),
             passes: 1,
@@ -841,7 +893,7 @@ mod tests {
     fn test_validate_args_invalid_pattern() {
         let args = BenchmarkArgs {
             target: "/dev/sdb".to_string(),
-            test_size: None,
+            test_size: TestSize::Default("256M".to_string()),
             block_size: "4M".to_string(),
             pattern: "invalid_pattern".to_string(),
             passes: 1,
@@ -861,7 +913,7 @@ mod tests {
         for pattern in &["zeros", "random", "sequential", "seq", "zero"] {
             let args = BenchmarkArgs {
                 target: "/dev/sdb".to_string(),
-                test_size: None,
+                test_size: TestSize::Default("256M".to_string()),
                 block_size: "4M".to_string(),
                 pattern: pattern.to_string(),
                 passes: 1,
@@ -884,7 +936,7 @@ mod tests {
     fn test_validate_args_test_block_sizes() {
         let args = BenchmarkArgs {
             target: "/dev/sdb".to_string(),
-            test_size: None,
+            test_size: TestSize::Default("256M".to_string()),
             block_size: "4M".to_string(),
             pattern: "zeros".to_string(),
             passes: 1,
@@ -896,6 +948,79 @@ mod tests {
         };
 
         assert!(validate_args(&args).is_ok());
+    }
+
+    const MIB: u64 = 1024 * 1024;
+
+    fn size_args(test_size: TestSize, block_size: &str) -> BenchmarkArgs {
+        BenchmarkArgs {
+            target: "/dev/sdb".to_string(),
+            test_size,
+            block_size: block_size.to_string(),
+            pattern: "zeros".to_string(),
+            passes: 1,
+            json: false,
+            skip_confirm: true,
+            silent: false,
+            test_block_sizes: None,
+            cancel_flag: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    #[test]
+    fn test_resolve_test_size_writes_a_given_size_as_is() {
+        let args = size_args(TestSize::Exact("64M".to_string()), "32M");
+
+        assert_eq!(resolve_test_size(&args, &[32 * MIB]).unwrap(), 64 * MIB);
+    }
+
+    #[test]
+    fn test_resolve_test_size_default_is_ten_blocks_when_the_default_is_fewer() {
+        let args = size_args(TestSize::Default("256M".to_string()), "32M");
+
+        assert_eq!(resolve_test_size(&args, &[32 * MIB]).unwrap(), 320 * MIB);
+        assert_eq!(
+            resolve_test_size(&args, &[4 * 1024, 32 * MIB]).unwrap(),
+            320 * MIB
+        );
+    }
+
+    #[test]
+    fn test_resolve_test_size_default_is_kept_when_it_holds_ten_blocks() {
+        let args = size_args(TestSize::Default("256M".to_string()), "4M");
+
+        assert_eq!(resolve_test_size(&args, &[4 * MIB]).unwrap(), 256 * MIB);
+    }
+
+    #[test]
+    fn test_resolve_test_size_uses_the_configured_default() {
+        let args = size_args(TestSize::Default("512M".to_string()), "32M");
+
+        assert_eq!(resolve_test_size(&args, &[32 * MIB]).unwrap(), 512 * MIB);
+    }
+
+    #[test]
+    fn test_validate_args_refuses_a_size_smaller_than_one_block() {
+        let args = size_args(TestSize::Exact("4M".to_string()), "64M");
+
+        let err = validate_args(&args).unwrap_err().to_string();
+
+        assert!(err.contains("smaller than the block size"), "{err}");
+        assert!(err.contains("4 MB") && err.contains("64 MB"), "{err}");
+    }
+
+    #[test]
+    fn test_validate_args_accepts_a_size_of_exactly_one_block() {
+        let args = size_args(TestSize::Exact("64M".to_string()), "64M");
+
+        assert!(validate_args(&args).is_ok());
+    }
+
+    #[test]
+    fn test_validate_args_rejects_a_default_size_that_is_not_a_power_of_2() {
+        let args = size_args(TestSize::Default("100M".to_string()), "4M");
+
+        assert!(validate_args(&args).is_err());
     }
 
     // -------------------------------------------------------------------------
@@ -1102,6 +1227,74 @@ mod tests {
         .expect_err("a pending cancel must stop the benchmark");
 
         crate::commands::assert_cancelled(&err);
+    }
+
+    #[derive(Default)]
+    struct ExtentSink {
+        position: u64,
+        extent: u64,
+    }
+
+    impl std::io::Write for ExtentSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.position += buf.len() as u64;
+            self.extent = self.extent.max(self.position);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl std::io::Seek for ExtentSink {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            match pos {
+                std::io::SeekFrom::Start(offset) => self.position = offset,
+                _ => return Err(std::io::ErrorKind::Unsupported.into()),
+            }
+            Ok(self.position)
+        }
+    }
+
+    #[test]
+    fn test_single_benchmark_writes_exactly_the_given_size() {
+        let mut sink = ExtentSink::default();
+
+        run_single_benchmark(
+            &mut sink,
+            "/dev/test",
+            4 * TEST_BLOCK,
+            TEST_BLOCK,
+            DataPattern::Zeros,
+            1,
+            true,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(sink.extent, 4 * TEST_BLOCK);
+    }
+
+    #[test]
+    fn test_multi_block_benchmark_writes_the_given_size_for_every_block_size() {
+        let mut sink = ExtentSink::default();
+        let size = 10 * 32 * 1024 * 1024;
+
+        run_multi_block_benchmark(
+            &mut sink,
+            "/dev/test",
+            size,
+            &[TEST_BLOCK, 32 * 1024 * 1024],
+            DataPattern::Zeros,
+            true,
+            true,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(sink.extent, size);
     }
 
     #[test]

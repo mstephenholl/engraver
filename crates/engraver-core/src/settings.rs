@@ -132,7 +132,8 @@ pub struct BenchmarkSettings {
     /// Default block size for benchmarks (e.g., "4M", "1M", "64K")
     pub block_size: String,
 
-    /// Default test size (e.g., "256M", "512M", "1G")
+    /// Default test size (e.g., "256M", "512M", "1G"), raised to ten blocks
+    /// of the largest block size when smaller
     pub test_size: String,
 
     /// Default data pattern (zeros, random, sequential)

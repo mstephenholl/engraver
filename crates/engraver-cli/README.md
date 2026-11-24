@@ -138,7 +138,7 @@ engraver benchmark /dev/sdb -y
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--size` | Amount of data to write | `256M` |
+| `--size` | Amount of data to write per pass, exactly as given. Must hold at least one block | `256M`, raised to 10 blocks |
 | `--block-size` | Block size for writes | `32M` |
 | `--pattern` | Data pattern: `zeros`, `random`, `sequential` | `zeros` |
 | `--passes` | Number of benchmark passes | `1` |
