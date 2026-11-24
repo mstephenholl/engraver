@@ -10,6 +10,7 @@ keywords = ["gui", "imaging", "iso", "usb", "flash"]
 categories = ["gui", "filesystem"]
 readme = "README.md"
 description = "GUI for Engraver - create bootable USB drives from ISO images"
+publish = false
 
 # GUI binary will be added later
 # [[bin]]

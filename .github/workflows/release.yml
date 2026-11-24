@@ -246,14 +246,31 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Publish crates
+        shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          # Publish in dependency order
-          cargo publish -p engraver-detect --no-verify || true
-          sleep 30
-          cargo publish -p engraver-platform --no-verify || true
-          sleep 30
-          cargo publish -p engraver-core --no-verify || true
-          sleep 30
-          cargo publish -p engraver-cli --no-verify || true
+          # Publish what crates.io does not have yet, so that rerunning the job
+          # after a failure publishes the rest instead of failing on the crates
+          # that are already up.
+          packages=$(cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.publish == null) | "\(.name) \(.version)"')
+          publish=()
+          while read -r name version; do
+            status=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -A 'engraver-release (https://github.com/mstephenholl/engraver)' \
+              "https://crates.io/api/v1/crates/${name}/${version}")
+            case "$status" in
+              200) echo "${name} ${version} is already on crates.io" ;;
+              404) publish+=(-p "$name") ;;
+              *)
+                echo "::error::crates.io answered ${status} for ${name} ${version}"
+                exit 1
+                ;;
+            esac
+          done <<< "$packages"
+          if [[ ${#publish[@]} -eq 0 ]]; then
+            echo "Every crate is already on crates.io."
+            exit 0
+          fi
+          cargo publish "${publish[@]}"
