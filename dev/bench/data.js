@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795553938199,
+  "lastUpdate": 1795561204134,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -2157,6 +2157,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 77.61,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc4dd345f83cd1809c8c1a3dc1e41b21f0b1b49a",
+          "message": "fix(release): make the first release build, install and publish (#75)\n\n* ci(release): dry-run the release workflow on pull requests and dispatch\n\nThe workflow has never run. A manual dispatch ran every job, including the\nrelease job, and named the release after whatever ref was selected.\n\nOnly a tag push may release now. A pull request that touches the workflow\nor install.sh, and a manual dispatch, run the same build under the tag\nv0.0.0-dry-run and stop before the release job. Every archive name uses\nthat TAG instead of github.ref_name.\n\nThe release job's inputs are now built by two jobs of their own. check-crates\nruns cargo publish --workspace --dry-run, and package downloads the archives\ninto one folder, adds the SBOM and writes checksums.txt with bare file\nnames, so sha256sum -c works in a download folder. The release job signs\nevery file in that folder and uploads it.\n\nThe SBOM step asked cargo-sbom for the format cyclonedx-json. cargo-sbom\n0.10.0 rejects it and exits 2; it names the format cyclone_dx_json_1_6. Pin\nthat version and use that name, so the step runs.\n\nAt this commit the aarch64 build fails to link and check-crates fails on\npath dependencies without a version.\n\n* fix(release): build the aarch64 Linux archive on an arm64 runner\n\nThe aarch64-unknown-linux-gnu build ran on ubuntu-latest, an x86_64\nmachine, and had no linker configured for the target, so it could not\nlink. The step after it then ran the aarch64 binary on x86_64 to\ngenerate completions.\n\nBuild it on ubuntu-24.04-arm, where the target is the host. The\ncross-compilation step goes, and the binary can run to write its own\ncompletions and man pages.\n\n* test(release): install each archive through install.sh with sudo\n\nNothing has ever run install.sh against a built archive. The new\nscripts/test-install.sh serves the release files from a local mirror and\nruns install.sh against it, with an INSTALL_DIR and MAN_DIR that root\nowns, so install.sh has to copy through sudo. Case 1 expects a working\ninstall and a man page. Case 2 appends an empty gzip member to every\narchive, which still extracts the same files, and expects install.sh to\nrefuse it. Appending bytes to the archive would not do: GNU tar fails on\nany trailing garbage, so the old pipeline refused it by accident.\n\nThe test-install job runs the script on ubuntu-latest, ubuntu-24.04-arm\nand macos-latest against the files the package job built, and the release\njob waits for it.\n\ninstall.sh takes two new variables so the script can point it at the\nmirror: ENGRAVER_RELEASE_URL for where release files are downloaded from,\nand ENGRAVER_VERSION to skip the GitHub API lookup. Both are in --help.\n\nAt this commit case 1 fails on a runner where the copy goes through sudo\n(the chmod after it is not allowed on a root-owned file), and case 2\nfails because install.sh installs the corrupted archive. On a laptop\nwith a fake sudo only case 2 fails.\n\n* fix(install): leave the installed binary's mode to the archive\n\nWhen INSTALL_DIR is not writable, install.sh copies the binary with\nsudo cp, so the copy belongs to root. The chmod +x after it ran as the\nuser and failed with EPERM. With set -e that ended the script, and\ncompletions and man pages were never installed.\n\nThe chmod was never needed, because cp keeps the executable bit the\narchive gave the binary. Delete it.\n\npackaging/scripts/install.sh is a drifted copy of install.sh with the\nsame chmod. Nothing runs or links to it, so delete it too.\n\n* fix(install): verify the download against the release's checksums\n\ninstall.sh piped curl straight into tar and never looked at the\nchecksums.txt the release publishes, so a damaged or swapped archive was\nextracted and installed as it came. The test from the previous commit\nshows it: an archive with an empty gzip member appended extracts the same\nfiles, and install.sh installed it.\n\nDownload the archive and checksums.txt into the temp dir, take the hash\nfrom the line whose second field is the archive's name, and compare it\nwith the archive's SHA-256, from sha256sum or else shasum -a 256. A\nmissing entry, a missing hashing tool or a different hash ends the\nscript before anything is extracted. verify_checksum runs in the main\nshell, because error exits the shell it runs in and would only leave a\ncommand substitution.\n\n* refactor(cli): rename the package to engraver-cli\n\nThe CLI package was named engraver, and the engraver crate on crates.io\nbelongs to another project, so it could never be published and the\nREADME's cargo install engraver installed someone else's plotter. The\nengraver-cli, engraver-core, engraver-detect and engraver-platform names\nare free.\n\nRename the package to engraver-cli. The binary stays engraver, and so\ndoes the command's name in clap, so nothing a user types changes.\nCargo.lock follows, and every -p engraver in the workflows, install.sh,\nthe release script, the AUR and Homebrew source packages, CONTRIBUTING and\nthe device test's help becomes -p engraver-cli. The CLI README now says\ncargo install engraver-cli installs the engraver command.\n\n* fix(release): publish crates that package and stop hiding failures\n\nThe release job ran cargo publish --no-verify || true for each crate,\nwith sleeps between them, so every failure passed. Packaging would have\nfailed anyway: engraver-cli depends on the three library crates by path\nalone, and crates.io needs a version on every dependency. The release\nscript's sed lines look for engraver-x = { version = \"...\" and never\nmatched them. engraver-gui has no binary and is not for crates.io.\n\nGive the three path dependencies a version, written before the path so\nthe release script's sed lines match, and mark engraver-gui\npublish = false.\n\nThe publish step reads the publishable packages and their versions from\ncargo metadata and asks crates.io which of them it already has. It skips\nthose and publishes the rest with one cargo publish -p ... call, which\norders the crates and waits for the index between them. Rerunning the job\nafter a failure therefore finishes the work. A crates.io answer other\nthan 200 or 404 fails the job, and so does a failed publish.\n\nThe CARGO_REGISTRY_TOKEN secret still has to be added to the repository.\n\n* ci: check the README's checksum for install.sh\n\nREADME.md tells users to check install.sh against a SHA-256 it prints,\ncopied by hand, so it is wrong after any edit to the script. Today it\ngives 3d310d20... and the script hashes to something else.\n\nThe ShellCheck job now runs sha256sum on install.sh and fails with an\nerror on README.md unless the README contains that hash followed by two\nspaces and install.sh, the line sha256sum -c reads. The job runs when\nREADME.md changes as well as when the scripts do. It also lints\nscripts/*.sh now, which holds test-install.sh.\n\nThe README still has the old hash, so this check fails until the next\ncommit.\n\n* docs(readme): give install.sh's current checksum\n\nThe README gave 3d310d20... for install.sh, and the script no longer\nhashes to that. Anyone who followed \"Verify checksum\" got a failure from\nsha256sum -c on an unmodified download.\n\nGive the hash of the script as it is now, 36055664.... The ShellCheck job\nfails from now on when an edit to install.sh leaves this line behind.\n\n* test(release): indent install.sh's output without sed\n\nShellCheck on the CI runner flags echo \"$output\" | sed 's/^/    | /'\nas SC2001, and the ShellCheck job fails on it. Print each line with\nprintf in a read loop instead. The output is the same.\n\n* test(release): fail the install test unless install.sh must use sudo\n\nAt 6855728 the macOS leg passed \"install from a good archive\", although\ninstall.sh still ran chmod on the copy that sudo cp makes. A user can't\nchmod a file root owns, so install.sh must have found INSTALL_DIR\nwritable and copied without sudo: on that runner the directories that\nsudo mkdir made were still writable by the user.\n\nSet the owner, group and mode of both directories explicitly, and fail\nthe test, printing ls -ld, if the user can still write to either. The\ntest then covers the sudo path on every runner or says why it can't.",
+          "timestamp": "2026-11-24T17:54:35-05:00",
+          "tree_id": "7d2884d8c4560d090fbf966f53dfd0c5d5704e34",
+          "url": "https://github.com/mstephenholl/engraver/commit/dc4dd345f83cd1809c8c1a3dc1e41b21f0b1b49a"
+        },
+        "date": 1795561203555,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 89.26,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 88.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 87.53,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 88.95,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 88.02,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 17077.73,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 50824.49,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1395.23,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 88.33,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 7009.72,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 47620.09,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 488.15,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 30.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 6790.21,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 48336.05,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 481.99,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 30.16,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 43126.96,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 64898.34,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 10947.89,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 849.22,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 17101.29,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1961.45,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 121.43,
             "unit": "iter/sec"
           }
         ]
