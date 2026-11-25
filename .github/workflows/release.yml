@@ -137,6 +137,22 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # cargo publish --dry-run doesn't apply the limits crates.io checks on
+      # upload, so a crate can package here and still be refused at publish.
+      - name: Check the metadata crates.io requires
+        run: |
+          problems=$(cargo metadata --no-deps --format-version 1 | jq -r '
+            .packages[] | select(.publish == null) | . as $p |
+            (if (.keywords | length) > 5 then "has \(.keywords | length) keywords, and crates.io allows at most 5" else empty end),
+            (.keywords[] | select(test("^[A-Za-z0-9][A-Za-z0-9_+-]{0,19}$") | not) | "has the keyword \"\(.)\", which crates.io refuses"),
+            (if (.description // "") == "" then "has no description" else empty end),
+            (if (.license // "") == "" and (.license_file // "") == "" then "has no license" else empty end)
+            | "\($p.name) \(.)"')
+          if [[ -n "$problems" ]]; then
+            while IFS= read -r line; do echo "::error::$line"; done <<< "$problems"
+            exit 1
+          fi
+
       - name: Package every publishable crate
         run: cargo publish --workspace --dry-run
 
