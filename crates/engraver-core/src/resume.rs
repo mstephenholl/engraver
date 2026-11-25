@@ -392,6 +392,7 @@ impl CheckpointManager {
         &self,
         source_path: &str,
         target_path: &str,
+        _target_serial: Option<&str>,
     ) -> Result<Option<WriteCheckpoint>> {
         let key = format!("{}:{}", source_path, target_path);
         let hash = simple_hash(&key);
@@ -511,6 +512,10 @@ pub struct CheckpointValidation {
     pub messages: Vec<String>,
     /// Warnings that don't prevent resuming
     pub warnings: Vec<String>,
+    /// Is the checkpoint invalid because it belongs to a different drive, and
+    /// not because of a problem with the source? Such a checkpoint is still
+    /// good for the drive it was made for.
+    pub for_another_drive: bool,
 }
 
 impl CheckpointValidation {
@@ -520,6 +525,7 @@ impl CheckpointValidation {
             valid: true,
             messages: Vec::new(),
             warnings: Vec::new(),
+            for_another_drive: false,
         }
     }
 
@@ -529,6 +535,7 @@ impl CheckpointValidation {
             valid: false,
             messages: vec![message.into()],
             warnings: Vec::new(),
+            for_another_drive: false,
         }
     }
 
@@ -996,14 +1003,14 @@ mod tests {
 
         // Find it
         let found = manager
-            .find_checkpoint("/path/to/image.iso", "/dev/sdb")
+            .find_checkpoint("/path/to/image.iso", "/dev/sdb", None)
             .unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().source_path, "/path/to/image.iso");
 
         // Try to find non-existent
         let not_found = manager
-            .find_checkpoint("/different/path.iso", "/dev/sdc")
+            .find_checkpoint("/different/path.iso", "/dev/sdc", None)
             .unwrap();
         assert!(not_found.is_none());
     }

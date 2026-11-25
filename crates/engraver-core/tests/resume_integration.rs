@@ -479,7 +479,7 @@ fn find_checkpoint_keeps_a_checkpoint_it_cannot_load() {
     let path = mgr.checkpoint_path(&checkpoint);
     let before = read_file(&path);
 
-    let found = mgr.find_checkpoint(&checkpoint.source_path, &checkpoint.target_path);
+    let found = mgr.find_checkpoint(&checkpoint.source_path, &checkpoint.target_path, None);
 
     assert!(
         found.is_err(),

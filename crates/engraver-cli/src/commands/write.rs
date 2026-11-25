@@ -493,7 +493,11 @@ fn setup_checkpoint(
         if let Some(ref mgr) = checkpoint_manager {
             // A checkpoint that cannot be loaded is left on disk, so say so and
             // start fresh instead of resuming. The next save replaces it.
-            let found = match mgr.find_checkpoint(&args.source, &target_drive.path) {
+            let found = match mgr.find_checkpoint(
+                &args.source,
+                &target_drive.path,
+                target_drive.serial.as_deref(),
+            ) {
                 Ok(found) => found,
                 Err(e) => {
                     eprintln!(
