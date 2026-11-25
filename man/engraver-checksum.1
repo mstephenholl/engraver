@@ -17,7 +17,7 @@ Source image (local file or URL) to calculate the checksum for.
 \fB\-a\fR, \fB\-\-algorithm\fR \fI<ALGO>\fR [default: sha256]
 Checksum algorithm. Supported: sha256, sha512, md5, crc32.
 .TP
-\fB\-\-silent\fR
+\fB\-q\fR, \fB\-\-quiet\fR, \fB\-\-silent\fR
 Print only the hash.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -42,11 +42,11 @@ Calculate checksum of a remote image:
 .fi
 .PP
 Compare against a known checksum. The plain command prints more than the
-hash, so pass \fB\-\-silent\fR to print only the hash:
+hash, so pass \fB\-q\fR to print only the hash:
 .PP
 .nf
     expected="e3b0c44298fc1c149..."
-    actual=$(engraver checksum \-\-silent ubuntu.iso)
+    actual=$(engraver checksum \-q ubuntu.iso)
     [ "$expected" = "$actual" ] && echo "Match" || echo "MISMATCH"
 .fi
 .SH NOTES

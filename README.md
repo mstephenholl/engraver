@@ -76,7 +76,10 @@ engraver write ubuntu.iso /dev/sdb --verify
 # Skip confirmation prompt (for scripts)
 engraver write ubuntu.iso /dev/sdb -y
 
-# Silent mode (no output, implies -y)
+# Quiet mode (hides progress and status output, still asks for confirmation)
+engraver write ubuntu.iso /dev/sdb -q
+
+# Silent mode (like -q, and skips confirmation, so it implies -y)
 engraver write ubuntu.iso /dev/sdb --silent
 
 # Verify a device against an image
@@ -264,8 +267,11 @@ engraver list --json | jq -r '.[].path'
 # Non-interactive write (skip confirmation)
 engraver write ubuntu.iso /dev/sdb -y --verify
 
-# Silent mode (no output except errors, implies -y)
+# Silent mode (like -q, and skips confirmation, so it implies -y)
 engraver write ubuntu.iso /dev/sdb --silent --verify
+
+# Print only the checksum
+engraver checksum ubuntu.iso -q
 
 # JSON benchmark results for performance tracking
 engraver benchmark /dev/sdb --json --passes 3 -y
@@ -414,7 +420,7 @@ cloud_chunk_size = "4M"
 | `[checksum]` | `algorithm` | Default checksum algorithm | `"sha256"` |
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
 | `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
-| `[behavior]` | `quiet` | Suppress non-error output | `false` |
+| `[behavior]` | `quiet` | Hide progress and status output, like `-q` (`engraver list` and `engraver config` then print nothing) | `false` |
 | `[benchmark]` | `block_size` | Default block size for benchmarks | `"32M"` |
 | `[benchmark]` | `test_size` | Default test data size, raised to 10 blocks when smaller | `"256M"` |
 | `[benchmark]` | `pattern` | Default data pattern (`zeros`, `random`, `sequential`) | `"zeros"` |

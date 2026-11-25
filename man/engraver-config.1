@@ -60,7 +60,9 @@ Default block size, verify, checkpoint, retry settings, and read buffer size.
 Default algorithm and auto-detection settings.
 .TP
 \fB[behavior]\fR
-Confirmation prompts and quiet mode defaults.
+\fBskip_confirmation\fR answers yes to confirmation prompts, and \fBquiet\fR hides
+progress and status output like \fB\-q\fR. While \fBquiet\fR is on, \fBengraver config\fR
+and \fBengraver list\fR print nothing.
 .TP
 \fB[benchmark]\fR
 Default block size, test size, data pattern, passes, and JSON output.

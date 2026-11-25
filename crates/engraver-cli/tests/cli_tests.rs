@@ -1247,7 +1247,7 @@ verify = true
 algorithm = "sha512"
 
 [behavior]
-quiet = true
+skip_confirmation = true
 "#,
     )
     .unwrap();

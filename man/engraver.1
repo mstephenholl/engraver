@@ -4,7 +4,7 @@
 .SH NAME
 engraver \- A safe, fast tool for creating bootable USB drives, SD cards, and NVMe drives
 .SH SYNOPSIS
-\fBengraver\fR [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-\-config\-file\fR \fI<PATH>\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIcommand\fR>
+\fBengraver\fR [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-\-silent\fR] [\fB\-\-config\-file\fR \fI<PATH>\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIcommand\fR>
 .SH DESCRIPTION
 Engraver is a fast, safe command-line tool for writing disk images to USB drives,
 SD cards, and NVMe drives. It supports local files, HTTP/HTTPS URLs, and cloud
@@ -21,7 +21,15 @@ parallel verification can hash data during the write pass for fast integrity che
 Enable verbose output with additional diagnostic information.
 .TP
 \fB\-q\fR, \fB\-\-quiet\fR
-Suppress all output except errors.
+Hide progress and status output. Errors still print, and so do confirmation
+prompts, with the image and drive they ask about. \fBengraver checksum\fR still
+prints the hash, and \fBlist \-\-json\fR and \fBbenchmark \-\-json\fR still print
+their JSON, but \fBlist\fR and \fBconfig\fR print nothing otherwise. The
+\fBquiet\fR setting under \fB[behavior]\fR in the configuration file turns it on too.
+.TP
+\fB\-\-silent\fR
+Like \fB\-\-quiet\fR, and also skip every confirmation prompt (implying
+\fB\-\-yes\fR) and hide the messages that Ctrl+C prints.
 .TP
 \fB\-\-config\-file\fR \fI<PATH>\fR
 Use a custom configuration file instead of the default location.

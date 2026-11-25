@@ -69,6 +69,12 @@ engraver write ubuntu.iso /dev/sdb --verify
 # Skip confirmation prompt
 engraver write ubuntu.iso /dev/sdb --yes
 
+# Hide progress and status output, still ask for confirmation
+engraver write ubuntu.iso /dev/sdb -q
+
+# Like -q, and skip confirmation (implies --yes)
+engraver write ubuntu.iso /dev/sdb --silent
+
 # Write from URL
 engraver write https://releases.ubuntu.com/24.04/ubuntu.iso /dev/sdb
 
@@ -222,7 +228,7 @@ auto_detect = false   # Auto-detect .sha256/.md5 files
 
 [behavior]
 skip_confirmation = false
-quiet = false
+quiet = false         # Hide progress and status output, like -q
 ```
 
 Command-line arguments override configuration file settings.

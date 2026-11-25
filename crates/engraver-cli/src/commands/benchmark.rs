@@ -43,7 +43,7 @@ pub struct BenchmarkArgs {
     pub json: bool,
     /// Skip confirmation prompt
     pub skip_confirm: bool,
-    /// Silent mode (minimal output)
+    /// Hide status output (`-q`, `--silent`)
     pub silent: bool,
     /// Test multiple block sizes
     pub test_block_sizes: Option<String>,

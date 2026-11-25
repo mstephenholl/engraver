@@ -42,11 +42,11 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Suppress all output except errors
+    /// Hide progress and status output (errors and confirmation prompts still print)
     #[arg(short, long, global = true)]
     quiet: bool,
 
-    /// Suppress ALL output (implies --quiet and --yes)
+    /// Like --quiet, and also skip confirmation prompts and the Ctrl+C messages (implies --yes)
     #[arg(long, global = true)]
     silent: bool,
 
@@ -233,6 +233,49 @@ enum Commands {
     },
 }
 
+/// How much a run prints, from `--quiet`, `--silent` and `quiet` in the
+/// configuration file.
+///
+/// Three decisions hang on it, and `-q` makes only the first: hide the progress
+/// and status output, answer yes to every confirmation prompt, and hide the
+/// Ctrl+C messages. Each has a method, so a caller asks for the one it means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputMode {
+    /// Everything prints.
+    Normal,
+    /// `-q`, or `quiet = true` in the configuration file.
+    Quiet,
+    /// `--silent`.
+    Silent,
+}
+
+impl OutputMode {
+    fn new(cli: &Cli, settings: &Settings) -> Self {
+        if cli.silent {
+            Self::Silent
+        } else if cli.quiet || settings.behavior.quiet {
+            Self::Quiet
+        } else {
+            Self::Normal
+        }
+    }
+
+    /// Hide the logs, and the progress and status lines each command prints.
+    fn hides_status(self) -> bool {
+        self != Self::Normal
+    }
+
+    /// Answer yes to every confirmation prompt.
+    fn skips_confirmation(self) -> bool {
+        self == Self::Silent
+    }
+
+    /// Hide the messages that a Ctrl+C prints.
+    fn hides_cancel_notices(self) -> bool {
+        self == Self::Silent
+    }
+}
+
 fn main() {
     // Set up panic handler for nicer error messages
     std::panic::set_hook(Box::new(|panic_info| {
@@ -308,12 +351,13 @@ fn run() -> Result<()> {
         Err(e) => (Settings::default(), Some(e)),
     };
 
+    let output = OutputMode::new(&cli, &settings);
+
     // Initialize logging
-    // --silent implies --quiet (no logs at all, not even errors to tracing)
-    // Settings can also set quiet mode
+    // --quiet and --silent turn off logs entirely, not even errors to tracing
     let filter = if cli.verbose {
         EnvFilter::new("debug")
-    } else if cli.quiet || cli.silent || settings.behavior.quiet {
+    } else if output.hides_status() {
         EnvFilter::new("off")
     } else {
         EnvFilter::new("info")
@@ -338,8 +382,9 @@ fn run() -> Result<()> {
         tracing::warn!("{e}\nUsing default settings.");
     }
 
-    // --silent implies --yes (skip confirmations)
-    let silent = cli.silent;
+    // What each command's `silent` field means: hide its progress and status
+    // output. Confirmation prompts and Ctrl+C messages have their own switches.
+    let silent = output.hides_status();
 
     // Set up Ctrl+C handler (suppress messages in silent mode).
     //
@@ -349,17 +394,17 @@ fn run() -> Result<()> {
     // without an intermediate polling thread to invert the meaning.
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let c = cancel.clone();
-    let silent_for_handler = silent;
+    let hide_cancel_notices = output.hides_cancel_notices();
     ctrlc::set_handler(move || {
         if c.load(std::sync::atomic::Ordering::SeqCst) {
             // Second Ctrl+C — already cancelled once; force exit.
-            if !silent_for_handler {
+            if !hide_cancel_notices {
                 eprintln!("\n{}", style("Forced exit").red().bold());
             }
             std::process::exit(EXIT_CANCELLED);
         }
         c.store(true, std::sync::atomic::Ordering::SeqCst);
-        if !silent_for_handler {
+        if !hide_cancel_notices {
             eprintln!(
                 "\n{}",
                 style("Cancelling... Press Ctrl+C again to force exit").yellow()
@@ -392,7 +437,8 @@ fn run() -> Result<()> {
             // CLI flags || settings defaults
             let effective_verify = verify || settings.write.verify;
             let effective_checkpoint = checkpoint || resume || settings.write.checkpoint;
-            let effective_skip_confirm = yes || silent || settings.behavior.skip_confirmation;
+            let effective_skip_confirm =
+                yes || output.skips_confirmation() || settings.behavior.skip_confirmation;
             let effective_auto_checksum = auto_checksum || settings.checksum.auto_detect;
 
             commands::write::execute(commands::write::WriteArgs {
@@ -422,7 +468,8 @@ fn run() -> Result<()> {
         } => {
             let effective_block_size =
                 block_size.unwrap_or_else(|| settings.write.block_size.clone());
-            let effective_skip_confirm = yes || silent || settings.behavior.skip_confirmation;
+            let effective_skip_confirm =
+                yes || output.skips_confirmation() || settings.behavior.skip_confirmation;
 
             commands::erase::execute(commands::erase::EraseArgs {
                 target,
@@ -514,7 +561,8 @@ fn run() -> Result<()> {
             json,
             yes,
         } => {
-            let effective_skip_confirm = yes || silent || settings.behavior.skip_confirmation;
+            let effective_skip_confirm =
+                yes || output.skips_confirmation() || settings.behavior.skip_confirmation;
 
             // Apply settings as defaults when CLI options are not explicitly set
             let effective_block_size =
@@ -626,5 +674,53 @@ mod tests {
 
         assert_eq!(exit.code, 1);
         assert_eq!(exit.cancelled_line, None);
+    }
+
+    /// The mode a command line gets, with `quiet` as the configuration file sets it.
+    fn mode(args: &[&str], config_quiet: bool) -> OutputMode {
+        let cli = Cli::try_parse_from(args).unwrap();
+        let mut settings = Settings::default();
+        settings.behavior.quiet = config_quiet;
+        OutputMode::new(&cli, &settings)
+    }
+
+    #[test]
+    fn test_output_mode_without_a_flag_hides_nothing() {
+        let mode = mode(&["engraver", "list"], false);
+
+        assert_eq!(mode, OutputMode::Normal);
+        assert!(!mode.hides_status());
+        assert!(!mode.skips_confirmation());
+        assert!(!mode.hides_cancel_notices());
+    }
+
+    #[test]
+    fn test_output_mode_quiet_hides_status_but_still_asks_and_still_reports_a_cancel() {
+        // The flag is global, so it works on either side of the subcommand,
+        // and the configuration file turns on the same mode.
+        for mode in [
+            mode(&["engraver", "-q", "list"], false),
+            mode(&["engraver", "list", "--quiet"], false),
+            mode(&["engraver", "list"], true),
+        ] {
+            assert_eq!(mode, OutputMode::Quiet);
+            assert!(mode.hides_status());
+            assert!(!mode.skips_confirmation());
+            assert!(!mode.hides_cancel_notices());
+        }
+    }
+
+    #[test]
+    fn test_output_mode_silent_also_skips_confirmation_and_hides_cancel_notices() {
+        for mode in [
+            mode(&["engraver", "--silent", "list"], false),
+            mode(&["engraver", "-q", "--silent", "list"], false),
+            mode(&["engraver", "--silent", "list"], true),
+        ] {
+            assert_eq!(mode, OutputMode::Silent);
+            assert!(mode.hides_status());
+            assert!(mode.skips_confirmation());
+            assert!(mode.hides_cancel_notices());
+        }
     }
 }
