@@ -16,7 +16,7 @@
 use engraver_core::resume::TargetIdentity;
 use engraver_core::{
     compute_local_header_hash, validate_checkpoint, CheckpointManager, SourceInfo, SourceType,
-    WriteCheckpoint, WriteConfig, Writer,
+    WriteCheckpoint, WriteConfig, Writer, CHECKPOINT_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -271,46 +271,222 @@ fn resume_blocked_when_source_replaced_with_different_image() {
 }
 
 // =============================================================================
-// 4. Target-size mismatch is a warning, not an error
+// 4. A resume must be for the drive the checkpoint was made for
 // =============================================================================
 
-#[test]
-fn target_size_mismatch_warns_but_does_not_block_resume() {
-    let dir = TempDir::new().unwrap();
-    let source_path = dir.path().join("source.iso");
+/// A drive with a serial and a model, as the platform layer reports one.
+fn drive(size: u64, serial: Option<&str>, model: Option<&str>) -> TargetIdentity {
+    TargetIdentity {
+        size,
+        serial: serial.map(str::to_string),
+        model: model.map(str::to_string),
+    }
+}
 
+/// A checkpoint made for `made_for`, and the source it was made from.
+fn checkpoint_for(dir: &TempDir, made_for: &TargetIdentity) -> (WriteCheckpoint, SourceInfo) {
+    let source_path = dir.path().join("source.iso");
     let size = 128 * 1024;
     write_file(&source_path, &image_bytes(size, 0xCC));
 
     let info = local_source_info_with_hash(&source_path, size as u64);
-    let checkpoint = WriteCheckpoint::new(
+    let checkpoint = WriteCheckpoint::new(&info, "/dev/imaginary", made_for, &WriteConfig::new());
+    (checkpoint, info)
+}
+
+#[test]
+fn target_size_mismatch_invalidates_checkpoint() {
+    let dir = TempDir::new().unwrap();
+    let four_gb = 4 * 1024 * 1024 * 1024;
+    let eight_gb = 8 * 1024 * 1024 * 1024;
+    let (checkpoint, info) = checkpoint_for(&dir, &target(four_gb));
+
+    // A different stick shows up at the same path. Resuming would write the
+    // tail of the image onto it and leave its first part never written.
+    let validation = validate_checkpoint(&checkpoint, &info, &target(eight_gb));
+
+    assert!(
+        !validation.valid,
+        "a drive of another size must not be resumed onto"
+    );
+    let message = validation.messages.join("\n");
+    assert!(
+        message.contains("size")
+            && message.contains("4294967296")
+            && message.contains("8589934592"),
+        "message should name the size and both values: {message}"
+    );
+}
+
+#[test]
+fn target_serial_mismatch_invalidates_checkpoint() {
+    let dir = TempDir::new().unwrap();
+    let size = 4 * 1024 * 1024 * 1024;
+    let (checkpoint, info) = checkpoint_for(&dir, &drive(size, Some("SER-AAAA"), Some("Flash")));
+
+    // Same size, same model, same path, another physical stick.
+    let validation = validate_checkpoint(
+        &checkpoint,
         &info,
-        "/dev/imaginary",
-        &target(4 * 1024 * 1024 * 1024), // original target was 4 GB
-        &WriteConfig::new(),
+        &drive(size, Some("SER-BBBB"), Some("Flash")),
     );
 
-    // The user re-runs against a target whose size has changed (e.g.
-    // they switched USB sticks). validate_checkpoint should warn but
-    // permit the resume — only path / size / hash / etag mismatches
-    // are fatal.
-    let validation = validate_checkpoint(&checkpoint, &info, &target(8 * 1024 * 1024 * 1024));
     assert!(
-        validation.valid,
-        "target size mismatch must NOT invalidate the checkpoint"
+        !validation.valid,
+        "a drive with another serial must not be resumed onto"
     );
+    let message = validation.messages.join("\n");
     assert!(
-        !validation.warnings.is_empty(),
-        "but it should produce a warning"
+        message.contains("SER-AAAA") && message.contains("SER-BBBB"),
+        "message should name both serials: {message}"
     );
+}
+
+#[test]
+fn target_model_mismatch_invalidates_checkpoint() {
+    let dir = TempDir::new().unwrap();
+    let size = 4 * 1024 * 1024 * 1024;
+    let (checkpoint, info) = checkpoint_for(&dir, &drive(size, None, Some("Cruzer Blade")));
+
+    let validation = validate_checkpoint(&checkpoint, &info, &drive(size, None, Some("Ultra Fit")));
+
     assert!(
-        validation
-            .warnings
-            .iter()
-            .any(|w| w.contains("Target size") || w.contains("target size")),
-        "warning should mention target size: {:?}",
+        !validation.valid,
+        "a drive of another model must not be resumed onto"
+    );
+    let message = validation.messages.join("\n");
+    assert!(
+        message.contains("Cruzer Blade") && message.contains("Ultra Fit"),
+        "message should name both models: {message}"
+    );
+}
+
+#[test]
+fn unknown_serial_resumes_with_a_warning() {
+    let dir = TempDir::new().unwrap();
+    let size = 4 * 1024 * 1024 * 1024;
+
+    // A checkpoint written by 0.1.x has no serial, and a platform may
+    // report none for a drive. Either way the drive cannot be confirmed.
+    let cases = [
+        (
+            drive(size, None, Some("Flash")),
+            drive(size, Some("SER-BBBB"), Some("Flash")),
+        ),
+        (
+            drive(size, Some("SER-AAAA"), Some("Flash")),
+            drive(size, None, Some("Flash")),
+        ),
+        (
+            drive(size, None, Some("Flash")),
+            drive(size, None, Some("Flash")),
+        ),
+    ];
+    for (made_for, now) in cases {
+        let (checkpoint, info) = checkpoint_for(&dir, &made_for);
+
+        let validation = validate_checkpoint(&checkpoint, &info, &now);
+
+        assert!(
+            validation.valid,
+            "an unknown serial must not block resume ({made_for:?} -> {now:?}): {:?}",
+            validation.messages
+        );
+        assert!(
+            validation.warnings.iter().any(|w| w.contains("serial")),
+            "an unconfirmed drive should produce a serial warning ({made_for:?} -> {now:?}): {:?}",
+            validation.warnings
+        );
+    }
+}
+
+#[test]
+fn same_drive_resumes_without_a_warning() {
+    let dir = TempDir::new().unwrap();
+    let size = 4 * 1024 * 1024 * 1024;
+    let stick = drive(size, Some("SER-AAAA"), Some("Flash"));
+    let (checkpoint, info) = checkpoint_for(&dir, &stick);
+
+    let validation = validate_checkpoint(&checkpoint, &info, &stick);
+
+    assert!(validation.valid, "{:?}", validation.messages);
+    assert!(
+        validation.warnings.is_empty(),
+        "a confirmed drive needs no warning: {:?}",
         validation.warnings
     );
+}
+
+#[test]
+fn checkpoint_json_without_identity_fields_still_loads() {
+    // Checkpoints written by 0.1.x have no target_serial or target_model.
+    // They must still load, with both unknown.
+    let dir = TempDir::new().unwrap();
+    let (checkpoint, _) = checkpoint_for(&dir, &drive(1024, Some("SER-AAAA"), Some("Flash")));
+
+    let mut json = serde_json::to_value(&checkpoint).unwrap();
+    let fields = json.as_object_mut().unwrap();
+    assert!(fields.remove("target_serial").is_some());
+    assert!(fields.remove("target_model").is_some());
+    let path = dir.path().join("old.checkpoint");
+    std::fs::write(&path, serde_json::to_vec_pretty(&json).unwrap()).unwrap();
+
+    let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
+    let loaded = mgr.load_from_path(&path).unwrap();
+
+    assert_eq!(loaded.target_serial, None);
+    assert_eq!(loaded.target_model, None);
+    assert_eq!(loaded.target_size, 1024);
+    assert_eq!(loaded.target_path, "/dev/imaginary");
+}
+
+// =============================================================================
+// 4b. Saving and finding checkpoints must not hide a failure
+// =============================================================================
+
+#[cfg(target_os = "linux")]
+#[test]
+fn save_fails_when_the_checkpoint_cannot_reach_disk() {
+    let dir = TempDir::new().unwrap();
+    let (checkpoint, _) = checkpoint_for(&dir, &target(1024));
+    let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
+
+    // Point the temp file at /dev/full: it opens, and every write to it fails
+    // with ENOSPC, like a full disk.
+    let final_path = mgr.checkpoint_path(&checkpoint);
+    std::os::unix::fs::symlink("/dev/full", final_path.with_extension("tmp")).unwrap();
+
+    let result = mgr.save(&checkpoint);
+
+    assert!(
+        result.is_err(),
+        "save must report that the checkpoint was not written"
+    );
+    assert!(
+        !final_path.exists(),
+        "a checkpoint that was not written must not be put in place"
+    );
+}
+
+#[test]
+fn find_checkpoint_keeps_a_checkpoint_it_cannot_load() {
+    let dir = TempDir::new().unwrap();
+    let (mut checkpoint, _) = checkpoint_for(&dir, &target(1024));
+    // As if a newer engraver wrote it.
+    checkpoint.version = CHECKPOINT_VERSION + 1;
+    let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
+    mgr.save(&checkpoint).unwrap();
+    let path = mgr.checkpoint_path(&checkpoint);
+    let before = read_file(&path);
+
+    let found = mgr.find_checkpoint(&checkpoint.source_path, &checkpoint.target_path);
+
+    assert!(
+        found.is_err(),
+        "an unloadable checkpoint should come back as an error, not as no checkpoint"
+    );
+    assert!(path.exists(), "find_checkpoint must not delete the file");
+    assert_eq!(read_file(&path), before, "or change it");
 }
 
 // =============================================================================
