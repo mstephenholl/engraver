@@ -9,7 +9,9 @@
 # install.sh has to copy through sudo.
 #
 # Case 1 installs the archive as built and expects a working install.
-# Case 2 changes every archive without changing what it extracts, and expects
+# Case 2 runs --no-sudo with a man page directory only root can write to, and
+# expects install.sh not to claim the man pages it could not install.
+# Case 3 changes every archive without changing what it extracts, and expects
 # install.sh to refuse it.
 #
 # Environment:
@@ -46,9 +48,11 @@ trap cleanup EXIT
 mirror="$work/mirror"
 install_dir="$work/prefix/bin"
 man_dir="$work/prefix/share/man/man1"
+no_sudo_bin="$work/no-sudo/bin"
+no_sudo_man_dir="$work/prefix/share/no-sudo-man/man1"
 home="$work/home"
 
-mkdir -p "$mirror/$TAG" "$home"
+mkdir -p "$mirror/$TAG" "$home" "$no_sudo_bin"
 cp "$dist"/* "$mirror/$TAG/"
 if ! compgen -G "$mirror/$TAG/*.tar.gz" >/dev/null; then
     echo "No .tar.gz archive in $dist" >&2
@@ -72,21 +76,24 @@ if [[ "$ready" != true ]]; then
     exit 2
 fi
 
-# Only root can write to either directory, so install.sh has to copy through sudo.
-sudo mkdir -p "$install_dir" "$man_dir"
+# Only root can write to these directories, so install.sh has to copy through sudo.
+sudo mkdir -p "$install_dir" "$man_dir" "$no_sudo_man_dir"
 sudo chown -R 0:0 "$work/prefix"
 sudo chmod -R 755 "$work/prefix"
-if [[ -w "$install_dir" || -w "$man_dir" ]]; then
+if [[ -w "$install_dir" || -w "$man_dir" || -w "$no_sudo_man_dir" ]]; then
     echo "This user can still write to the install directories, so the sudo path would go untested:" >&2
-    ls -ld "$install_dir" "$man_dir" >&2
+    ls -ld "$install_dir" "$man_dir" "$no_sudo_man_dir" >&2
     exit 2
 fi
 
+# run_install <install-dir> <man-dir> [install.sh option]...
 # HOME is a throwaway so install.sh cannot add completions to the real one.
 run_install() {
-    INSTALL_DIR="$install_dir" MAN_DIR="$man_dir" HOME="$home" \
+    local bin="$1" man="$2"
+    shift 2
+    INSTALL_DIR="$bin" MAN_DIR="$man" HOME="$home" \
         ENGRAVER_RELEASE_URL="http://127.0.0.1:$PORT" ENGRAVER_VERSION="${TAG#v}" \
-        bash "$repo/install.sh"
+        bash "$repo/install.sh" "$@"
 }
 
 failures=0
@@ -109,7 +116,7 @@ verdict() {
 
 # Case 1: the archive as built
 status=0
-output="$(run_install 2>&1)" || status=$?
+output="$(run_install "$install_dir" "$man_dir" 2>&1)" || status=$?
 problems=""
 if [[ "$status" -ne 0 ]]; then
     problems+="    install.sh exited with status $status"$'\n'
@@ -122,14 +129,31 @@ if [[ ! -e "$man_dir/engraver.1" ]]; then
 fi
 verdict "install from a good archive" "$problems" "$output"
 
-# Case 2: a corrupted archive. An empty gzip member at the end changes the
+# Case 2: --no-sudo, so the man pages can't go into a directory only root can
+# write to. install.sh must still install the binary and must not say it
+# installed the man pages.
+status=0
+output="$(run_install "$no_sudo_bin" "$no_sudo_man_dir" --no-sudo 2>&1)" || status=$?
+problems=""
+if [[ "$status" -ne 0 ]]; then
+    problems+="    install.sh exited with status $status"$'\n'
+fi
+if ! "$no_sudo_bin/engraver" --version >/dev/null 2>&1; then
+    problems+="    $no_sudo_bin/engraver --version does not run"$'\n'
+fi
+if grep -qE 'Install(ed|ing) man pages' <<<"$output"; then
+    problems+="    install.sh said it installed the man pages, but $no_sudo_man_dir is not writable"$'\n'
+fi
+verdict "say what --no-sudo skipped" "$problems" "$output"
+
+# Case 3: a corrupted archive. An empty gzip member at the end changes the
 # file but not what gzip and tar extract from it, so only the checksum can tell.
 sudo rm -f "$install_dir/engraver"
 for archive in "$mirror/$TAG"/*.tar.gz; do
     gzip -n </dev/null >>"$archive"
 done
 status=0
-output="$(run_install 2>&1)" || status=$?
+output="$(run_install "$install_dir" "$man_dir" 2>&1)" || status=$?
 problems=""
 if [[ "$status" -eq 0 ]]; then
     problems+="    install.sh accepted the archive and exited 0"$'\n'
