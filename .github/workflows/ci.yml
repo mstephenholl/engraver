@@ -152,7 +152,7 @@ jobs:
     uses: ./.github/workflows/_test.yml
     with:
       test-type: Unit
-      test-command: cargo test --locked --lib --all-features
+      test-command: cargo test --locked --lib --bins --all-features
 
   test-integration:
     name: Integration Tests

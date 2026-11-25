@@ -68,7 +68,7 @@ jobs:
     uses: ./.github/workflows/_test.yml
     with:
       test-type: Unit
-      test-command: cargo test --lib --all-features
+      test-command: cargo test --lib --bins --all-features
       toolchain: nightly
       cache-suffix: -nightly
       os-matrix: ${{ github.event.inputs.full-matrix == 'true' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]' }}
@@ -178,7 +178,7 @@ jobs:
     uses: ./.github/workflows/_test.yml
     with:
       test-type: Unit
-      test-command: cargo test --lib --all-features
+      test-command: cargo test --lib --bins --all-features
       toolchain: beta
       cache-suffix: -beta
       os-matrix: '["ubuntu-latest"]'
