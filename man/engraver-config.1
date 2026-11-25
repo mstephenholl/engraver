@@ -28,14 +28,29 @@ Print help information.
 .SH CONFIGURATION FILE
 The configuration file is located at:
 .TP
-\fBLinux/macOS:\fR
-~/.config/engraver/engraver_config.toml
+\fBLinux:\fR
+~/.config/engraver/engraver_config.toml, or
+.br
+\%$XDG_CONFIG_HOME/engraver/engraver_config.toml if \fB\%XDG_CONFIG_HOME\fR is set
+.TP
+\fBmacOS:\fR
+~/Library/Application Support/engraver/engraver_config.toml
 .TP
 \fBWindows:\fR
 %APPDATA%\\engraver\\engraver_config.toml
 .PP
+\fBengraver config \-\-path\fR prints the path Engraver uses.
 A custom configuration file can be specified with the \fB\-\-config\-file\fR
 global option.
+.PP
+Engraver finds the default file from \fBHOME\fR.
+\fBsudo\fR usually sets \fBHOME\fR to root's home directory, so
+\fBsudo engraver\fR reads root's configuration file, not yours.
+To use your file under \fBsudo\fR, pass its path:
+.PP
+.nf
+    sudo engraver \-\-config\-file "$(engraver config \-\-path)" write image.iso /dev/sdb
+.fi
 .SS Sections
 .TP
 \fB[write]\fR

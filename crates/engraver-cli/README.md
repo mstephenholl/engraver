@@ -198,7 +198,17 @@ engraver mangen --out-dir ./man
 
 ## Configuration File
 
-Engraver supports a configuration file at `~/.config/engraver/engraver_config.toml` (Linux/macOS) or `%APPDATA%\engraver\engraver_config.toml` (Windows).
+Engraver reads a configuration file from:
+
+- Linux: `~/.config/engraver/engraver_config.toml`, or `$XDG_CONFIG_HOME/engraver/engraver_config.toml` if you set `XDG_CONFIG_HOME`
+- macOS: `~/Library/Application Support/engraver/engraver_config.toml`
+- Windows: `%APPDATA%\engraver\engraver_config.toml`
+
+`engraver config --path` prints the path Engraver uses. `sudo` usually sets `HOME` to root's home directory, so `sudo engraver` reads root's file, not yours. To use your file under `sudo`, pass its path:
+
+```bash
+sudo engraver --config-file "$(engraver config --path)" write ubuntu.iso /dev/sdb
+```
 
 ```toml
 [write]

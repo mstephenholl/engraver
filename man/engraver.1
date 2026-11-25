@@ -85,7 +85,13 @@ Benchmark a drive to find the optimal block size:
 .SH FILES
 .TP
 \fB~/.config/engraver/engraver_config.toml\fR
-Configuration file (Linux/macOS). See \fBengraver\-config\fR(1).
+Configuration file on Linux, or
+.br
+\fB\%$XDG_CONFIG_HOME/engraver/engraver_config.toml\fR if \fB\%XDG_CONFIG_HOME\fR is set.
+See \fBengraver\-config\fR(1).
+.TP
+\fB~/Library/Application Support/engraver/engraver_config.toml\fR
+Configuration file on macOS.
 .TP
 \fB~/.local/state/engraver/checkpoints/\fR
 Checkpoint files for resume support (Linux/macOS).
