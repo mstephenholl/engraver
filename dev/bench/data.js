@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795631736411,
+  "lastUpdate": 1795636447604,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -2589,6 +2589,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 111.99,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a5bb66ce2c0e4abf85c3b9f3d8f7a7d4a3cbbd06",
+          "message": "docs: make the docs and man pages match the binary, and run the CLI's unit tests everywhere (#80)\n\n* ci: run the CLI's unit tests on every runner and in the pre-commit hook\n\nengraver-cli is a binary crate, so `cargo test --lib` never builds its\nunit tests: the commands/* tests, including the setup_checkpoint tests in\nwrite.rs, did not run in the Unit Tests matrix (Linux x86_64, Linux arm64,\nmacOS, Windows) or in the pre-commit hook. Only Code Coverage ran them,\nand only on Linux. Locally that is 164 tests on top of the 564 that\n`--lib` runs.\n\nAdd `--bins` to every unit-test command that used `--lib`:\n- ci.yml: the Unit Tests matrix\n- _build.yml: the musl build's test step\n- nightly.yml: the nightly and beta unit-test runs\n- .cargo-husky/hooks/pre-commit, the versioned source of the hook\n\nThe tests have never run on macOS or Windows. `cargo clippy -p\nengraver-cli --all-targets --all-features` compiles them for\nx86_64-pc-windows-msvc and aarch64-apple-darwin with no warning in the\nCLI crate. Whether they pass there is for CI to say.\n\n* ci(release): ship the curated man pages, stamped with the release version\n\nThe release workflow ran `engraver mangen --out-dir man` before the\narchive steps, which overwrote the checked-in man/*.1 with clap's\ngenerated stubs. Every archive therefore carried the 256-line stubs, not\nthe 647 lines of curated pages, and install.sh put those on the user's\nsystem. mangen produces the same eight files the curated set has, so\nnothing is missing from man/.\n\nThe curated pages' .TH lines name the version they were last edited for\n(\"engraver 0.1.0\" today, while the release is 0.1.1), so replace that\nversion with the one the release is built for.\n\n- Remove the \"Generate man pages\" step.\n- Add a bash step before both archive steps that sets the version from\n  TAG (without the leading v) in each man/*.1 .TH line, and fails the job\n  when a page does not carry it afterwards. It uses `sed -i.bak`, which GNU\n  and BSD sed both take, and bash runs on the Windows runner too, so the\n  one step feeds the tar.gz and the zip.\n\nThe mangen subcommand stays in the CLI. scripts/test-install.sh still\nfinds man/engraver.1 in the archive.\n\n* fix(cli): tell the user when a finished write leaves its checkpoint behind\n\nAfter a successful write, execute() removes the write's checkpoint. When\nthat failed, it only logged `tracing::warn!`, and `-q` turns logging off,\nso the user never learned a stale checkpoint was still on disk. A later\n`--resume` of the same image and drive can find it and offer to continue a\nwrite that already finished.\n\nPrint the warning with `eprintln!`, as warn_checkpoint_not_saved does, so\nit shows with `-q` and `--silent` too. It names the checkpoint file\n(CheckpointManager::checkpoint_path), gives the error, and says to delete\nthe file because a later `--resume` may offer to continue a finished write.\n\nNo test covers this: reaching the line takes a completed write to a real\ndevice and a checkpoint file that then refuses removal, and the tests do\nnot write to a device. The message was rendered once from a throwaway test\n(since removed) and the hook passes.\n\n* docs(readme): say the pre-built binaries leave cloud storage out\n\nThe release builds `cargo build --release -p engraver-cli` with default\nfeatures, which are only `partition-info`. The install script downloads\nthat binary, and its source fallback builds the same way. A default build\ntreats `s3://bucket/key` as a local path:\n\n    $ engraver checksum s3://bucket/key\n    Source: s3://bucket/key\n    Error: Failed to validate source: s3://bucket/key\n\nPoint users at `cargo install engraver-cli --features cloud`, which\nbuilds 0.1.1 from crates.io.\n\n* docs(cloud): write Azure sources as azure://account/container/blob\n\nThe source parser accepts only `azure://account/container/blob`\n(crates/engraver-core/src/source.rs, `detect_source_type` and\n`parse_azure_uri`). An `az://` source is read as a local path, even in a\nbuild with the `cloud` feature:\n\n    $ engraver checksum az://my-container/images/debian.iso\n    Error: Failed to validate source: az://my-container/images/debian.iso\n      Caused by: Source not found: az://my-container/images/debian.iso\n\nFix the README example and both places in engraver-write(1).\n\n* docs(config): give the config file path per platform, and how to use it under sudo\n\n`Settings::config_path` is `dirs_next::config_dir()` (dirs-next 2.0.0)\njoined with `engraver/engraver_config.toml`. That is\n`$XDG_CONFIG_HOME` or `~/.config` on Linux,\n`~/Library/Application Support` on macOS, and `%APPDATA%` on Windows.\nThe docs gave `~/.config` for macOS.\n\nThe path follows `HOME`, so `sudo` reading root's file loses the user's\nsettings. `--config-file` is global and read before every command:\n\n    $ engraver config --path\n    /home/<user>/.config/engraver/engraver_config.toml\n    $ env -u XDG_CONFIG_HOME HOME=/root engraver config --path\n    /root/.config/engraver/engraver_config.toml\n\nWith a user config that sets `algorithm = \"md5\"`, `checksum --silent`\nprints the MD5 hash. With `HOME` reset it prints SHA-256. With\n`--config-file \"$(engraver config --path)\"` it prints MD5 again.\n\nFix README.md, the CLI README, docs/quickstart.md, engraver(1),\nengraver-config(1) and the settings.rs module doc.\n\n* docs(exit-codes): say a bad option value exits 1, and add EXIT STATUS to engraver(1)\n\nThe README tables already list 0, 1, 2 and 130, which is every code the\nCLI uses: `main` exits with `exit_for` (1, or 130 when the chain holds\n`Error::Cancelled`), the second-Ctrl+C handler exits 130, and clap exits\n2 on a parse error. They miss one boundary. Only clap's own parse errors\nexit 2. A value Engraver checks itself exits 1:\n\n    $ engraver --bogus            -> exit 2\n    $ engraver checksum           -> exit 2\n    $ engraver completions nope   -> exit 2\n    $ engraver checksum --algorithm nope x\n    Error: Invalid algorithm: nope\n                                  -> exit 1\n    $ engraver checksum /nonexistent/file\n    Error: Failed to validate source: /nonexistent/file\n                                  -> exit 1\n\nThe man pages had no exit status. Add an EXIT STATUS section to\nengraver(1) with the same four codes.\n\n* docs(readme): fix the run-CLI and fuzz commands in Development\n\n`.cargo/config.toml` defines `r = \"run -p engraver-cli --\"`, so\n`cargo r -- list` passes `-- list` to the binary:\n\n    $ cargo r -- list\n    error: unexpected argument 'list' found\n      tip: subcommand 'list' exists; to use it, remove the '--' before it\n    (exit 2)\n    $ cargo r list\n    Found 1 drive(s): ...  (exit 0)\n\nThere is no `fuzz_writer` target, and `cargo fuzz run` has no `-p` flag\n(`error: unexpected argument '-p' found`). The targets live in\ncrates/engraver-core/fuzz/fuzz_targets/. From the repo root,\n`cargo fuzz list --fuzz-dir crates/engraver-core/fuzz` lists them, and\n`cargo +nightly fuzz run --fuzz-dir crates/engraver-core/fuzz\nfuzz_format_functions -- -max_total_time=5` ran 315751 inputs and exited 0\n(cargo-fuzz 0.13.2).\n\n* docs(core): make the README examples compile, and say what WriteConfig::verify does\n\nFive of the six Rust examples in crates/engraver-core/README.md did not\ncompile against 0.1.1:\n\n- Progress, cancellation and checksum used undefined `source`,\n  `target`, `size`, `reader` and `expected`.\n- `auto_detect_checksum` returns `Option`, so `?` fails in a function\n  that returns `Result`.\n- `inspect_partitions` takes `&mut R: Read + Seek`, not a path.\n- Basic write imported `WriteConfig` and never used it.\n\nEach example now defines its inputs. The README says each one is the\nbody of a function that returns `Result<(), Box<dyn Error>>`. A\nthrowaway crate that depends on engraver-core by path builds each block\nas an example with `#![deny(warnings)]`, and all six compile. The five\nthat need no network run and exit 0.\n\n`WriteConfig::verify` is copied into a resume checkpoint, and nothing\nelse reads it. `Writer::write` never verifies. Read-back verification is\n`checksum_algorithm` plus `Writer::write_and_verify`. Fix the README\noptions table and the field doc in writer.rs, and drop `.verify(true)`\nfrom the lib.rs example, which calls `write`.\n\n* docs(man): compare a bare hash in the engraver-checksum(1) script example\n\n`engraver checksum FILE` prints the source, size, progress text, the\nhash and a checksum file line, so the example's\n`[ \"$expected\" = \"$actual\" ]` never matched. Only `--silent` prints the\nbare hash (commands/checksum.rs). On a 6-byte file, with `expected` set\nto its `sha256sum`:\n\n    actual=$(engraver checksum small.txt)          -> MISMATCH\n    actual=$(engraver checksum --silent small.txt) -> Match\n\nUse `--silent` in the example and list it under OPTIONS.\n\n* docs(man): say cloud sources need the cloud feature\n\nThe release archives now carry the curated man pages, and engraver(1)\nand engraver-write(1) list s3://, gs:// and azure:// sources with no\ncaveat. The pre-built binaries are built without the cloud feature, so\nthose sources fail there as local paths that don't exist.\n\nBoth pages, and the CLI README's feature list, now say cloud sources\nneed a build with the cloud feature and that the pre-built binaries\nleave it out.\n\n* docs(contributing): list the commands the pre-commit hook runs\n\nThe README and CONTRIBUTING said the hook runs `cargo test --lib`. This\nbranch's hook runs `cargo test --lib --bins`, and it also runs\n`cargo deny check` when cargo-deny is installed, which neither page\nlisted.",
+          "timestamp": "2026-11-25T14:48:50-05:00",
+          "tree_id": "d6139e33af8e4934ca09eacb34ddbe90d59d0835",
+          "url": "https://github.com/mstephenholl/engraver/commit/a5bb66ce2c0e4abf85c3b9f3d8f7a7d4a3cbbd06"
+        },
+        "date": 1795636447223,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 90.13,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 90.87,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 88.17,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 90.13,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 89,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 17073.51,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 62618.37,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1399.15,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 88.47,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 6958.9,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 55560.14,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 480.54,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 29.98,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 6948.99,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 56769.29,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 483.58,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 30.39,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 50703.94,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 64320.72,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 11927.2,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 869.79,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 16926.35,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 2048.79,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 120.13,
             "unit": "iter/sec"
           }
         ]
