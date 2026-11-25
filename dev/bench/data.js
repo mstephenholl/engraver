@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795616865273,
+  "lastUpdate": 1795631736411,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -2445,6 +2445,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 126.7,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1accffdd667004fd023e70efa6173014770c54e1",
+          "message": "fix: refuse a resume onto another drive, and count a Mac's external boot disk as a system disk (#79)\n\n* refactor(core): pass the target as a TargetIdentity to checkpoints\n\nA checkpoint recorded only the target's size, so a resume could not tell\nthe stick it was made for from another stick at the same path. The next\ncommits make it check the serial and model too. This one only changes the\nshape so the checks have something to compare.\n\nTargetIdentity holds size, serial and model. WriteCheckpoint::new and\nvalidate_checkpoint take it in place of the bare size, and the checkpoint\nstores target_serial and target_model with serde defaults, so a checkpoint\nwritten by 0.1.x still loads and CHECKPOINT_VERSION stays 1. write.rs builds\none TargetIdentity from the Drive and passes it to both calls.\n\nSerial and model are stored and not checked yet, so behavior is unchanged.\nThis breaks the public signatures of WriteCheckpoint::new and\nvalidate_checkpoint, which the next release (0.2.0) has to note.\n\n* test(core): a resume must be for the same drive, and a save must say it failed\n\nThese pin the behavior the next commit adds. They are written first so\nthey fail against the current code, which is the proof they test the bug.\n\nThe existing switched-stick test asserted that a size change is only a\nwarning. It now asserts the checkpoint is invalid, since the rest of the\nimage would land on a stick whose first part was never written. New tests\ncover a serial mismatch, a model mismatch, an unknown serial resuming with a\nwarning, a confirmed drive resuming with none, a 0.1.x checkpoint JSON with\nno serial or model still loading, save() returning Err when the temp file is\n/dev/full, and find_checkpoint leaving a checkpoint from a newer engraver in\nplace.\n\nFail at this commit (6 of 12 in resume_integration):\n  target_size_mismatch_invalidates_checkpoint\n  target_serial_mismatch_invalidates_checkpoint\n  target_model_mismatch_invalidates_checkpoint\n  unknown_serial_resumes_with_a_warning\n  save_fails_when_the_checkpoint_cannot_reach_disk\n  find_checkpoint_keeps_a_checkpoint_it_cannot_load\nThe other six pass, including checkpoint_json_without_identity_fields_still_loads\nand same_drive_resumes_without_a_warning, which guard against over-rejecting.\n\n* fix(core): refuse to resume onto another drive, and make save() report failure\n\nA resume checked only the target's size, and a size change was a warning.\nA different stick of the same size at the same path passed, got the tail of\nthe image, and the run ended \"Write complete!\" with the first part of the\nstick never written. Separately, save() dropped its BufWriter without\nflushing and never synced, so with the temp file on a full disk it returned\nOk(()) while no checkpoint reached disk, and find_checkpoint deleted any\ncheckpoint it could not load, including one from a newer engraver.\n\nvalidate_checkpoint now treats a different size as invalid, and a different\nserial or model as invalid when both sides know them. An unknown serial on\neither side stays valid with a warning, so checkpoints from 0.1.x and drives\nthat report no serial still resume. Each message names both values.\n\nsave() writes through the BufWriter, takes it back with into_inner so a\nfailed flush is an error, syncs the file, and only then renames.\nfind_checkpoint returns the load error and leaves the file in place, and\nsetup_checkpoint in write.rs prints it on stderr and starts a fresh write;\nthe next save replaces the file.\n\nLinux still reports no serial, so a serial check does nothing there until\nthe next commit. This makes the tests from the previous commit pass.\n\n* fix(detect): fill Drive.serial on Linux\n\nThe resume check compares serials, and Linux hard-coded serial to None, so\non Linux the check could only ever warn. macOS and Windows already fill it.\n\nread_serial reads {sys_path}/device/serial first, which is where NVMe and\nMMC keep it. A USB disk reaches the block layer through SCSI, which has no\nserial, so it takes the serial of the nearest ancestor that has an idVendor\nfile, the USB device itself. It does not keep walking when that device has no\nserial: the serial of a hub or root hub names the controller, and would make\nevery disk behind it look like the same drive. The value is trimmed, and an\nempty one is None.\n\nTests use the existing fake sysfs fixtures: NVMe with a padded serial, a USB\ndisk whose hub also has a serial, a USB device with none, an empty serial,\na SATA disk, and a missing device.\n\n* refactor(detect): look up the disk behind the macOS root volume\n\nmacOS can boot from an external APFS disk. Its volumes, mounted at /,\nsit in a container disk that get_disk_info skips, so list_drives has no\nstep that connects / to the physical disk holding it. The next commits\nadd that connection, and this one makes the place for it.\n\nlist_drives now runs diskutil info -plist / and passes the output to\nmark_apfs_boot_disks, which marks the disk behind each APFS physical\nstore as a system disk and leaves a reason that is already set alone.\nwhole_disk_of_store turns a store such as disk4s2 into its whole disk\nand rejects anything that is not disk<N> or disk<N>s<M>. Parsing and\nmarking take plist text, so tests can feed them fixtures.\n\nparse_apfs_physical_stores returns no stores yet, so list_drives\nbehaves as before and a root volume that is not APFS keeps being\ncovered by the mount point check.\n\n* test(detect): check that a macOS boot disk on APFS is a system disk\n\nAn external APFS disk that macOS booted from is listed as a safe target:\nits volumes sit in a container disk that get_disk_info skips, so no\nmount point points at the physical disk. These tests describe what\nlist_drives should do instead.\n\nThe fixture tests feed mark_apfs_boot_disks the diskutil info -plist /\noutput of an external boot disk (disk4s2) and of a Fusion drive (disk0s2\nand disk1s2). They also check that a disk that already has a system\nreason keeps it, that a root with no APFS stores marks nothing, and which\nidentifiers whole_disk_of_store accepts. The last test runs the real\ndiskutil and checks that the root volume's stores exist and that each\nstore's whole disk is in diskutil list's WholeDisks, which checks the key\nnames against what macOS prints. It assumes / is APFS, as it is on\nGitHub's macOS runners.\n\nAt this commit parse_apfs_physical_stores returns no stores, so three\ntests fail on macOS:\n- test_external_boot_disk_is_marked_as_system_disk\n- test_fusion_boot_disks_are_all_marked_as_system_disks\n- test_real_root_volume_stores_are_listed_disks\nThe pre-commit hook builds only the Linux code, so it does not run them.\n\n* fix(detect): mark the disk macOS booted from on APFS as a system disk\n\nOn a Mac booted from an external APFS disk, engraver list showed that\ndisk as a safe target, so write and erase accepted it without --force.\nIts volumes, mounted at /, sit in a container disk that get_disk_info\nskips, and the physical disk has only an unmounted Apple_APFS partition,\nso check_if_system_drive saw an external, ejectable disk with no system\nmount point.\n\nparse_apfs_physical_stores now reads the APFSPhysicalStores array of\ndiskutil info -plist / and returns every APFSPhysicalStore, so a Fusion\ndrive gives both of its stores. mark_apfs_boot_disks maps each store to\nits whole disk and marks that disk as a system disk.\n\nThe whole disk comes from the store's own identifier (disk4s2 gives\ndisk4) and not from a second diskutil info call for ParentWholeDisk. A\nphysical store is always a partition of its disk, the parse needs no\nprocess and no key name that only macOS could confirm, and it cannot\nfail halfway. An identifier that is not disk<N> or disk<N>s<M> marks\nnothing and is logged at debug.\n\nThe three tests that failed at the previous commit now pass.\n\n* refactor(core): give find_checkpoint a serial and validation a for_another_drive flag\n\nTwo follow-ups to refusing a resume onto another drive need new shape in\nthe core API: a checkpoint lookup that can be told which drive it is for,\nand a way for validate_checkpoint to say that a checkpoint is invalid\nbecause of the drive and not because of the source. The next commits fill\nboth in. This one only makes the places for them, so that the behavior\nchange comes separately from the signature change.\n\nfind_checkpoint takes target_serial: Option<&str>, and ignores it for now.\nCheckpointValidation gains for_another_drive, always false for now. The\ncallers are migrated: write.rs passes the drive's serial, and the unit and\nintegration tests pass None.\n\nNo behavior change.\n\n* test: a resume refused for another drive must keep that drive's checkpoint\n\nRefusing to resume onto a drive that differs removes the checkpoint, and\nthe fresh write that follows uses the same file name, because the name is\na hash of the source and the target path only. So the checkpoint of the\ndrive that was refused is lost, and plugging it back in cannot resume.\nA failed save is also logged at warn, which -q hides, and list --json\nleaves out the serial that tells two drives of one model apart. These\ntests describe what should happen instead.\n\nCore: a checkpoint saved for a drive with a serial is not found for\nanother drive at the same path, and survives that drive's save and\nremove. It is found again when its drive comes back at another path. A\ncheckpoint without a serial is still found for a drive that has one, and\nthe drive's own checkpoint is preferred over it. A size, serial or model\nmismatch sets CheckpointValidation::for_another_drive, and a source\nproblem does not.\n\nCLI: serde_json_drives writes the serial, and every drive in list --json\n--all has a serial key.\n\nAt this commit these tests fail:\n- checkpoint_of_another_drive_is_not_found_at_the_same_path\n- checkpoint_of_another_drive_survives_a_save_and_remove_at_the_same_path\n- checkpoint_is_found_when_its_drive_comes_back_at_another_path\n- a_drive_mismatch_is_marked_as_belonging_to_another_drive\n- test_serde_json_drives_includes_the_serial\n- test_serde_json_drives_unknown_serial_is_null\n- test_list_json_has_a_serial_key_for_every_drive\nThese pass already: the fallback to a checkpoint without a serial, the\npreference for the drive's own checkpoint, and the source problems not\nbeing marked. The hook runs only the lib tests, so it does not run these.\n\n* fix(core): name a checkpoint after its drive, and say when one is for another drive\n\nA checkpoint file was named by a hash of the source and the target path.\nA stick that came back at another path lost its checkpoint, and a\ndifferent stick at the same path used the same file, so a fresh write to\nit overwrote the checkpoint of the first one or removed it when it was\ndone. Not removing the file after a refused resume is therefore not\nenough, because the fresh write that follows reuses the name. The drive\nhas to be part of the name.\n\ncheckpoint_filename is now the one place that names a checkpoint file, and\nWriteCheckpoint::filename and find_checkpoint both use it. With a serial,\nthe name comes from the source and the serial, and the path is left out on\npurpose, so a stick plugged back in at /dev/sdc finds its checkpoint. An\nempty serial counts as none. Without a serial, the name is the same hash of\nsource and path as before, which a test pins, so checkpoints from 0.1.x and\nfor drives that report no serial are still found.\n\nfind_checkpoint takes the drive's serial. It looks for the drive's own file\nfirst and falls back to the path-named one, and without a serial it looks\nonly for the path-named one. A file that exists but cannot be loaded is\nstill an error.\n\nvalidate_checkpoint sets CheckpointValidation::for_another_drive for a size,\nserial or model mismatch. Source problems return their own result, so they\nnever set it.\n\nThe tests that failed at the previous commit in engraver-core pass. The CLI\ndoes not use for_another_drive yet.\n\n* fix(cli): keep another drive's checkpoint on a refused resume, and report a failed save on stderr\n\nA resume refused because the drive differs removed the checkpoint, so\nplugging the original drive back in could not resume. It now stays, with a\nline on stdout saying the checkpoint is for another drive and is kept, and\nthe write starts fresh. The fresh write is named after its own drive, so it\ndoes not touch the kept file (the previous commit). A checkpoint refused for\nany other reason, a changed source, is removed as before.\n\nThe file is kept only when the fresh write will not reuse its name. When\nneither the found checkpoint nor the target has a serial, both are named by\nthe path, so the fresh write would replace the file anyway. Keeping it\nthere would be a false promise, so it is removed as before.\n\nA failed checkpoint save was logged at warn, and a failed\nCheckpointManager::default_location at warn too. -q hides both, and the user\nlearns that --resume cannot continue only when they try it. Both now print on\nstderr whatever -q or --silent say, in the style of the warning about a\ncheckpoint that cannot be loaded, and the save warning says --resume cannot\ncontinue this write.\n\nsetup_checkpoint takes the checkpoint manager instead of opening it, and\nopen_checkpoint_manager opens it, so that the resume step can be tested with\na manager in a temporary directory. The new tests run it for the same drive,\nfor another drive that is kept, for the fresh write that follows it, for\ntwo drives without serials, and for a changed source. The pre-commit hook\ndoes not run engraver-cli's tests, so these run in cargo test --workspace.\n\n* fix(cli): put the drive's serial in list --json\n\nA script that has to tell two sticks of the same model apart, or that\nwants to match a drive to the checkpoint it left behind, had no serial to\ngo on: detection reads it on Linux, macOS and Windows, but list --json\nprinted only the vendor and model. serde_json_drives now writes \"serial\"\nafter \"model\", as null for a drive that reports none, so every object has\nthe key.\n\nThe tests added at the test commit for this now pass.",
+          "timestamp": "2026-11-25T13:30:00-05:00",
+          "tree_id": "1e1d24f7449875cd68bd47ffe06286fde6fa2836",
+          "url": "https://github.com/mstephenholl/engraver/commit/1accffdd667004fd023e70efa6173014770c54e1"
+        },
+        "date": 1795631735834,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 87.66,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 88.38,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 86.15,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 87.72,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 87.1,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 16063.21,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 51870.54,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1387.24,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 86.92,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 6787.29,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 45825.04,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 481.88,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 30.34,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 6765.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 48994.75,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 477.37,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 30.08,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 44880.27,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 55830.6,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 10366.3,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 761.22,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 14724.4,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1923.12,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 111.99,
             "unit": "iter/sec"
           }
         ]
