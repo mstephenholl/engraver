@@ -273,11 +273,15 @@ impl WriteCheckpoint {
     }
 
     /// Get the checkpoint filename for this session
+    ///
+    /// A drive with a serial is named by the serial, and one without by the path
+    /// it was at, as `checkpoint_filename` explains.
     pub fn filename(&self) -> String {
-        // Use a hash of source+target for the filename to avoid collisions
-        let key = format!("{}:{}", self.source_path, self.target_path);
-        let hash = simple_hash(&key);
-        format!("{:016x}.{}", hash, CHECKPOINT_EXTENSION)
+        checkpoint_filename(
+            &self.source_path,
+            &self.target_path,
+            self.target_serial.as_deref(),
+        )
     }
 }
 
@@ -385,6 +389,12 @@ impl CheckpointManager {
 
     /// Find an existing checkpoint for a source/target combination
     ///
+    /// With `target_serial`, the drive's own checkpoint is looked up first and,
+    /// when there is none, the checkpoint named after the path alone: one from
+    /// 0.1.x, or one for a drive that reports no serial. Without it, only that
+    /// path-named checkpoint is looked up, since a checkpoint of a drive with a
+    /// serial is never named by its path.
+    ///
     /// Returns `Ok(None)` when there is none. A checkpoint file that exists but
     /// cannot be loaded (damaged, or written by a newer engraver) is an error and
     /// is left in place.
@@ -392,27 +402,31 @@ impl CheckpointManager {
         &self,
         source_path: &str,
         target_path: &str,
-        _target_serial: Option<&str>,
+        target_serial: Option<&str>,
     ) -> Result<Option<WriteCheckpoint>> {
-        let key = format!("{}:{}", source_path, target_path);
-        let hash = simple_hash(&key);
-        let filename = format!("{:016x}.{}", hash, CHECKPOINT_EXTENSION);
-        let path = self.checkpoint_dir.join(&filename);
+        let own = known_serial(target_serial).map(Some);
+        for serial in own.into_iter().chain([None]) {
+            let path =
+                self.checkpoint_dir
+                    .join(checkpoint_filename(source_path, target_path, serial));
+            if !path.exists() {
+                continue;
+            }
 
-        if !path.exists() {
-            return Ok(None);
+            // A file that cannot be loaded stays where it is. It may be a
+            // checkpoint from a newer engraver, and deleting it would destroy the
+            // only record of an interrupted write. The caller decides what to do
+            // with the error.
+            return self.load_from_path(&path).map(Some).map_err(|e| match e {
+                Error::Io(io) => Error::Io(std::io::Error::new(
+                    io.kind(),
+                    format!("{}: {io}", path.display()),
+                )),
+                other => other,
+            });
         }
 
-        // A file that cannot be loaded stays where it is. It may be a checkpoint
-        // from a newer engraver, and deleting it would destroy the only record of
-        // an interrupted write. The caller decides what to do with the error.
-        self.load_from_path(&path).map(Some).map_err(|e| match e {
-            Error::Io(io) => Error::Io(std::io::Error::new(
-                io.kind(),
-                format!("{}: {io}", path.display()),
-            )),
-            other => other,
-        })
+        Ok(None)
     }
 
     /// List all checkpoints in the directory
@@ -503,6 +517,30 @@ fn simple_hash(s: &str) -> u64 {
     hash
 }
 
+/// A serial that tells one drive from another. An empty one tells nothing.
+fn known_serial(serial: Option<&str>) -> Option<&str> {
+    serial.filter(|s| !s.is_empty())
+}
+
+/// The name of the checkpoint file for a source written to a target
+///
+/// A drive with a serial is named by the source and the serial, and not by the
+/// path: two sticks that show up at `/dev/sdb` in turn have two files, and a
+/// stick plugged back in at `/dev/sdc` finds the one it had. A drive with no
+/// serial is named by the source and the path, as 0.1.x named every checkpoint,
+/// so those files are still found.
+fn checkpoint_filename(
+    source_path: &str,
+    target_path: &str,
+    target_serial: Option<&str>,
+) -> String {
+    let key = match known_serial(target_serial) {
+        Some(serial) => format!("{source_path}:serial={serial}"),
+        None => format!("{source_path}:{target_path}"),
+    };
+    format!("{:016x}.{}", simple_hash(&key), CHECKPOINT_EXTENSION)
+}
+
 /// Validation result for a checkpoint
 #[derive(Debug)]
 pub struct CheckpointValidation {
@@ -512,9 +550,10 @@ pub struct CheckpointValidation {
     pub messages: Vec<String>,
     /// Warnings that don't prevent resuming
     pub warnings: Vec<String>,
-    /// Is the checkpoint invalid because it belongs to a different drive, and
-    /// not because of a problem with the source? Such a checkpoint is still
-    /// good for the drive it was made for.
+    /// Is the checkpoint invalid because the target is not the drive it was made
+    /// for (a different size, serial or model)? Such a checkpoint is still good
+    /// for that drive, so the caller may keep it. Never set for a problem with
+    /// the source.
     pub for_another_drive: bool,
 }
 
@@ -551,6 +590,12 @@ impl CheckpointValidation {
         self.messages.push(error.into());
         self
     }
+
+    /// Add an error that says the checkpoint is for another drive
+    fn with_other_drive_error(mut self, error: impl Into<String>) -> Self {
+        self.for_another_drive = true;
+        self.with_error(error)
+    }
 }
 
 /// A drive property for a message: quoted when known, `unknown` when not
@@ -563,8 +608,9 @@ fn describe(value: &Option<String>) -> String {
 /// Validate a checkpoint against current source/target state
 ///
 /// The target is invalid when its size, or its serial or model where both are
-/// known, differ from the drive the checkpoint was made for. An unknown serial
-/// on either side is valid with a warning.
+/// known, differ from the drive the checkpoint was made for, and the result then
+/// has `for_another_drive` set. An unknown serial on either side is valid with a
+/// warning.
 pub fn validate_checkpoint(
     checkpoint: &WriteCheckpoint,
     source_info: &SourceInfo,
@@ -596,7 +642,7 @@ pub fn validate_checkpoint(
     // the first part of it never written, so a mismatch makes the checkpoint
     // invalid.
     if checkpoint.target_size != target.size {
-        result = result.with_error(format!(
+        result = result.with_other_drive_error(format!(
             "Target size changed: checkpoint has {} bytes, current is {} bytes",
             checkpoint.target_size, target.size
         ));
@@ -604,7 +650,7 @@ pub fn validate_checkpoint(
 
     match (&checkpoint.target_serial, &target.serial) {
         (Some(cp_serial), Some(cur_serial)) if cp_serial != cur_serial => {
-            result = result.with_error(format!(
+            result = result.with_other_drive_error(format!(
                 "Target serial changed: checkpoint has '{cp_serial}', current is '{cur_serial}'"
             ));
         }
@@ -624,7 +670,7 @@ pub fn validate_checkpoint(
 
     if let (Some(cp_model), Some(cur_model)) = (&checkpoint.target_model, &target.model) {
         if cp_model != cur_model {
-            result = result.with_error(format!(
+            result = result.with_other_drive_error(format!(
                 "Target model changed: checkpoint has '{cp_model}', current is '{cur_model}'"
             ));
         }
@@ -982,6 +1028,51 @@ mod tests {
         assert_eq!(loaded.source_path, checkpoint.source_path);
         assert_eq!(loaded.bytes_written, checkpoint.bytes_written);
         assert_eq!(loaded.blocks_written, checkpoint.blocks_written);
+    }
+
+    #[test]
+    fn test_checkpoint_filename_without_a_serial_is_unchanged_from_0_1() {
+        // FNV-1a of "/path/to/image.iso:/dev/sdb", as 0.1.x named it. A changed
+        // name would strand the checkpoints those versions left behind.
+        let checkpoint = WriteCheckpoint::new(
+            &create_test_source_info(),
+            "/dev/sdb",
+            &target(1024),
+            &create_test_config(),
+        );
+
+        assert_eq!(checkpoint.filename(), "4fe336349dc37360.checkpoint");
+    }
+
+    #[test]
+    fn test_checkpoint_filename_with_a_serial_ignores_the_path() {
+        let drive = |serial: Option<&str>| TargetIdentity {
+            size: 1024,
+            serial: serial.map(str::to_string),
+            model: None,
+        };
+        let name = |path: &str, serial: Option<&str>| {
+            WriteCheckpoint::new(
+                &create_test_source_info(),
+                path,
+                &drive(serial),
+                &create_test_config(),
+            )
+            .filename()
+        };
+
+        assert_eq!(
+            name("/dev/sdb", Some("AAAA")),
+            name("/dev/sdc", Some("AAAA"))
+        );
+        assert_ne!(
+            name("/dev/sdb", Some("AAAA")),
+            name("/dev/sdb", Some("BBBB"))
+        );
+        assert_ne!(name("/dev/sdb", Some("AAAA")), name("/dev/sdb", None));
+        // An empty serial tells nothing, so it is no serial.
+        assert_eq!(name("/dev/sdb", Some("")), name("/dev/sdb", None));
+        assert_ne!(name("/dev/sdb", Some("")), name("/dev/sdc", Some("")));
     }
 
     #[test]
