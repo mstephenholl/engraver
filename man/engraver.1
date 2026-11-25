@@ -8,7 +8,8 @@ engraver \- A safe, fast tool for creating bootable USB drives, SD cards, and NV
 .SH DESCRIPTION
 Engraver is a fast, safe command-line tool for writing disk images to USB drives,
 SD cards, and NVMe drives. It supports local files, HTTP/HTTPS URLs, and cloud
-storage sources (S3, GCS, Azure Blob). Compressed images (.gz, .xz, .zst, .bz2)
+storage sources (S3, GCS, Azure Blob) when built with the \fBcloud\fR feature,
+which the pre-built binaries leave out. Compressed images (.gz, .xz, .zst, .bz2)
 are automatically decompressed during write.
 .PP
 Engraver includes multiple safety mechanisms: system drive detection prevents

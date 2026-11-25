@@ -11,6 +11,10 @@ HTTP/HTTPS URL, or a cloud storage URL (s3://, gs://, azure://). Compressed
 images (.gz, .xz, .zst, .bz2) are automatically detected and decompressed
 during the write.
 .PP
+Cloud storage URLs need a build with the \fBcloud\fR feature, such as
+\fBcargo install engraver\-cli \-\-features cloud\fR. The pre-built binaries
+leave it out, and treat an s3://, gs:// or azure:// source as a local path.
+.PP
 When \fB\-\-verify\fR is specified, Engraver performs parallel verification by
 hashing the source data during the write pass, then reading back the target
 and comparing checksums. This is significantly faster than a separate verify step.
