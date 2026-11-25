@@ -612,6 +612,20 @@ fn warn_checkpoint_not_saved(err: &engraver_core::Error) {
     );
 }
 
+/// Say on stderr that a finished write left its checkpoint file behind
+///
+/// Printed even with `-q` or `--silent`: a later `--resume` may find the stale
+/// checkpoint and offer to continue a write that already finished, and the user
+/// stops that only by deleting the file.
+fn warn_checkpoint_not_removed(path: &std::path::Path, err: &engraver_core::Error) {
+    eprintln!(
+        "{} the write finished, but its checkpoint {} could not be removed ({}). A later `--resume` may offer to continue a write that already finished, so delete that file.",
+        style("warning:").yellow(),
+        path.display(),
+        err
+    );
+}
+
 /// Execute the write command
 pub fn execute(args: WriteArgs) -> Result<()> {
     let block_size = engraver_core::parse_block_size(&args.block_size)? as usize;
@@ -955,7 +969,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     // Remove checkpoint on success
     if let Some(ref mgr) = checkpoint_manager {
         if let Err(e) = mgr.remove(&checkpoint) {
-            tracing::warn!("Failed to remove checkpoint: {}", e);
+            warn_checkpoint_not_removed(&mgr.checkpoint_path(&checkpoint), &e);
         }
     }
 
