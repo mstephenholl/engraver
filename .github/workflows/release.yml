@@ -253,6 +253,9 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     if: "!contains(github.ref_name, '-')"  # Skip for pre-releases
+    permissions:
+      contents: read
+      id-token: write  # Trusted publishing trades the job's OIDC token for a crates.io token
 
     steps:
       - name: Checkout
@@ -261,10 +264,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # crates.io accepts this job because each crate trusts release.yml in
+      # this repository. The token lasts 30 minutes and is revoked when the job ends.
+      - name: Get a crates.io token
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
       - name: Publish crates
         shell: bash
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           # Publish what crates.io does not have yet, so that rerunning the job
           # after a failure publishes the rest instead of failing on the crates
