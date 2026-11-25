@@ -1,12 +1,12 @@
 [package]
 name = "engraver-platform"
-version = "0.1.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 rust-version.workspace = true
-authors = ["Engraver Contributors"]
-license = "MIT"
+authors.workspace = true
+license.workspace = true
 description = "Platform-specific raw device I/O for Engraver"
-repository = "https://github.com/mstephenholl/engraver"
+repository.workspace = true
 keywords = ["disk", "io", "raw", "device"]
 categories = ["os", "filesystem"]
 
@@ -15,9 +15,9 @@ default = []
 io_uring = ["dep:io-uring"]
 
 [dependencies]
-thiserror = "2"
-tracing = "0.1"
-cfg-if = "1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+cfg-if = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -36,14 +36,11 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
 [[example]]
 name = "uring_bench"
 required-features = ["io_uring"]
 
-[lints.rust]
-unsafe_code = "warn"
-
-[lints.clippy]
-all = "warn"
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 //! Windows platform implementation
 //!
-//! Uses CreateFile with PhysicalDrive paths and volume locking.
+//! Uses CreateFile with PhysicalDrive paths.
 
 use crate::{DeviceInfo, OpenOptions, PlatformError, PlatformOps, RawDevice, Result};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -18,8 +18,6 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FlushFileBuffers, GetFileSizeEx, ReadFile, WriteFile, FILE_FLAG_NO_BUFFERING,
     FILE_FLAG_WRITE_THROUGH, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::System::Ioctl::{FSCTL_LOCK_VOLUME, FSCTL_UNLOCK_VOLUME};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::IO::DeviceIoControl;
 #[cfg(target_os = "windows")]
@@ -173,64 +171,6 @@ impl WindowsDevice {
             position: 0,
         })
     }
-
-    /// Lock the volume for exclusive access
-    pub fn lock(&self) -> Result<()> {
-        let mut bytes_returned: u32 = 0;
-
-        // SAFETY: DeviceIoControl is called with a valid HANDLE obtained from successful open().
-        // FSCTL_LOCK_VOLUME requires no input/output buffers (null pointers are valid).
-        // bytes_returned is a valid mutable reference to u32.
-        #[allow(unsafe_code)]
-        let result = unsafe {
-            DeviceIoControl(
-                self.handle,
-                FSCTL_LOCK_VOLUME,
-                ptr::null(),
-                0,
-                ptr::null_mut(),
-                0,
-                &mut bytes_returned,
-                ptr::null_mut(),
-            )
-        };
-
-        if result == 0 {
-            Err(PlatformError::DeviceBusy(
-                "Failed to lock volume".to_string(),
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Unlock the volume
-    pub fn unlock(&self) -> Result<()> {
-        let mut bytes_returned: u32 = 0;
-
-        // SAFETY: DeviceIoControl is called with a valid HANDLE obtained from successful open().
-        // FSCTL_UNLOCK_VOLUME requires no input/output buffers (null pointers are valid).
-        // bytes_returned is a valid mutable reference to u32.
-        #[allow(unsafe_code)]
-        let result = unsafe {
-            DeviceIoControl(
-                self.handle,
-                FSCTL_UNLOCK_VOLUME,
-                ptr::null(),
-                0,
-                ptr::null_mut(),
-                0,
-                &mut bytes_returned,
-                ptr::null_mut(),
-            )
-        };
-
-        if result == 0 {
-            Err(PlatformError::Io(std::io::Error::last_os_error()))
-        } else {
-            Ok(())
-        }
-    }
 }
 
 // SAFETY: WindowsDevice contains a Windows HANDLE which is safe to send between threads.
@@ -242,9 +182,6 @@ unsafe impl Send for WindowsDevice {}
 #[cfg(target_os = "windows")]
 impl Drop for WindowsDevice {
     fn drop(&mut self) {
-        // Try to unlock (ignore errors)
-        let _ = self.unlock();
-
         #[allow(unsafe_code)]
         unsafe {
             CloseHandle(self.handle);

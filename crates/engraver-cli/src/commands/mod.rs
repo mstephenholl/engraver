@@ -34,6 +34,16 @@ pub(crate) fn is_cancelled(err: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether to hide the lines that lead up to a confirmation prompt.
+///
+/// `silent` hides status output, but a run that will ask a question keeps the
+/// lines that say what it is about, so a prompt never appears without the drive
+/// and image it refers to. `skip_confirm` is true when nothing will be asked,
+/// and then there is no prompt to lead up to.
+pub(crate) fn hides_lead_up(silent: bool, skip_confirm: bool) -> bool {
+    silent && skip_confirm
+}
+
 /// Ask a yes/no question. Ctrl+C at the prompt cancels the run.
 pub(crate) fn confirm(prompt: &str, default: bool) -> Result<bool> {
     into_answer(crate::prompt::ask(prompt, default))
@@ -434,6 +444,21 @@ mod tests {
 
         assert_cancelled(&err);
         assert_eq!(err.to_string(), "Verification cancelled.");
+    }
+
+    // -------------------------------------------------------------------------
+    // Lead-up to a confirmation prompt
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_hides_lead_up_only_when_nothing_will_be_asked() {
+        // -q: status is hidden but a question is coming, so its context shows
+        assert!(!hides_lead_up(true, false));
+        // --silent, or -q with --yes: no question, nothing to lead up to
+        assert!(hides_lead_up(true, true));
+        // No -q: nothing is hidden, asking or not
+        assert!(!hides_lead_up(false, false));
+        assert!(!hides_lead_up(false, true));
     }
 
     // -------------------------------------------------------------------------

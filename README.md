@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/mstephenholl/engraver/main/install.
 less install.sh
 
 # Verify checksum
-echo "d1230d6062915d71b0e966ba3ed6ccf499633fb8579ad3a1ffb8cc0e336c43ad  install.sh" | sha256sum -c
+echo "887f1a746135808ee342997ededa75df46a406885dd66cf6ae980d8f848d2181  install.sh" | sha256sum -c
 
 # Run after inspection
 bash install.sh
@@ -76,7 +76,10 @@ engraver write ubuntu.iso /dev/sdb --verify
 # Skip confirmation prompt (for scripts)
 engraver write ubuntu.iso /dev/sdb -y
 
-# Silent mode (no output, implies -y)
+# Quiet mode (hides progress and status output, still asks for confirmation)
+engraver write ubuntu.iso /dev/sdb -q
+
+# Silent mode (like -q, and skips confirmation, so it implies -y)
 engraver write ubuntu.iso /dev/sdb --silent
 
 # Verify a device against an image
@@ -264,8 +267,11 @@ engraver list --json | jq -r '.[].path'
 # Non-interactive write (skip confirmation)
 engraver write ubuntu.iso /dev/sdb -y --verify
 
-# Silent mode (no output except errors, implies -y)
+# Silent mode (like -q, and skips confirmation, so it implies -y)
 engraver write ubuntu.iso /dev/sdb --silent --verify
+
+# Print only the checksum
+engraver checksum ubuntu.iso -q
 
 # JSON benchmark results for performance tracking
 engraver benchmark /dev/sdb --json --passes 3 -y
@@ -378,7 +384,7 @@ verify = true
 checkpoint = false
 retry_attempts = 3
 retry_delay_ms = 100
-read_buffer_size = "64K"
+read_buffer_size = "4M"
 
 [checksum]
 algorithm = "sha256"
@@ -410,11 +416,11 @@ cloud_chunk_size = "4M"
 | `[write]` | `checkpoint` | Enable checkpointing by default | `false` |
 | `[write]` | `retry_attempts` | Number of retry attempts on transient errors | `3` |
 | `[write]` | `retry_delay_ms` | Delay between retries in milliseconds | `100` |
-| `[write]` | `read_buffer_size` | Buffer size for reading source data | `"64K"` |
+| `[write]` | `read_buffer_size` | Buffer size for reading source data | `"4M"` |
 | `[checksum]` | `algorithm` | Default checksum algorithm | `"sha256"` |
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
 | `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
-| `[behavior]` | `quiet` | Suppress non-error output | `false` |
+| `[behavior]` | `quiet` | Hide progress and status output, like `-q` | `false` |
 | `[benchmark]` | `block_size` | Default block size for benchmarks | `"32M"` |
 | `[benchmark]` | `test_size` | Default test data size, raised to 10 blocks when smaller | `"256M"` |
 | `[benchmark]` | `pattern` | Default data pattern (`zeros`, `random`, `sequential`) | `"zeros"` |

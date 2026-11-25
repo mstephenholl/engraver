@@ -15,7 +15,7 @@ use std::time::Instant;
 use engraver_detect::{list_drives, Drive};
 use engraver_platform::{has_elevated_privileges, open_device, unmount_device, OpenOptions};
 
-use super::{cancelled, confirm};
+use super::{cancelled, confirm, hides_lead_up};
 
 /// Arguments for the erase command
 pub struct EraseArgs {
@@ -32,6 +32,9 @@ pub struct EraseArgs {
 pub fn execute(args: EraseArgs) -> Result<()> {
     let block_size = engraver_core::parse_block_size(&args.block_size)? as usize;
     let silent = args.silent;
+    // The lines up to the confirmation say which drive is about to be erased,
+    // so a run that will ask keeps them even when `silent` hides the rest.
+    let lead_up_silent = hides_lead_up(silent, args.skip_confirm);
 
     // Step 1: Check for elevated privileges
     if !has_elevated_privileges() {
@@ -53,7 +56,7 @@ pub fn execute(args: EraseArgs) -> Result<()> {
 
     // Step 2: Validate target device
     println_if!(
-        silent,
+        lead_up_silent,
         "{} {}",
         style("Target:").bold(),
         style(&args.target).cyan()
@@ -93,7 +96,7 @@ pub fn execute(args: EraseArgs) -> Result<()> {
     }
 
     println_if!(
-        silent,
+        lead_up_silent,
         "  {} {} ({})",
         style("✓").green(),
         target_drive.display_name(),
@@ -103,7 +106,7 @@ pub fn execute(args: EraseArgs) -> Result<()> {
     // Show mount points that will be unmounted
     if !target_drive.mount_points.is_empty() && !args.no_unmount {
         println_if!(
-            silent,
+            lead_up_silent,
             "  {} Will unmount: {}",
             style("⚠").yellow(),
             target_drive.mount_points.join(", ")

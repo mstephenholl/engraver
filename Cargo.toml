@@ -10,14 +10,11 @@ members = [
 
 [workspace.package]
 version = "0.1.1"
-edition = "2024"
+edition = "2021"
 authors = ["Engraver Contributors"]
 license = "MIT"
 repository = "https://github.com/mstephenholl/engraver"
-homepage = "https://github.com/mstephenholl/engraver"
-description = "Fast, safe CLI tool for creating bootable USB drives, SD cards, and NVMe drives from ISO images"
 keywords = ["usb", "bootable", "iso", "flash", "imaging"]
-categories = ["command-line-utilities", "filesystem"]
 rust-version = "1.89"
 
 [workspace.dependencies]
@@ -27,8 +24,8 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Async runtime
-tokio = { version = "1", features = ["full"] }
+# Async runtime. Only engraver-core uses it, and only for the multi-thread runtime.
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -75,9 +72,6 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = "warn"
-pedantic = "warn"
-nursery = "warn"
-cargo = "warn"
 
 [profile.release]
 lto = true

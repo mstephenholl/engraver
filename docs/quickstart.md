@@ -16,9 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/mstephenholl/engraver/main/install.
 cargo install --path crates/engraver-cli
 ```
 
-### Pre-built Binaries (see note)
+### Pre-built Binaries
 
-Download from the [Releases](https://github.com/mstephenholl/engraver/releases) page (Note: This feature is not currently GA).
+Download from [Releases](https://github.com/mstephenholl/engraver/releases).
 
 ## Basic Usage
 
@@ -68,7 +68,8 @@ sudo engraver verify ubuntu.iso /dev/sdb
 |--------|-------------|
 | `--verify` | Verify after writing (hashes during write, then reads back) |
 | `-y` | Skip confirmation prompt |
-| `--silent` | No output (implies -y) |
+| `-q` | Hide progress and status output (results still print, and it still asks for confirmation) |
+| `--silent` | Like `-q`, and skip confirmation (implies -y) |
 | `--checkpoint` | Enable resume support |
 | `--resume` | Resume interrupted write |
 | `--auto-checksum` | Auto-detect .sha256/.md5 checksum files |

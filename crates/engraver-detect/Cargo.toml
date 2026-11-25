@@ -1,31 +1,32 @@
 [package]
 name = "engraver-detect"
-version = "0.1.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 rust-version.workspace = true
-authors = ["Engraver Contributors"]
-license = "MIT"
+authors.workspace = true
+license.workspace = true
 description = "Safe drive detection and enumeration for Engraver"
-repository = "https://github.com/mstephenholl/engraver"
+repository.workspace = true
 keywords = ["usb", "drive", "detection", "disk"]
 categories = ["hardware-support", "os"]
 
 [dependencies]
-thiserror = "2"
-tracing = "0.1"
-serde = { version = "1", features = ["derive"] }
-cfg-if = "1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+cfg-if = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
-serde_json = "1"
-tempfile = "3"
-mockall = "0.15"
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+mockall = { workspace = true }
 
 [lints.rust]
 unsafe_code = "warn"
+missing_docs = "warn"
 
 [lints.clippy]
 all = "warn"

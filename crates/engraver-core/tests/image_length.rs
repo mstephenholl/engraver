@@ -1,3 +1,4 @@
+//! Integration tests for the image length read from a compressed source.
 #![cfg(feature = "compression")]
 
 use std::io::{Read, Write};

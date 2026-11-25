@@ -1,11 +1,11 @@
 [package]
 name = "engraver-gui"
-version = "0.1.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 rust-version.workspace = true
-authors = ["Engraver Contributors"]
-license = "MIT"
-repository = "https://github.com/mstephenholl/engraver"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 keywords = ["gui", "imaging", "iso", "usb", "flash"]
 categories = ["gui", "filesystem"]
 readme = "README.md"
@@ -18,12 +18,6 @@ publish = false
 # path = "src/main.rs"
 
 [dependencies]
-engraver-core = { path = "../engraver-core" }
-engraver-detect = { path = "../engraver-detect" }
-
-anyhow.workspace = true
-tracing.workspace = true
-
 # GUI framework (choose one when implementing):
 # iced = "0.12"
 # OR

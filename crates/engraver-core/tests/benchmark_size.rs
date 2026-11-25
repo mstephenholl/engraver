@@ -1,3 +1,5 @@
+//! Integration tests for how much a benchmark writes and the size it reports.
+
 use engraver_core::{BenchmarkConfig, BenchmarkProgress, BenchmarkRunner, DataPattern};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::sync::atomic::AtomicBool;

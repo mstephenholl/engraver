@@ -13,7 +13,9 @@ pub struct ConfigArgs {
     pub path: bool,
     /// Show configuration in JSON format
     pub json: bool,
-    /// Suppress output (for scripting)
+    /// Hide the human-readable output (`--silent`). `-q` keeps it, because it
+    /// is what `config` is run to show. JSON and the bare `--path` always print,
+    /// since a script asked for them.
     pub silent: bool,
     pub settings: Settings,
     /// Custom configuration file path (overrides default)
@@ -28,16 +30,12 @@ pub fn execute(args: ConfigArgs) -> Result<()> {
     // Handle --path flag
     if args.path {
         if args.json {
-            if !args.silent {
-                let path = config_path.as_ref().map(|p| p.display().to_string());
-                print_json(&serde_json::json!({ "path": path }))?;
-            }
+            let path = config_path.as_ref().map(|p| p.display().to_string());
+            print_json(&serde_json::json!({ "path": path }))?;
             return Ok(());
         }
         if let Some(path) = &config_path {
-            if !args.silent {
-                println!("{}", path.display());
-            }
+            println!("{}", path.display());
         } else if !args.silent {
             eprintln!("{}", style("Could not determine config path").yellow());
         }
@@ -65,10 +63,8 @@ fn init_config(config_path: Option<PathBuf>, json: bool, silent: bool) -> Result
 
     if path.exists() {
         if json {
-            if !silent {
-                let path = path.display().to_string();
-                print_json(&serde_json::json!({ "path": path, "created": false }))?;
-            }
+            let path = path.display().to_string();
+            print_json(&serde_json::json!({ "path": path, "created": false }))?;
         } else if !silent {
             eprintln!(
                 "{} Configuration file already exists at: {}",
@@ -86,10 +82,8 @@ fn init_config(config_path: Option<PathBuf>, json: bool, silent: bool) -> Result
         .context("Failed to save configuration file")?;
 
     if json {
-        if !silent {
-            let path = saved_path.display().to_string();
-            print_json(&serde_json::json!({ "path": path, "created": true }))?;
-        }
+        let path = saved_path.display().to_string();
+        print_json(&serde_json::json!({ "path": path, "created": true }))?;
         return Ok(());
     }
 
@@ -124,61 +118,62 @@ fn show_config(
     json: bool,
     silent: bool,
 ) -> Result<()> {
+    if json {
+        // Output as JSON for scripting, which --silent keeps
+        let json_output = serde_json::to_string_pretty(settings)
+            .context("Failed to serialize settings to JSON")?;
+        println!("{}", json_output);
+        return Ok(());
+    }
+
     if silent {
         return Ok(());
     }
 
     let config_exists = config_path.as_ref().is_some_and(|p| p.exists());
 
-    if json {
-        // Output as JSON for scripting
-        let json_output = serde_json::to_string_pretty(settings)
-            .context("Failed to serialize settings to JSON")?;
-        println!("{}", json_output);
-    } else {
-        // Human-readable output
-        println!("{}", style("Engraver Configuration").bold());
-        println!();
+    // Human-readable output
+    println!("{}", style("Engraver Configuration").bold());
+    println!();
 
-        if let Some(path) = &config_path {
-            if config_exists {
-                println!("  {} {}", style("Config file:").dim(), path.display());
-            } else {
-                println!(
-                    "  {} {} {}",
-                    style("Config file:").dim(),
-                    path.display(),
-                    style("(not found, using defaults)").yellow()
-                );
-            }
-        }
-        println!();
-
-        println!("{}", style("[write]").cyan());
-        println!("  block_size = \"{}\"", settings.write.block_size);
-        println!("  verify = {}", settings.write.verify);
-        println!("  checkpoint = {}", settings.write.checkpoint);
-        println!();
-
-        println!("{}", style("[checksum]").cyan());
-        println!("  algorithm = \"{}\"", settings.checksum.algorithm);
-        println!("  auto_detect = {}", settings.checksum.auto_detect);
-        println!();
-
-        println!("{}", style("[behavior]").cyan());
-        println!(
-            "  skip_confirmation = {}",
-            settings.behavior.skip_confirmation
-        );
-        println!("  quiet = {}", settings.behavior.quiet);
-
-        if !config_exists {
-            println!();
+    if let Some(path) = &config_path {
+        if config_exists {
+            println!("  {} {}", style("Config file:").dim(), path.display());
+        } else {
             println!(
-                "{}",
-                style("Run 'engraver config --init' to create a configuration file.").dim()
+                "  {} {} {}",
+                style("Config file:").dim(),
+                path.display(),
+                style("(not found, using defaults)").yellow()
             );
         }
+    }
+    println!();
+
+    println!("{}", style("[write]").cyan());
+    println!("  block_size = \"{}\"", settings.write.block_size);
+    println!("  verify = {}", settings.write.verify);
+    println!("  checkpoint = {}", settings.write.checkpoint);
+    println!();
+
+    println!("{}", style("[checksum]").cyan());
+    println!("  algorithm = \"{}\"", settings.checksum.algorithm);
+    println!("  auto_detect = {}", settings.checksum.auto_detect);
+    println!();
+
+    println!("{}", style("[behavior]").cyan());
+    println!(
+        "  skip_confirmation = {}",
+        settings.behavior.skip_confirmation
+    );
+    println!("  quiet = {}", settings.behavior.quiet);
+
+    if !config_exists {
+        println!();
+        println!(
+            "{}",
+            style("Run 'engraver config --init' to create a configuration file.").dim()
+        );
     }
 
     Ok(())

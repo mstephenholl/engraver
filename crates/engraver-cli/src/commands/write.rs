@@ -28,6 +28,7 @@ use engraver_platform::{has_elevated_privileges, open_device, unmount_device, Op
 
 use super::{
     cancelled, checksum_image_and_target, confirm, create_progress_bar, describe_source_size,
+    hides_lead_up,
 };
 
 /// Arguments for the write command
@@ -496,6 +497,8 @@ fn setup_checkpoint(
     checkpoint_manager: Option<CheckpointManager>,
 ) -> Result<(Option<CheckpointManager>, u64, Option<WriteCheckpoint>)> {
     let silent = args.silent;
+    // The checkpoint's details are what the resume question is about
+    let lead_up_silent = hides_lead_up(silent, args.skip_confirm);
 
     let mut resume_offset: u64 = 0;
     let mut existing_checkpoint: Option<WriteCheckpoint> = None;
@@ -525,12 +528,12 @@ fn setup_checkpoint(
 
                 if validation.valid {
                     println_if!(
-                        silent,
+                        lead_up_silent,
                         "\n{}",
                         style("Found checkpoint for resume:").bold().cyan()
                     );
                     println_if!(
-                        silent,
+                        lead_up_silent,
                         "  Progress: {} / {} ({:.1}%)",
                         format_size(checkpoint.bytes_written),
                         checkpoint
@@ -539,10 +542,19 @@ fn setup_checkpoint(
                             .unwrap_or_else(|| "unknown".to_string()),
                         checkpoint.percentage()
                     );
-                    println_if!(silent, "  Resume count: {}", checkpoint.resume_count);
+                    println_if!(
+                        lead_up_silent,
+                        "  Resume count: {}",
+                        checkpoint.resume_count
+                    );
 
                     for warning in &validation.warnings {
-                        println_if!(silent, "  {} {}", style("Warning:").yellow(), warning);
+                        println_if!(
+                            lead_up_silent,
+                            "  {} {}",
+                            style("Warning:").yellow(),
+                            warning
+                        );
                     }
 
                     let should_resume = if args.skip_confirm {
@@ -631,12 +643,15 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     let block_size = engraver_core::parse_block_size(&args.block_size)? as usize;
     let silent = args.silent;
     let ctx = WriteContext { silent, block_size };
+    // The lines up to the confirmation say which image goes to which drive, so
+    // a run that will ask keeps them even when `silent` hides the rest.
+    let lead_up_silent = hides_lead_up(silent, args.skip_confirm);
 
     // Step 0: Check for elevated privileges
     check_privileges()?;
 
     // Step 1: Validate source
-    let mut source_info = validate_source_info(&args.source, silent)?;
+    let mut source_info = validate_source_info(&args.source, lead_up_silent)?;
 
     // Compute a content fingerprint for resume validation. For local
     // files we hash the first 1 MB so a later resume can detect when the
@@ -652,7 +667,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         args.force,
         args.skip_confirm,
         &source_info,
-        silent,
+        lead_up_silent,
     )?
     else {
         return Ok(());
@@ -660,7 +675,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
     // Step 2.5: Show partition information if requested
     if args.show_partitions {
-        display_source_partitions(&args.source, silent)?;
+        display_source_partitions(&args.source, lead_up_silent)?;
     }
 
     // Step 3: Confirmation
