@@ -1306,12 +1306,59 @@ fn test_config_silent_mode() {
 
 #[test]
 fn test_config_path_silent_mode() {
-    // --path with --silent should still output the path
+    // --silent hides human-readable output, but the bare path is the answer a
+    // script asked for, like the hash from `checksum --silent`
+    let (_temp_dir, config_file) = setup_config_test();
+
     engraver()
+        .args(["--config-file", config_file.to_str().unwrap()])
         .args(["--silent", "config", "--path"])
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(format!("{}\n", config_file.display()));
+}
+
+#[test]
+fn test_silent_config_still_prints_its_json() {
+    // Like `list --json`, JSON output is for scripts, so --silent keeps it
+    let (_temp_dir, config_file) = setup_config_test();
+    let config = config_file.to_str().unwrap();
+
+    let output = engraver()
+        .args(["--config-file", config, "--silent", "config", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(stdout_as_json(&output)["write"].is_object());
+
+    let output = engraver()
+        .args([
+            "--config-file",
+            config,
+            "--silent",
+            "config",
+            "--path",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(stdout_as_json(&output)["path"], config);
+
+    let output = engraver()
+        .args([
+            "--config-file",
+            config,
+            "--silent",
+            "config",
+            "--init",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(stdout_as_json(&output)["created"], true);
+    assert!(config_file.exists());
 }
 
 #[test]

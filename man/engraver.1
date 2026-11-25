@@ -30,8 +30,9 @@ setting under \fB[behavior]\fR in the configuration file turns it on too.
 \fB\-\-silent\fR
 Like \fB\-\-quiet\fR, and also hide the output of \fBlist\fR, \fBconfig\fR and
 \fBbenchmark\fR, skip every confirmation prompt (implying \fB\-\-yes\fR), and hide
-the messages that Ctrl+C prints. \fBchecksum\fR still prints the hash, and
-\fBlist \-\-json\fR and \fBbenchmark \-\-json\fR still print their JSON.
+the messages that Ctrl+C prints. What a script asks for still prints: the hash
+from \fBchecksum\fR, the path from \fBconfig \-\-path\fR, and the JSON from every
+\fB\-\-json\fR option.
 .TP
 \fB\-\-config\-file\fR \fI<PATH>\fR
 Use a custom configuration file instead of the default location.

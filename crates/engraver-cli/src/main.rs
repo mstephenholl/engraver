@@ -46,7 +46,7 @@ struct Cli {
     #[arg(short, long, global = true)]
     quiet: bool,
 
-    /// Like --quiet, and also hide the drive list, configuration and benchmark results, skip confirmation prompts (implies --yes) and hide the Ctrl+C messages
+    /// Like --quiet, and also hide the human-readable results, skip confirmation prompts (implies --yes) and hide the Ctrl+C messages. JSON, checksum hashes and config --path still print
     #[arg(long, global = true)]
     silent: bool,
 
