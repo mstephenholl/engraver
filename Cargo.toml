@@ -10,14 +10,11 @@ members = [
 
 [workspace.package]
 version = "0.1.1"
-edition = "2024"
+edition = "2021"
 authors = ["Engraver Contributors"]
 license = "MIT"
 repository = "https://github.com/mstephenholl/engraver"
-homepage = "https://github.com/mstephenholl/engraver"
-description = "Fast, safe CLI tool for creating bootable USB drives, SD cards, and NVMe drives from ISO images"
 keywords = ["usb", "bootable", "iso", "flash", "imaging"]
-categories = ["command-line-utilities", "filesystem"]
 rust-version = "1.89"
 
 [workspace.dependencies]

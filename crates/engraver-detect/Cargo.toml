@@ -1,12 +1,12 @@
 [package]
 name = "engraver-detect"
-version = "0.1.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 rust-version.workspace = true
-authors = ["Engraver Contributors"]
-license = "MIT"
+authors.workspace = true
+license.workspace = true
 description = "Safe drive detection and enumeration for Engraver"
-repository = "https://github.com/mstephenholl/engraver"
+repository.workspace = true
 keywords = ["usb", "drive", "detection", "disk"]
 categories = ["hardware-support", "os"]
 

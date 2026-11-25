@@ -1,12 +1,12 @@
 [package]
 name = "engraver-core"
-version = "0.1.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 rust-version.workspace = true
-authors = ["Engraver Contributors"]
-license = "MIT"
+authors.workspace = true
+license.workspace = true
 description = "Core library for Engraver disk imaging tool"
-repository = "https://github.com/mstephenholl/engraver"
+repository.workspace = true
 keywords = ["disk", "imaging", "iso", "usb", "flash"]
 categories = ["command-line-utilities", "filesystem"]
 

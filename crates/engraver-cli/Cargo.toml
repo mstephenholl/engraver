@@ -1,12 +1,12 @@
 [package]
 name = "engraver-cli"
-version = "0.1.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 rust-version.workspace = true
-authors = ["Engraver Contributors"]
-license = "MIT"
+authors.workspace = true
+license.workspace = true
 description = "A safe, fast tool for creating bootable USB drives, SD cards, and NVMe drives"
-repository = "https://github.com/mstephenholl/engraver"
+repository.workspace = true
 keywords.workspace = true
 categories = ["command-line-utilities", "filesystem"]
 default-run = "engraver"
@@ -40,7 +40,6 @@ tracing-subscriber = { workspace = true }
 
 # Misc
 ctrlc = "3"
-humansize = "2"
 serde_json = { workspace = true }
 
 [dev-dependencies]
