@@ -1,13 +1,13 @@
 [package]
 name = "engraver-cli"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version.workspace = true
 authors = ["Engraver Contributors"]
 license = "MIT"
 description = "A safe, fast tool for creating bootable USB drives, SD cards, and NVMe drives"
 repository = "https://github.com/mstephenholl/engraver"
-keywords = ["disk", "imaging", "iso", "usb", "flash", "bootable"]
+keywords.workspace = true
 categories = ["command-line-utilities", "filesystem"]
 default-run = "engraver"
 
@@ -17,9 +17,9 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace crates
-engraver-core = { version = "0.1.0", path = "../engraver-core" }
-engraver-detect = { version = "0.1.0", path = "../engraver-detect" }
-engraver-platform = { version = "0.1.0", path = "../engraver-platform" }
+engraver-core = { version = "0.1.1", path = "../engraver-core" }
+engraver-detect = { version = "0.1.1", path = "../engraver-detect" }
+engraver-platform = { version = "0.1.1", path = "../engraver-platform" }
 
 # CLI framework
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
