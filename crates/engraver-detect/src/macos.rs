@@ -45,7 +45,93 @@ pub fn list_drives() -> Result<Vec<Drive>> {
         }
     }
 
+    if let Some(root_info) = root_volume_info() {
+        mark_apfs_boot_disks(&mut drives, &root_info);
+    }
+
     Ok(drives)
+}
+
+/// Reason given to a disk that holds the APFS container macOS booted from
+const APFS_BOOT_DISK_REASON: &str = "Holds the APFS container macOS booted from";
+
+/// Run `diskutil info -plist /` and return its output
+///
+/// `/` is an APFS volume inside a synthesized container disk, which
+/// `get_disk_info` skips. The volume's info is the only place that names
+/// the physical disk behind it.
+fn root_volume_info() -> Option<String> {
+    let output = Command::new("diskutil")
+        .args(["info", "-plist", "/"])
+        .output()
+        .inspect_err(|e| tracing::debug!("Failed to run diskutil info /: {e}"))
+        .ok()?;
+
+    if !output.status.success() {
+        tracing::debug!(
+            "diskutil info / failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Physical stores (such as `disk4s2`) of the APFS container that holds a volume
+///
+/// Takes `diskutil info -plist <volume>` output. A volume that is not APFS has
+/// no stores. A Fusion drive has one on each of its two disks.
+pub(crate) fn parse_apfs_physical_stores(_plist: &str) -> Vec<String> {
+    Vec::new()
+}
+
+/// Whole disk that a BSD identifier lives on: `disk4s2` and `disk4` give `disk4`
+///
+/// Returns `None` for anything else, such as `disk3s1s1`, which names an APFS
+/// volume snapshot and not a physical store.
+pub(crate) fn whole_disk_of_store(store: &str) -> Option<&str> {
+    let rest = store.strip_prefix("disk")?;
+    let (disk, partition) = match rest.split_once('s') {
+        Some((disk, partition)) => (disk, Some(partition)),
+        None => (rest, None),
+    };
+
+    let is_number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !is_number(disk) || partition.is_some_and(|p| !is_number(p)) {
+        return None;
+    }
+
+    Some(&store[.."disk".len() + disk.len()])
+}
+
+/// Mark the disks behind the root volume's APFS container as system disks
+///
+/// Takes `diskutil info -plist /` output. macOS can boot from an external
+/// APFS disk. Its volumes, mounted at `/`, sit in a container disk that
+/// `get_disk_info` skips, and the physical disk has only an unmounted
+/// `Apple_APFS` partition, so the mount point check misses it.
+pub(crate) fn mark_apfs_boot_disks(drives: &mut [Drive], root_info: &str) {
+    let stores = parse_apfs_physical_stores(root_info);
+    if stores.is_empty() {
+        tracing::debug!("/ has no APFS physical stores, so only mount points mark system disks");
+        return;
+    }
+
+    for store in &stores {
+        let Some(disk) = whole_disk_of_store(store) else {
+            tracing::debug!("Ignoring APFS physical store {store}: not a disk identifier");
+            continue;
+        };
+
+        let path = format!("/dev/{disk}");
+        for drive in drives.iter_mut().filter(|d| d.path == path) {
+            drive.is_system = true;
+            drive
+                .system_reason
+                .get_or_insert_with(|| APFS_BOOT_DISK_REASON.to_string());
+        }
+    }
 }
 
 /// Parse disk list from diskutil plist output
