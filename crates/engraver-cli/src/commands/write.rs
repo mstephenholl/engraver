@@ -18,8 +18,8 @@ use std::time::Instant;
 
 use engraver_core::{
     auto_detect_checksum, validate_checkpoint, validate_source, CheckpointManager,
-    ChecksumAlgorithm, Source, SourceType, Verifier, VerifyConfig, WriteCheckpoint, WriteConfig,
-    WritePhase, Writer,
+    ChecksumAlgorithm, Source, SourceType, TargetIdentity, Verifier, VerifyConfig, WriteCheckpoint,
+    WriteConfig, WritePhase, Writer,
 };
 #[cfg(feature = "partition-info")]
 use engraver_core::{inspect_from_buffer, read_partition_header, PartitionTableType};
@@ -457,32 +457,71 @@ fn setup_checksum(args: &WriteArgs, image_size: Option<u64>, ctx: &WriteContext)
     Ok(())
 }
 
-/// Set up checkpoint manager and handle resume logic
+/// What a checkpoint records about the drive it is writing, and what a resume
+/// checks the drive at the same path against.
+fn target_identity(drive: &Drive) -> TargetIdentity {
+    TargetIdentity {
+        size: drive.size,
+        serial: drive.serial.clone(),
+        model: drive.model.clone(),
+    }
+}
+
+/// Open the checkpoint manager when this run saves or resumes checkpoints
+///
+/// A run that asked for checkpoints and cannot have them says so on stderr, even
+/// with `-q` or `--silent`: the user is relying on `--resume` to work later.
+fn open_checkpoint_manager(args: &WriteArgs) -> Option<CheckpointManager> {
+    if !(args.checkpoint || args.resume) {
+        return None;
+    }
+    match CheckpointManager::default_location() {
+        Ok(mgr) => Some(mgr),
+        Err(e) => {
+            eprintln!(
+                "{} could not set up checkpoints, so `--resume` will not be able to continue this write: {}",
+                style("warning:").yellow(),
+                e
+            );
+            None
+        }
+    }
+}
+
+/// Handle resume logic for the checkpoint manager, if there is one
 fn setup_checkpoint(
     args: &WriteArgs,
     source_info: &engraver_core::SourceInfo,
     target_drive: &Drive,
+    checkpoint_manager: Option<CheckpointManager>,
 ) -> Result<(Option<CheckpointManager>, u64, Option<WriteCheckpoint>)> {
     let silent = args.silent;
-    let checkpoint_manager = if args.checkpoint || args.resume {
-        match CheckpointManager::default_location() {
-            Ok(mgr) => Some(mgr),
-            Err(e) => {
-                tracing::warn!("Failed to create checkpoint manager: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
 
     let mut resume_offset: u64 = 0;
     let mut existing_checkpoint: Option<WriteCheckpoint> = None;
 
     if args.resume {
         if let Some(ref mgr) = checkpoint_manager {
-            if let Ok(Some(checkpoint)) = mgr.find_checkpoint(&args.source, &target_drive.path) {
-                let validation = validate_checkpoint(&checkpoint, source_info, target_drive.size);
+            // A checkpoint that cannot be loaded is left on disk, so say so and
+            // start fresh instead of resuming. The next save replaces it.
+            let found = match mgr.find_checkpoint(
+                &args.source,
+                &target_drive.path,
+                target_drive.serial.as_deref(),
+            ) {
+                Ok(found) => found,
+                Err(e) => {
+                    eprintln!(
+                        "{} could not load the existing checkpoint, starting a fresh write: {}",
+                        style("warning:").yellow(),
+                        e
+                    );
+                    None
+                }
+            };
+            if let Some(checkpoint) = found {
+                let validation =
+                    validate_checkpoint(&checkpoint, source_info, &target_identity(target_drive));
 
                 if validation.valid {
                     println_if!(
@@ -526,15 +565,32 @@ fn setup_checkpoint(
                         println_if!(silent, "  {} Starting fresh write", style("ℹ").blue());
                     }
                 } else {
-                    println_if!(
-                        silent,
-                        "\n{}",
-                        style("Existing checkpoint is invalid:").yellow()
-                    );
+                    // A checkpoint made for another drive is still good for that
+                    // drive, so it stays. The fresh write names its checkpoint
+                    // after this drive's serial, or after its path when it has
+                    // none, so it leaves the file alone only when that is not
+                    // the name of the file found. When it is, the fresh write
+                    // would replace the file anyway.
+                    let keep = validation.for_another_drive
+                        && checkpoint.target_serial != target_drive.serial;
+                    let heading = if keep {
+                        "Existing checkpoint is for another drive:"
+                    } else {
+                        "Existing checkpoint is invalid:"
+                    };
+                    println_if!(silent, "\n{}", style(heading).yellow());
                     for msg in &validation.messages {
                         println_if!(silent, "  {}", msg);
                     }
-                    let _ = mgr.remove(&checkpoint);
+                    if keep {
+                        println_if!(
+                            silent,
+                            "  {} Keeping it, so that drive can resume when it is plugged in again",
+                            style("ℹ").blue()
+                        );
+                    } else {
+                        let _ = mgr.remove(&checkpoint);
+                    }
                     println_if!(silent, "  {} Starting fresh write", style("ℹ").blue());
                 }
             }
@@ -542,6 +598,18 @@ fn setup_checkpoint(
     }
 
     Ok((checkpoint_manager, resume_offset, existing_checkpoint))
+}
+
+/// Say on stderr that a checkpoint did not reach disk
+///
+/// Printed even with `-q` or `--silent`: without the checkpoint `--resume`
+/// cannot continue this write, and the user finds that out only when they try.
+fn warn_checkpoint_not_saved(err: &engraver_core::Error) {
+    eprintln!(
+        "{} could not save the checkpoint, so `--resume` will not be able to continue this write: {}",
+        style("warning:").yellow(),
+        err
+    );
 }
 
 /// Execute the write command
@@ -595,8 +663,12 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     setup_checksum(&args, source_info.size, &ctx)?;
 
     // Step 6: Check for existing checkpoint (resume support)
-    let (checkpoint_manager, resume_offset, mut existing_checkpoint) =
-        setup_checkpoint(&args, &source_info, target_drive)?;
+    let (checkpoint_manager, resume_offset, mut existing_checkpoint) = setup_checkpoint(
+        &args,
+        &source_info,
+        target_drive,
+        open_checkpoint_manager(&args),
+    )?;
 
     // Step 7: Open source and target device
     let image_size = source_info.size;
@@ -646,7 +718,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         WriteCheckpoint::new(
             &source_info,
             &target_drive.path,
-            target_drive.size,
+            &target_identity(target_drive),
             &write_config,
         )
     };
@@ -835,7 +907,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                 let blocks_written = bytes_written / block_size as u64;
                 checkpoint.update_progress(bytes_written, blocks_written, start_time.elapsed());
                 if let Err(e) = mgr.save(&checkpoint) {
-                    tracing::warn!("Failed to save checkpoint: {}", e);
+                    warn_checkpoint_not_saved(&e);
                 } else {
                     println_if!(
                         silent,
@@ -860,7 +932,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
                 let blocks_written = bytes_written / block_size as u64;
                 checkpoint.update_progress(bytes_written, blocks_written, start_time.elapsed());
                 if let Err(save_err) = mgr.save(&checkpoint) {
-                    tracing::warn!("Failed to save checkpoint: {}", save_err);
+                    warn_checkpoint_not_saved(&save_err);
                 } else {
                     eprintln!(
                         "{} Checkpoint saved: {} ({} blocks written)",
@@ -2270,5 +2342,152 @@ mod tests {
 
         setup_checksum(&args, Some(64 * 1024), &silent_ctx())
             .expect("a matching checksum must pass");
+    }
+
+    // -------------------------------------------------------------------------
+    // setup_checkpoint tests
+    // -------------------------------------------------------------------------
+
+    const IMAGE: &str = "/images/ubuntu.iso";
+
+    fn resume_args() -> WriteArgs {
+        WriteArgs {
+            source: IMAGE.to_string(),
+            target: "/dev/sdb".to_string(),
+            verify: false,
+            skip_confirm: true,
+            block_size: "4M".to_string(),
+            checksum: None,
+            checksum_algo: "sha256".to_string(),
+            force: false,
+            no_unmount: true,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+            silent: true,
+            resume: true,
+            checkpoint: false,
+            auto_checksum: false,
+            show_partitions: false,
+        }
+    }
+
+    /// A USB stick at /dev/sdb
+    fn stick(serial: Option<&str>, size: u64) -> Drive {
+        Drive {
+            path: "/dev/sdb".to_string(),
+            raw_path: "/dev/sdb".to_string(),
+            name: "sdb".to_string(),
+            size,
+            removable: true,
+            is_system: false,
+            drive_type: engraver_detect::DriveType::Usb,
+            vendor: None,
+            model: Some("Flash".to_string()),
+            serial: serial.map(str::to_string),
+            mount_points: vec![],
+            partitions: vec![],
+            system_reason: None,
+            usb_speed: None,
+        }
+    }
+
+    /// The checkpoint of a write of IMAGE to `drive` that was half done, saved.
+    fn half_done_write(mgr: &CheckpointManager, drive: &Drive) -> WriteCheckpoint {
+        let mut checkpoint = WriteCheckpoint::new(
+            &engraver_core::SourceInfo::local(IMAGE, GIB),
+            &drive.path,
+            &target_identity(drive),
+            &WriteConfig::new(),
+        );
+        checkpoint.update_progress(GIB / 2, 128, std::time::Duration::from_secs(5));
+        mgr.save(&checkpoint).unwrap();
+        checkpoint
+    }
+
+    /// Run the resume step for a write of an image of `image_size` to `drive`.
+    fn resume_step(
+        mgr: CheckpointManager,
+        image_size: u64,
+        drive: &Drive,
+    ) -> (CheckpointManager, u64, Option<WriteCheckpoint>) {
+        let (mgr, offset, existing) = setup_checkpoint(
+            &resume_args(),
+            &engraver_core::SourceInfo::local(IMAGE, image_size),
+            drive,
+            Some(mgr),
+        )
+        .unwrap();
+        (mgr.unwrap(), offset, existing)
+    }
+
+    #[test]
+    fn test_setup_checkpoint_resumes_on_the_same_drive() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = CheckpointManager::new(dir.path()).unwrap();
+        let drive = stick(Some("SER-AAAA"), 4 * GIB);
+        half_done_write(&mgr, &drive);
+
+        let (_, offset, existing) = resume_step(mgr, GIB, &drive);
+
+        assert_eq!(offset, GIB / 2);
+        assert!(existing.is_some());
+    }
+
+    #[test]
+    fn test_setup_checkpoint_keeps_the_checkpoint_of_another_drive() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = CheckpointManager::new(dir.path()).unwrap();
+        // A checkpoint from 0.1.x names no serial, so its file is named by the
+        // path. A bigger stick with a serial is now at that path.
+        let old_stick = stick(None, 4 * GIB);
+        let kept = half_done_write(&mgr, &old_stick);
+        let new_stick = stick(Some("SER-BBBB"), 8 * GIB);
+
+        let (mgr, offset, existing) = resume_step(mgr, GIB, &new_stick);
+
+        assert_eq!(offset, 0, "must not resume onto another drive");
+        assert!(existing.is_none());
+        assert!(
+            mgr.checkpoint_path(&kept).exists(),
+            "the checkpoint of the other drive must stay"
+        );
+
+        // The fresh write to the new stick saves a checkpoint when cancelled and
+        // removes it when done. Neither may touch the old stick's.
+        let fresh = half_done_write(&mgr, &new_stick);
+        mgr.remove(&fresh).unwrap();
+        let (_, offset, existing) = resume_step(mgr, GIB, &old_stick);
+        assert_eq!(offset, GIB / 2, "the old stick can still resume");
+        assert!(existing.is_some());
+    }
+
+    #[test]
+    fn test_setup_checkpoint_removes_a_checkpoint_the_fresh_write_would_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = CheckpointManager::new(dir.path()).unwrap();
+        // Neither stick has a serial, so the fresh write is saved under the same
+        // name as this checkpoint, and it cannot be kept.
+        let old = half_done_write(&mgr, &stick(None, 4 * GIB));
+
+        let (mgr, offset, existing) = resume_step(mgr, GIB, &stick(None, 8 * GIB));
+
+        assert_eq!(offset, 0);
+        assert!(existing.is_none());
+        assert!(!mgr.checkpoint_path(&old).exists());
+    }
+
+    #[test]
+    fn test_setup_checkpoint_removes_a_checkpoint_for_a_changed_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = CheckpointManager::new(dir.path()).unwrap();
+        let drive = stick(Some("SER-AAAA"), 4 * GIB);
+        let old = half_done_write(&mgr, &drive);
+
+        // The image at the same path is now another size. That checkpoint is no
+        // good for any drive.
+        let (mgr, offset, existing) = resume_step(mgr, 2 * GIB, &drive);
+
+        assert_eq!(offset, 0);
+        assert!(existing.is_none());
+        assert!(!mgr.checkpoint_path(&old).exists());
     }
 }

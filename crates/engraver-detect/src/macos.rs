@@ -45,7 +45,130 @@ pub fn list_drives() -> Result<Vec<Drive>> {
         }
     }
 
+    if let Some(root_info) = root_volume_info() {
+        mark_apfs_boot_disks(&mut drives, &root_info);
+    }
+
     Ok(drives)
+}
+
+/// Reason given to a disk that holds the APFS container macOS booted from
+const APFS_BOOT_DISK_REASON: &str = "Holds the APFS container macOS booted from";
+
+/// Run `diskutil info -plist /` and return its output
+///
+/// `/` is an APFS volume inside a synthesized container disk, which
+/// `get_disk_info` skips. The volume's info is the only place that names
+/// the physical disk behind it.
+fn root_volume_info() -> Option<String> {
+    let output = Command::new("diskutil")
+        .args(["info", "-plist", "/"])
+        .output()
+        .inspect_err(|e| tracing::debug!("Failed to run diskutil info /: {e}"))
+        .ok()?;
+
+    if !output.status.success() {
+        tracing::debug!(
+            "diskutil info / failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Physical stores (such as `disk4s2`) of the APFS container that holds a volume
+///
+/// Takes `diskutil info -plist <volume>` output. A volume that is not APFS has
+/// no stores. A Fusion drive has one on each of its two disks.
+///
+/// The stores are an array of dicts, each with an `APFSPhysicalStore` string,
+/// so `parse_disk_info` would keep only the last one.
+pub(crate) fn parse_apfs_physical_stores(plist: &str) -> Vec<String> {
+    let mut lines = plist.lines().map(str::trim);
+
+    let has_key = lines.any(|line| line == "<key>APFSPhysicalStores</key>");
+    if !has_key || lines.next() != Some("<array>") {
+        return Vec::new();
+    }
+
+    let mut stores = Vec::new();
+    let mut depth = 1;
+    let mut after_store_key = false;
+
+    for line in lines {
+        match line {
+            "<array>" => depth += 1,
+            "</array>" => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            "<key>APFSPhysicalStore</key>" => after_store_key = true,
+            _ if after_store_key => {
+                after_store_key = false;
+                if let Some(store) = line
+                    .strip_prefix("<string>")
+                    .and_then(|s| s.strip_suffix("</string>"))
+                {
+                    stores.push(store.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    stores
+}
+
+/// Whole disk that a BSD identifier lives on: `disk4s2` and `disk4` give `disk4`
+///
+/// Returns `None` for anything else, such as `disk3s1s1`, which names an APFS
+/// volume snapshot and not a physical store.
+pub(crate) fn whole_disk_of_store(store: &str) -> Option<&str> {
+    let rest = store.strip_prefix("disk")?;
+    let (disk, partition) = match rest.split_once('s') {
+        Some((disk, partition)) => (disk, Some(partition)),
+        None => (rest, None),
+    };
+
+    let is_number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !is_number(disk) || partition.is_some_and(|p| !is_number(p)) {
+        return None;
+    }
+
+    Some(&store[.."disk".len() + disk.len()])
+}
+
+/// Mark the disks behind the root volume's APFS container as system disks
+///
+/// Takes `diskutil info -plist /` output. macOS can boot from an external
+/// APFS disk. Its volumes, mounted at `/`, sit in a container disk that
+/// `get_disk_info` skips, and the physical disk has only an unmounted
+/// `Apple_APFS` partition, so the mount point check misses it.
+pub(crate) fn mark_apfs_boot_disks(drives: &mut [Drive], root_info: &str) {
+    let stores = parse_apfs_physical_stores(root_info);
+    if stores.is_empty() {
+        tracing::debug!("/ has no APFS physical stores, so only mount points mark system disks");
+        return;
+    }
+
+    for store in &stores {
+        let Some(disk) = whole_disk_of_store(store) else {
+            tracing::debug!("Ignoring APFS physical store {store}: not a disk identifier");
+            continue;
+        };
+
+        let path = format!("/dev/{disk}");
+        for drive in drives.iter_mut().filter(|d| d.path == path) {
+            drive.is_system = true;
+            drive
+                .system_reason
+                .get_or_insert_with(|| APFS_BOOT_DISK_REASON.to_string());
+        }
+    }
 }
 
 /// Parse disk list from diskutil plist output
@@ -918,5 +1041,244 @@ USB:
         // Should return None if no media name
         let speed = parse_usb_speed_from_profiler(output, "disk2", None);
         assert_eq!(speed, None);
+    }
+
+    // -------------------------------------------------------------------------
+    // APFS boot disk tests
+    // -------------------------------------------------------------------------
+
+    /// `diskutil info -plist /` for a Mac booted from APFS on `disk4s2`. The
+    /// volume is `disk5s1s1`, in the synthesized container `disk5`.
+    const ROOT_INFO_DISK4: &str = r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>APFSContainerReference</key>
+    <string>disk5</string>
+    <key>APFSPhysicalStores</key>
+    <array>
+        <dict>
+            <key>APFSPhysicalStore</key>
+            <string>disk4s2</string>
+        </dict>
+    </array>
+    <key>DeviceIdentifier</key>
+    <string>disk5s1s1</string>
+    <key>FilesystemType</key>
+    <string>apfs</string>
+    <key>MountPoint</key>
+    <string>/</string>
+    <key>ParentWholeDisk</key>
+    <string>disk5</string>
+    <key>VolumeName</key>
+    <string>Macintosh HD</string>
+</dict>
+</plist>
+"#;
+
+    /// `diskutil info -plist /` for a Fusion drive, whose APFS container
+    /// spans `disk0s2` and `disk1s2`
+    const ROOT_INFO_FUSION: &str = r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>APFSContainerReference</key>
+    <string>disk2</string>
+    <key>APFSPhysicalStores</key>
+    <array>
+        <dict>
+            <key>APFSPhysicalStore</key>
+            <string>disk0s2</string>
+        </dict>
+        <dict>
+            <key>APFSPhysicalStore</key>
+            <string>disk1s2</string>
+        </dict>
+    </array>
+    <key>DeviceIdentifier</key>
+    <string>disk2s1</string>
+    <key>MountPoint</key>
+    <string>/</string>
+</dict>
+</plist>
+"#;
+
+    /// `diskutil info -plist /` for an HFS+ root, which has no APFS keys
+    const ROOT_INFO_HFS: &str = r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>DeviceIdentifier</key>
+    <string>disk1s2</string>
+    <key>FilesystemType</key>
+    <string>hfs</string>
+    <key>MountPoint</key>
+    <string>/</string>
+</dict>
+</plist>
+"#;
+
+    /// `diskutil info -plist <disk>` for an external, ejectable whole disk
+    fn external_disk_info(disk: &str) -> String {
+        format!(
+            r#"
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>DeviceNode</key>
+    <string>/dev/{disk}</string>
+    <key>Ejectable</key>
+    <true/>
+    <key>Internal</key>
+    <false/>
+    <key>MediaName</key>
+    <string>Portable SSD</string>
+    <key>RemovableMedia</key>
+    <false/>
+    <key>TotalSize</key>
+    <integer>1000204886016</integer>
+    <key>VirtualOrPhysical</key>
+    <string>Physical</string>
+</dict>
+</plist>
+"#
+        )
+    }
+
+    /// Build a drive the way `get_disk_info` does, from `diskutil info` output
+    /// and no mount points
+    fn unmounted_drive(info_plist: &str) -> Drive {
+        let info = parse_disk_info(info_plist);
+        let internal = info.get("Internal").is_none_or(|s| s == "true");
+        let (is_system, system_reason) = check_if_system_drive(&info, &[], internal);
+
+        Drive {
+            is_system,
+            system_reason,
+            ..Drive::new(info["DeviceNode"].clone())
+        }
+    }
+
+    #[test]
+    fn test_external_boot_disk_is_marked_as_system_disk() {
+        let mut drives = vec![
+            unmounted_drive(&external_disk_info("disk4")),
+            unmounted_drive(&external_disk_info("disk6")),
+        ];
+        assert!(
+            !drives[0].is_system,
+            "the boot disk has no mount point to give it away"
+        );
+
+        mark_apfs_boot_disks(&mut drives, ROOT_INFO_DISK4);
+
+        assert!(drives[0].is_system, "disk4 holds the container for /");
+        assert!(drives[0]
+            .system_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("macOS booted from")));
+        assert!(!drives[1].is_system, "disk6 has nothing to do with /");
+    }
+
+    #[test]
+    fn test_fusion_boot_disks_are_all_marked_as_system_disks() {
+        let mut drives = vec![
+            Drive::new("/dev/disk0"),
+            Drive::new("/dev/disk1"),
+            Drive::new("/dev/disk3"),
+        ];
+
+        mark_apfs_boot_disks(&mut drives, ROOT_INFO_FUSION);
+
+        assert!(drives[0].is_system, "disk0 holds the first store");
+        assert!(drives[1].is_system, "disk1 holds the second store");
+        assert!(!drives[2].is_system, "disk3 holds neither store");
+    }
+
+    #[test]
+    fn test_boot_disk_keeps_the_reason_it_already_has() {
+        let mut drive = Drive::new("/dev/disk4");
+        drive.is_system = true;
+        drive.system_reason = Some("Contains system mount point: /".to_string());
+        let mut drives = vec![drive];
+
+        mark_apfs_boot_disks(&mut drives, ROOT_INFO_DISK4);
+
+        assert!(drives[0].is_system);
+        assert_eq!(
+            drives[0].system_reason.as_deref(),
+            Some("Contains system mount point: /")
+        );
+    }
+
+    #[test]
+    fn test_root_without_apfs_stores_marks_nothing() {
+        let empty_stores = r"
+<dict>
+    <key>APFSPhysicalStores</key>
+    <array/>
+</dict>
+";
+
+        for root_info in [ROOT_INFO_HFS, empty_stores, ""] {
+            let mut drives = vec![Drive::new("/dev/disk1")];
+            mark_apfs_boot_disks(&mut drives, root_info);
+            assert!(!drives[0].is_system, "marked by {root_info:?}");
+            assert!(drives[0].system_reason.is_none());
+        }
+    }
+
+    #[test]
+    fn test_whole_disk_of_store() {
+        assert_eq!(whole_disk_of_store("disk4s2"), Some("disk4"));
+        assert_eq!(whole_disk_of_store("disk12s34"), Some("disk12"));
+        assert_eq!(whole_disk_of_store("disk4"), Some("disk4"));
+    }
+
+    #[test]
+    fn test_whole_disk_of_store_rejects_other_identifiers() {
+        for not_a_store in [
+            "",
+            "disk",
+            "disks2",
+            "disk4s",
+            "disk4s2s1", // a volume snapshot
+            "disk4x2",
+            "diskas2",
+            "/dev/disk4s2",
+            "rdisk4s2",
+        ] {
+            assert_eq!(whole_disk_of_store(not_a_store), None, "{not_a_store:?}");
+        }
+    }
+
+    // The next test runs the real `diskutil`, so it checks the key names this
+    // module reads against what macOS emits. It assumes `/` is an APFS volume,
+    // as it is on GitHub's macOS runners.
+    #[test]
+    fn test_real_root_volume_stores_are_listed_disks() {
+        let root_info = root_volume_info().expect("diskutil info -plist / should succeed");
+        let stores = parse_apfs_physical_stores(&root_info);
+        assert!(
+            !stores.is_empty(),
+            "no APFS physical stores found in:\n{root_info}"
+        );
+
+        let list = Command::new("diskutil")
+            .args(["list", "-plist"])
+            .output()
+            .expect("diskutil list -plist should run");
+        let whole_disks = parse_disk_list(&String::from_utf8_lossy(&list.stdout))
+            .expect("diskutil list -plist should name disks");
+
+        for store in &stores {
+            let disk = whole_disk_of_store(store)
+                .unwrap_or_else(|| panic!("{store:?} is not a disk identifier"));
+            assert!(
+                whole_disks.iter().any(|d| d == disk),
+                "{disk} (from {store}) is not in WholeDisks: {whole_disks:?}"
+            );
+        }
     }
 }

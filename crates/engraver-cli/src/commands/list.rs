@@ -172,6 +172,10 @@ fn serde_json_drives(drives: &[engraver_detect::Drive]) -> String {
             opt_json_str(&drive.vendor)
         ));
         output.push_str(&format!("    \"model\": {},\n", opt_json_str(&drive.model)));
+        output.push_str(&format!(
+            "    \"serial\": {},\n",
+            opt_json_str(&drive.serial)
+        ));
         output.push_str(&format!("    \"size\": {},\n", drive.size));
         output.push_str(&format!(
             "    \"size_display\": \"{}\",\n",
@@ -352,6 +356,23 @@ mod tests {
         assert!(json.contains("\"drive_type\": \"USB\""));
         assert!(json.contains("\"usb_speed\": \"USB 3.0 (5 Gbps)\""));
         assert!(json.contains("\"mount_points\": [\"/mnt/usb\"]"));
+    }
+
+    #[test]
+    fn test_serde_json_drives_includes_the_serial() {
+        let mut drive = create_test_drive();
+        drive.serial = Some("SN-12345".to_string());
+
+        let json = serde_json_drives(&[drive]);
+
+        assert!(json.contains("\"serial\": \"SN-12345\""), "{json}");
+    }
+
+    #[test]
+    fn test_serde_json_drives_unknown_serial_is_null() {
+        let json = serde_json_drives(&[create_test_drive()]);
+
+        assert!(json.contains("\"serial\": null"), "{json}");
     }
 
     #[test]

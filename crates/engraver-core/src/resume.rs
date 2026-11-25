@@ -8,14 +8,19 @@
 //!
 //! ```no_run
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! use engraver_core::resume::{WriteCheckpoint, CheckpointManager};
+//! use engraver_core::resume::{CheckpointManager, TargetIdentity, WriteCheckpoint};
 //! use engraver_core::{WriteConfig, SourceInfo};
 //!
 //! // Start a new write with checkpointing
 //! let manager = CheckpointManager::new("/path/to/checkpoints")?;
 //! let source_info = SourceInfo::local("/path/to/image.iso", 1024 * 1024);
 //! let config = WriteConfig::new();
-//! let mut checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 32_000_000_000, &config);
+//! let target = TargetIdentity {
+//!     size: 32_000_000_000,
+//!     serial: Some("0123456789".to_string()),
+//!     model: Some("Flash Drive".to_string()),
+//! };
+//! let mut checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", &target, &config);
 //!
 //! // ... write blocks, periodically calling:
 //! manager.save(&checkpoint)?;
@@ -41,6 +46,21 @@ pub const CHECKPOINT_DIR_NAME: &str = "engraver";
 
 /// Checkpoint file extension
 pub const CHECKPOINT_EXTENSION: &str = "checkpoint";
+
+/// What identifies the drive a write was started on.
+///
+/// A device path is not an identity: a different stick can show up at
+/// `/dev/sdb` after a replug. A checkpoint stores this so a resume can tell
+/// the drive it was made for from another one at the same path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetIdentity {
+    /// Size of the device in bytes
+    pub size: u64,
+    /// Serial number, when the platform reports one
+    pub serial: Option<String>,
+    /// Model name, when the platform reports one
+    pub model: Option<String>,
+}
 
 /// A checkpoint representing the state of an interrupted write operation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +108,16 @@ pub struct WriteCheckpoint {
 
     /// Size of the target device in bytes
     pub target_size: u64,
+
+    /// Serial number of the target device at checkpoint creation, when it
+    /// had one. `None` for checkpoints written by engraver 0.1.x.
+    #[serde(default)]
+    pub target_serial: Option<String>,
+
+    /// Model name of the target device at checkpoint creation, when it had
+    /// one. `None` for checkpoints written by engraver 0.1.x.
+    #[serde(default)]
+    pub target_model: Option<String>,
 
     // ── Write Configuration ─────────────────────────────────────────────────
     /// Block size used for writing
@@ -156,7 +186,7 @@ impl WriteCheckpoint {
     pub fn new(
         source_info: &SourceInfo,
         target_path: &str,
-        target_size: u64,
+        target: &TargetIdentity,
         config: &WriteConfig,
     ) -> Self {
         let now = SystemTime::now()
@@ -187,7 +217,9 @@ impl WriteCheckpoint {
             source_seekable,
             source_resumable,
             target_path: target_path.to_string(),
-            target_size,
+            target_size: target.size,
+            target_serial: target.serial.clone(),
+            target_model: target.model.clone(),
             block_size: config.block_size,
             config: WriteConfigCheckpoint::from(config),
             bytes_written: 0,
@@ -241,11 +273,15 @@ impl WriteCheckpoint {
     }
 
     /// Get the checkpoint filename for this session
+    ///
+    /// A drive with a serial is named by the serial, and one without by the path
+    /// it was at, as `checkpoint_filename` explains.
     pub fn filename(&self) -> String {
-        // Use a hash of source+target for the filename to avoid collisions
-        let key = format!("{}:{}", self.source_path, self.target_path);
-        let hash = simple_hash(&key);
-        format!("{:016x}.{}", hash, CHECKPOINT_EXTENSION)
+        checkpoint_filename(
+            &self.source_path,
+            &self.target_path,
+            self.target_serial.as_deref(),
+        )
     }
 }
 
@@ -289,17 +325,21 @@ impl CheckpointManager {
         let path = self.checkpoint_path(checkpoint);
         let temp_path = path.with_extension("tmp");
 
-        // Write to temp file first, then rename (atomic on most systems)
+        // Write to temp file first, then rename (atomic on most systems).
+        //
+        // The rename comes last and only after the bytes are on disk. Dropping a
+        // BufWriter ignores a failed flush, and a rename does not make the data
+        // durable, so the buffer is taken back with into_inner (which reports a
+        // failed flush) and the file is synced before it replaces the old
+        // checkpoint.
         let file = fs::File::create(&temp_path).map_err(Error::Io)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, checkpoint).map_err(|e| {
-            Error::Io(std::io::Error::other(format!(
-                "Failed to serialize checkpoint: {}",
-                e
-            )))
-        })?;
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, checkpoint)
+            .map_err(|e| Error::Io(std::io::Error::from(e)))?;
+        let file = writer.into_inner().map_err(|e| Error::Io(e.into_error()))?;
+        file.sync_all().map_err(Error::Io)?;
+        drop(file);
 
-        // Atomic rename
         fs::rename(&temp_path, &path).map_err(Error::Io)?;
 
         tracing::debug!("Saved checkpoint to {:?}", path);
@@ -348,29 +388,45 @@ impl CheckpointManager {
     }
 
     /// Find an existing checkpoint for a source/target combination
+    ///
+    /// With `target_serial`, the drive's own checkpoint is looked up first and,
+    /// when there is none, the checkpoint named after the path alone: one from
+    /// 0.1.x, or one for a drive that reports no serial. Without it, only that
+    /// path-named checkpoint is looked up, since a checkpoint of a drive with a
+    /// serial is never named by its path.
+    ///
+    /// Returns `Ok(None)` when there is none. A checkpoint file that exists but
+    /// cannot be loaded (damaged, or written by a newer engraver) is an error and
+    /// is left in place.
     pub fn find_checkpoint(
         &self,
         source_path: &str,
         target_path: &str,
+        target_serial: Option<&str>,
     ) -> Result<Option<WriteCheckpoint>> {
-        let key = format!("{}:{}", source_path, target_path);
-        let hash = simple_hash(&key);
-        let filename = format!("{:016x}.{}", hash, CHECKPOINT_EXTENSION);
-        let path = self.checkpoint_dir.join(&filename);
-
-        if path.exists() {
-            match self.load_from_path(&path) {
-                Ok(checkpoint) => Ok(Some(checkpoint)),
-                Err(e) => {
-                    tracing::warn!("Failed to load checkpoint {:?}: {}", path, e);
-                    // Remove corrupted checkpoint
-                    let _ = fs::remove_file(&path);
-                    Ok(None)
-                }
+        let own = known_serial(target_serial).map(Some);
+        for serial in own.into_iter().chain([None]) {
+            let path =
+                self.checkpoint_dir
+                    .join(checkpoint_filename(source_path, target_path, serial));
+            if !path.exists() {
+                continue;
             }
-        } else {
-            Ok(None)
+
+            // A file that cannot be loaded stays where it is. It may be a
+            // checkpoint from a newer engraver, and deleting it would destroy the
+            // only record of an interrupted write. The caller decides what to do
+            // with the error.
+            return self.load_from_path(&path).map(Some).map_err(|e| match e {
+                Error::Io(io) => Error::Io(std::io::Error::new(
+                    io.kind(),
+                    format!("{}: {io}", path.display()),
+                )),
+                other => other,
+            });
         }
+
+        Ok(None)
     }
 
     /// List all checkpoints in the directory
@@ -461,6 +517,30 @@ fn simple_hash(s: &str) -> u64 {
     hash
 }
 
+/// A serial that tells one drive from another. An empty one tells nothing.
+fn known_serial(serial: Option<&str>) -> Option<&str> {
+    serial.filter(|s| !s.is_empty())
+}
+
+/// The name of the checkpoint file for a source written to a target
+///
+/// A drive with a serial is named by the source and the serial, and not by the
+/// path: two sticks that show up at `/dev/sdb` in turn have two files, and a
+/// stick plugged back in at `/dev/sdc` finds the one it had. A drive with no
+/// serial is named by the source and the path, as 0.1.x named every checkpoint,
+/// so those files are still found.
+fn checkpoint_filename(
+    source_path: &str,
+    target_path: &str,
+    target_serial: Option<&str>,
+) -> String {
+    let key = match known_serial(target_serial) {
+        Some(serial) => format!("{source_path}:serial={serial}"),
+        None => format!("{source_path}:{target_path}"),
+    };
+    format!("{:016x}.{}", simple_hash(&key), CHECKPOINT_EXTENSION)
+}
+
 /// Validation result for a checkpoint
 #[derive(Debug)]
 pub struct CheckpointValidation {
@@ -470,6 +550,11 @@ pub struct CheckpointValidation {
     pub messages: Vec<String>,
     /// Warnings that don't prevent resuming
     pub warnings: Vec<String>,
+    /// Is the checkpoint invalid because the target is not the drive it was made
+    /// for (a different size, serial or model)? Such a checkpoint is still good
+    /// for that drive, so the caller may keep it. Never set for a problem with
+    /// the source.
+    pub for_another_drive: bool,
 }
 
 impl CheckpointValidation {
@@ -479,6 +564,7 @@ impl CheckpointValidation {
             valid: true,
             messages: Vec::new(),
             warnings: Vec::new(),
+            for_another_drive: false,
         }
     }
 
@@ -488,6 +574,7 @@ impl CheckpointValidation {
             valid: false,
             messages: vec![message.into()],
             warnings: Vec::new(),
+            for_another_drive: false,
         }
     }
 
@@ -503,13 +590,31 @@ impl CheckpointValidation {
         self.messages.push(error.into());
         self
     }
+
+    /// Add an error that says the checkpoint is for another drive
+    fn with_other_drive_error(mut self, error: impl Into<String>) -> Self {
+        self.for_another_drive = true;
+        self.with_error(error)
+    }
+}
+
+/// A drive property for a message: quoted when known, `unknown` when not
+fn describe(value: &Option<String>) -> String {
+    value
+        .as_ref()
+        .map_or_else(|| "unknown".to_string(), |v| format!("'{v}'"))
 }
 
 /// Validate a checkpoint against current source/target state
+///
+/// The target is invalid when its size, or its serial or model where both are
+/// known, differ from the drive the checkpoint was made for, and the result then
+/// has `for_another_drive` set. An unknown serial on either side is valid with a
+/// warning.
 pub fn validate_checkpoint(
     checkpoint: &WriteCheckpoint,
     source_info: &SourceInfo,
-    target_size: u64,
+    target: &TargetIdentity,
 ) -> CheckpointValidation {
     let mut result = CheckpointValidation::valid();
 
@@ -531,12 +636,44 @@ pub fn validate_checkpoint(
         }
     }
 
-    // Check target size
-    if checkpoint.target_size != target_size {
-        result = result.with_warning(format!(
+    // Check the target is the drive the checkpoint was made for. A device path
+    // does not say which drive sits behind it, so compare what the drive reports
+    // about itself. A different drive would get only the tail of the image, with
+    // the first part of it never written, so a mismatch makes the checkpoint
+    // invalid.
+    if checkpoint.target_size != target.size {
+        result = result.with_other_drive_error(format!(
             "Target size changed: checkpoint has {} bytes, current is {} bytes",
-            checkpoint.target_size, target_size
+            checkpoint.target_size, target.size
         ));
+    }
+
+    match (&checkpoint.target_serial, &target.serial) {
+        (Some(cp_serial), Some(cur_serial)) if cp_serial != cur_serial => {
+            result = result.with_other_drive_error(format!(
+                "Target serial changed: checkpoint has '{cp_serial}', current is '{cur_serial}'"
+            ));
+        }
+        (Some(_), Some(_)) => {}
+        (cp_serial, cur_serial) => {
+            // Checkpoints from 0.1.x have no serial, and some drives report none.
+            // Resuming is allowed, since refusing would strand every old
+            // checkpoint, but the user is told the drive is unconfirmed.
+            result = result.with_warning(format!(
+                "Target serial unknown: checkpoint has {}, current is {}; \
+                 cannot confirm this is the drive the checkpoint was made for",
+                describe(cp_serial),
+                describe(cur_serial)
+            ));
+        }
+    }
+
+    if let (Some(cp_model), Some(cur_model)) = (&checkpoint.target_model, &target.model) {
+        if cp_model != cur_model {
+            result = result.with_other_drive_error(format!(
+                "Target model changed: checkpoint has '{cp_model}', current is '{cur_model}'"
+            ));
+        }
     }
 
     // Check if source can be resumed
@@ -616,12 +753,25 @@ mod tests {
         WriteConfig::new().block_size(4 * 1024 * 1024) // 4 MB blocks
     }
 
+    /// A target that is known only by its size, as a drive with no serial.
+    fn target(size: u64) -> TargetIdentity {
+        TargetIdentity {
+            size,
+            serial: None,
+            model: None,
+        }
+    }
+
     #[test]
     fn test_checkpoint_creation() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         assert_eq!(checkpoint.version, CHECKPOINT_VERSION);
         assert_eq!(checkpoint.source_path, "/path/to/image.iso");
@@ -636,8 +786,12 @@ mod tests {
     fn test_checkpoint_progress_update() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let mut checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let mut checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         checkpoint.update_progress(50 * 1024 * 1024, 12, Duration::from_secs(10));
 
@@ -650,8 +804,12 @@ mod tests {
     fn test_checkpoint_percentage() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let mut checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let mut checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         // 0% initially
         assert!((checkpoint.percentage() - 0.0).abs() < 0.001);
@@ -682,7 +840,8 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint = WriteCheckpoint::new(&local_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&local_info, "/dev/sdb", &target(1024 * 1024), &config);
         assert!(checkpoint.can_resume());
 
         // HTTP - can resume (resumable via Range)
@@ -698,7 +857,8 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint = WriteCheckpoint::new(&http_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&http_info, "/dev/sdb", &target(1024 * 1024), &config);
         assert!(checkpoint.can_resume());
 
         // Gzip - cannot resume (not seekable, not resumable)
@@ -714,7 +874,8 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint = WriteCheckpoint::new(&gzip_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&gzip_info, "/dev/sdb", &target(1024 * 1024), &config);
         assert!(!checkpoint.can_resume());
     }
 
@@ -722,12 +883,14 @@ mod tests {
     fn test_checkpoint_filename() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&source_info, "/dev/sdb", &target(1024 * 1024), &config);
 
         let filename = checkpoint.filename();
         assert!(filename.ends_with(".checkpoint"));
         // Should be consistent for same source/target
-        let checkpoint2 = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint2 =
+            WriteCheckpoint::new(&source_info, "/dev/sdb", &target(1024 * 1024), &config);
         assert_eq!(checkpoint.filename(), checkpoint2.filename());
     }
 
@@ -735,8 +898,12 @@ mod tests {
     fn test_checkpoint_serialization() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let mut checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let mut checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
         checkpoint.update_progress(1024 * 1024, 1, Duration::from_secs(1));
 
         // Serialize to JSON
@@ -754,10 +921,15 @@ mod tests {
     fn test_validate_checkpoint_valid() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
-        let result = validate_checkpoint(&checkpoint, &source_info, 32 * 1024 * 1024 * 1024);
+        let result =
+            validate_checkpoint(&checkpoint, &source_info, &target(32 * 1024 * 1024 * 1024));
         assert!(result.valid);
         assert!(result.messages.is_empty());
     }
@@ -766,14 +938,19 @@ mod tests {
     fn test_validate_checkpoint_source_changed() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         // Different source size
         let mut changed_info = source_info.clone();
         changed_info.size = Some(200 * 1024 * 1024);
 
-        let result = validate_checkpoint(&checkpoint, &changed_info, 32 * 1024 * 1024 * 1024);
+        let result =
+            validate_checkpoint(&checkpoint, &changed_info, &target(32 * 1024 * 1024 * 1024));
         assert!(!result.valid);
         assert!(result.messages[0].contains("size changed"));
     }
@@ -793,9 +970,10 @@ mod tests {
             source_header_hash: None,
         };
         let config = create_test_config();
-        let checkpoint = WriteCheckpoint::new(&gzip_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&gzip_info, "/dev/sdb", &target(1024 * 1024), &config);
 
-        let result = validate_checkpoint(&checkpoint, &gzip_info, 1024 * 1024);
+        let result = validate_checkpoint(&checkpoint, &gzip_info, &target(1024 * 1024));
         assert!(!result.valid);
         assert!(result.messages[0].contains("does not support resume"));
     }
@@ -834,8 +1012,12 @@ mod tests {
 
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let mut checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let mut checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
         checkpoint.update_progress(50 * 1024 * 1024, 12, Duration::from_secs(10));
 
         // Save checkpoint
@@ -849,28 +1031,77 @@ mod tests {
     }
 
     #[test]
+    fn test_checkpoint_filename_without_a_serial_is_unchanged_from_0_1() {
+        // FNV-1a of "/path/to/image.iso:/dev/sdb", as 0.1.x named it. A changed
+        // name would strand the checkpoints those versions left behind.
+        let checkpoint = WriteCheckpoint::new(
+            &create_test_source_info(),
+            "/dev/sdb",
+            &target(1024),
+            &create_test_config(),
+        );
+
+        assert_eq!(checkpoint.filename(), "4fe336349dc37360.checkpoint");
+    }
+
+    #[test]
+    fn test_checkpoint_filename_with_a_serial_ignores_the_path() {
+        let drive = |serial: Option<&str>| TargetIdentity {
+            size: 1024,
+            serial: serial.map(str::to_string),
+            model: None,
+        };
+        let name = |path: &str, serial: Option<&str>| {
+            WriteCheckpoint::new(
+                &create_test_source_info(),
+                path,
+                &drive(serial),
+                &create_test_config(),
+            )
+            .filename()
+        };
+
+        assert_eq!(
+            name("/dev/sdb", Some("AAAA")),
+            name("/dev/sdc", Some("AAAA"))
+        );
+        assert_ne!(
+            name("/dev/sdb", Some("AAAA")),
+            name("/dev/sdb", Some("BBBB"))
+        );
+        assert_ne!(name("/dev/sdb", Some("AAAA")), name("/dev/sdb", None));
+        // An empty serial tells nothing, so it is no serial.
+        assert_eq!(name("/dev/sdb", Some("")), name("/dev/sdb", None));
+        assert_ne!(name("/dev/sdb", Some("")), name("/dev/sdc", Some("")));
+    }
+
+    #[test]
     fn test_checkpoint_manager_find_checkpoint() {
         let temp_dir = tempfile::tempdir().unwrap();
         let manager = CheckpointManager::new(temp_dir.path()).unwrap();
 
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         // Save checkpoint
         manager.save(&checkpoint).unwrap();
 
         // Find it
         let found = manager
-            .find_checkpoint("/path/to/image.iso", "/dev/sdb")
+            .find_checkpoint("/path/to/image.iso", "/dev/sdb", None)
             .unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().source_path, "/path/to/image.iso");
 
         // Try to find non-existent
         let not_found = manager
-            .find_checkpoint("/different/path.iso", "/dev/sdc")
+            .find_checkpoint("/different/path.iso", "/dev/sdc", None)
             .unwrap();
         assert!(not_found.is_none());
     }
@@ -882,8 +1113,12 @@ mod tests {
 
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         // Save checkpoint
         manager.save(&checkpoint).unwrap();
@@ -919,8 +1154,12 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint1 =
-            WriteCheckpoint::new(&source_info1, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint1 = WriteCheckpoint::new(
+            &source_info1,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
         manager.save(&checkpoint1).unwrap();
 
         let source_info2 = SourceInfo {
@@ -935,8 +1174,12 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint2 =
-            WriteCheckpoint::new(&source_info2, "/dev/sdc", 64 * 1024 * 1024 * 1024, &config);
+        let checkpoint2 = WriteCheckpoint::new(
+            &source_info2,
+            "/dev/sdc",
+            &target(64 * 1024 * 1024 * 1024),
+            &config,
+        );
         manager.save(&checkpoint2).unwrap();
 
         // List should return both
@@ -951,8 +1194,12 @@ mod tests {
 
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
         manager.save(&checkpoint).unwrap();
 
         // Cleanup with 1 hour max age - checkpoint is fresh, shouldn't be removed
@@ -972,8 +1219,12 @@ mod tests {
     fn test_checkpoint_mark_resumed() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let mut checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let mut checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         assert_eq!(checkpoint.resume_count, 0);
 
@@ -988,8 +1239,12 @@ mod tests {
     fn test_checkpoint_add_retries() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let mut checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let mut checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         assert_eq!(checkpoint.total_retries, 0);
 
@@ -1038,8 +1293,12 @@ mod tests {
     fn test_validate_checkpoint_path_mismatch() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         // Create source with different path
         let different_source = SourceInfo {
@@ -1055,7 +1314,11 @@ mod tests {
             source_header_hash: None,
         };
 
-        let result = validate_checkpoint(&checkpoint, &different_source, 32 * 1024 * 1024 * 1024);
+        let result = validate_checkpoint(
+            &checkpoint,
+            &different_source,
+            &target(32 * 1024 * 1024 * 1024),
+        );
         assert!(!result.valid);
         assert!(result.messages[0].contains("path mismatch"));
     }
@@ -1064,29 +1327,38 @@ mod tests {
     fn test_validate_checkpoint_bytes_exceed_size() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let mut checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let mut checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         // Set bytes_written to exceed source size
         checkpoint.bytes_written = 200 * 1024 * 1024; // More than 100 MB source
 
-        let result = validate_checkpoint(&checkpoint, &source_info, 32 * 1024 * 1024 * 1024);
+        let result =
+            validate_checkpoint(&checkpoint, &source_info, &target(32 * 1024 * 1024 * 1024));
         assert!(!result.valid);
         assert!(result.messages[0].contains("exceeds source size"));
     }
 
     #[test]
-    fn test_validate_checkpoint_target_size_warning() {
+    fn test_validate_checkpoint_target_size_mismatch_is_invalid() {
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         // Validate with different target size
-        let result = validate_checkpoint(&checkpoint, &source_info, 64 * 1024 * 1024 * 1024);
-        assert!(result.valid); // Still valid, just a warning
-        assert!(!result.warnings.is_empty());
-        assert!(result.warnings[0].contains("Target size changed"));
+        let result =
+            validate_checkpoint(&checkpoint, &source_info, &target(64 * 1024 * 1024 * 1024));
+        assert!(!result.valid);
+        assert!(result.messages[0].contains("Target size changed"));
     }
 
     // -------------------------------------------------------------------------
@@ -1141,7 +1413,8 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let mut checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+        let mut checkpoint =
+            WriteCheckpoint::new(&source_info, "/dev/sdb", &target(1024 * 1024), &config);
         checkpoint.bytes_written = 500;
 
         // With no source size, percentage should be 0.0
@@ -1163,7 +1436,8 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&source_info, "/dev/sdb", &target(1024 * 1024), &config);
 
         assert_eq!(checkpoint.percentage(), 0.0);
     }
@@ -1183,8 +1457,12 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(1024 * 1024 * 1024),
+            &config,
+        );
 
         // 10 MB / 4 MB = 3 blocks (ceiling division)
         assert_eq!(checkpoint.total_blocks, Some(3));
@@ -1205,8 +1483,12 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint =
-            WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &source_info,
+            "/dev/sdb",
+            &target(1024 * 1024 * 1024),
+            &config,
+        );
 
         assert_eq!(checkpoint.total_blocks, Some(2));
     }
@@ -1216,8 +1498,8 @@ mod tests {
         let source_info = create_test_source_info();
         let config = create_test_config();
 
-        let cp1 = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
-        let cp2 = WriteCheckpoint::new(&source_info, "/dev/sdc", 1024 * 1024, &config);
+        let cp1 = WriteCheckpoint::new(&source_info, "/dev/sdb", &target(1024 * 1024), &config);
+        let cp2 = WriteCheckpoint::new(&source_info, "/dev/sdc", &target(1024 * 1024), &config);
 
         assert_ne!(cp1.filename(), cp2.filename());
     }
@@ -1237,10 +1519,11 @@ mod tests {
             etag: None,
             source_header_hash: None,
         };
-        let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&source_info, "/dev/sdb", &target(1024 * 1024), &config);
 
         // Should be valid when both sizes are None (can't compare)
-        let result = validate_checkpoint(&checkpoint, &source_info, 1024 * 1024);
+        let result = validate_checkpoint(&checkpoint, &source_info, &target(1024 * 1024));
         assert!(result.valid);
     }
 
@@ -1269,7 +1552,8 @@ mod tests {
 
         let source_info = create_test_source_info();
         let config = create_test_config();
-        let checkpoint = WriteCheckpoint::new(&source_info, "/dev/sdb", 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&source_info, "/dev/sdb", &target(1024 * 1024), &config);
 
         // Removing a checkpoint that was never saved should succeed silently
         manager.remove(&checkpoint).unwrap();
@@ -1331,12 +1615,16 @@ mod tests {
     fn test_validate_checkpoint_rejects_header_hash_mismatch() {
         let original = source_with_hash("aaaa");
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&original, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &original,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
         assert_eq!(checkpoint.source_header_hash.as_deref(), Some("aaaa"));
 
         let replaced = source_with_hash("bbbb");
-        let result = validate_checkpoint(&checkpoint, &replaced, 32 * 1024 * 1024 * 1024);
+        let result = validate_checkpoint(&checkpoint, &replaced, &target(32 * 1024 * 1024 * 1024));
 
         assert!(!result.valid, "must reject when source content differs");
         assert!(
@@ -1353,9 +1641,10 @@ mod tests {
     fn test_validate_checkpoint_accepts_matching_header_hash() {
         let info = source_with_hash("deadbeef");
         let config = create_test_config();
-        let checkpoint = WriteCheckpoint::new(&info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&info, "/dev/sdb", &target(32 * 1024 * 1024 * 1024), &config);
 
-        let result = validate_checkpoint(&checkpoint, &info, 32 * 1024 * 1024 * 1024);
+        let result = validate_checkpoint(&checkpoint, &info, &target(32 * 1024 * 1024 * 1024));
         assert!(
             result.valid,
             "matching hashes must validate: {:?}",
@@ -1372,12 +1661,12 @@ mod tests {
         let info = create_test_source_info(); // no hash
         let config = create_test_config();
         let mut checkpoint =
-            WriteCheckpoint::new(&info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+            WriteCheckpoint::new(&info, "/dev/sdb", &target(32 * 1024 * 1024 * 1024), &config);
         checkpoint.source_header_hash = None;
 
         // The current source happens to have a hash now (caller computed it).
         let current = source_with_hash("anything");
-        let result = validate_checkpoint(&checkpoint, &current, 32 * 1024 * 1024 * 1024);
+        let result = validate_checkpoint(&checkpoint, &current, &target(32 * 1024 * 1024 * 1024));
         assert!(
             result.valid,
             "missing checkpoint hash must not block resume"
@@ -1391,12 +1680,16 @@ mod tests {
         // back to the etag / size checks.
         let original = source_with_hash("aaaa");
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&original, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &original,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
 
         let mut current = original.clone();
         current.source_header_hash = None;
-        let result = validate_checkpoint(&checkpoint, &current, 32 * 1024 * 1024 * 1024);
+        let result = validate_checkpoint(&checkpoint, &current, &target(32 * 1024 * 1024 * 1024));
         assert!(result.valid);
     }
 
@@ -1404,12 +1697,16 @@ mod tests {
     fn test_validate_checkpoint_rejects_etag_mismatch() {
         let original = source_with_etag("v1");
         let config = create_test_config();
-        let checkpoint =
-            WriteCheckpoint::new(&original, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint = WriteCheckpoint::new(
+            &original,
+            "/dev/sdb",
+            &target(32 * 1024 * 1024 * 1024),
+            &config,
+        );
         assert_eq!(checkpoint.etag.as_deref(), Some("v1"));
 
         let updated = source_with_etag("v2");
-        let result = validate_checkpoint(&checkpoint, &updated, 32 * 1024 * 1024 * 1024);
+        let result = validate_checkpoint(&checkpoint, &updated, &target(32 * 1024 * 1024 * 1024));
 
         assert!(!result.valid, "must reject when remote source etag differs");
         assert!(
@@ -1423,9 +1720,10 @@ mod tests {
     fn test_validate_checkpoint_accepts_matching_etag() {
         let info = source_with_etag("abc123");
         let config = create_test_config();
-        let checkpoint = WriteCheckpoint::new(&info, "/dev/sdb", 32 * 1024 * 1024 * 1024, &config);
+        let checkpoint =
+            WriteCheckpoint::new(&info, "/dev/sdb", &target(32 * 1024 * 1024 * 1024), &config);
 
-        let result = validate_checkpoint(&checkpoint, &info, 32 * 1024 * 1024 * 1024);
+        let result = validate_checkpoint(&checkpoint, &info, &target(32 * 1024 * 1024 * 1024));
         assert!(
             result.valid,
             "matching etags must validate: {:?}",
@@ -1439,7 +1737,7 @@ mod tests {
         info.source_header_hash = Some("h".to_string());
         info.etag = Some("e".to_string());
         let config = create_test_config();
-        let cp = WriteCheckpoint::new(&info, "/dev/sdb", 1024, &config);
+        let cp = WriteCheckpoint::new(&info, "/dev/sdb", &target(1024), &config);
         assert_eq!(cp.source_header_hash.as_deref(), Some("h"));
         assert_eq!(cp.etag.as_deref(), Some("e"));
     }

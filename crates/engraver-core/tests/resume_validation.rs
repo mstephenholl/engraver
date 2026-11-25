@@ -5,9 +5,18 @@
 //! regression where a checkpoint validates against a source that has the
 //! same path and size but different bytes — silent corruption on resume.
 
-use engraver_core::resume::{validate_checkpoint, WriteCheckpoint};
+use engraver_core::resume::{validate_checkpoint, TargetIdentity, WriteCheckpoint};
 use engraver_core::source::{SourceInfo, SourceType};
 use engraver_core::WriteConfig;
+
+/// A target that is known only by its size, as a drive with no serial.
+fn target(size: u64) -> TargetIdentity {
+    TargetIdentity {
+        size,
+        serial: None,
+        model: None,
+    }
+}
 
 fn local_source(path: &str, size: u64) -> SourceInfo {
     SourceInfo {
@@ -48,7 +57,7 @@ fn resume_rejects_replaced_local_image_with_same_size() {
     let cp = WriteCheckpoint::new(
         &original,
         "/dev/sdb",
-        4 * 1024 * 1024 * 1024,
+        &target(4 * 1024 * 1024 * 1024),
         &WriteConfig::new(),
     );
     assert_eq!(cp.source_header_hash.as_deref(), Some("hash_of_image_A"));
@@ -59,7 +68,7 @@ fn resume_rejects_replaced_local_image_with_same_size() {
     let mut replaced = local_source("/tmp/image.iso", 1024 * 1024 * 1024);
     replaced.source_header_hash = Some("hash_of_image_B".to_string());
 
-    let result = validate_checkpoint(&cp, &replaced, 4 * 1024 * 1024 * 1024);
+    let result = validate_checkpoint(&cp, &replaced, &target(4 * 1024 * 1024 * 1024));
     assert!(
         !result.valid,
         "replacement must be rejected; got valid result: {:?}",
@@ -73,14 +82,19 @@ fn resume_rejects_http_source_with_changed_etag() {
     let mut v1 = http_source("https://example.com/image.iso", 1024 * 1024);
     v1.etag = Some("\"abc\"".to_string());
 
-    let cp = WriteCheckpoint::new(&v1, "/dev/sdb", 2 * 1024 * 1024, &WriteConfig::new());
+    let cp = WriteCheckpoint::new(
+        &v1,
+        "/dev/sdb",
+        &target(2 * 1024 * 1024),
+        &WriteConfig::new(),
+    );
     assert_eq!(cp.etag.as_deref(), Some("\"abc\""));
 
     // Server has since updated the file. New etag returned by HEAD request.
     let mut v2 = http_source("https://example.com/image.iso", 1024 * 1024);
     v2.etag = Some("\"def\"".to_string());
 
-    let result = validate_checkpoint(&cp, &v2, 2 * 1024 * 1024);
+    let result = validate_checkpoint(&cp, &v2, &target(2 * 1024 * 1024));
     assert!(!result.valid, "etag change must be rejected");
     assert!(
         result.messages.iter().any(|m| m.contains("etag")),
@@ -97,11 +111,11 @@ fn resume_accepts_identical_source() {
     let cp = WriteCheckpoint::new(
         &info,
         "/dev/sdb",
-        4 * 1024 * 1024 * 1024,
+        &target(4 * 1024 * 1024 * 1024),
         &WriteConfig::new(),
     );
 
-    let result = validate_checkpoint(&cp, &info, 4 * 1024 * 1024 * 1024);
+    let result = validate_checkpoint(&cp, &info, &target(4 * 1024 * 1024 * 1024));
     assert!(result.valid, "identical source must validate");
 }
 
@@ -113,7 +127,7 @@ fn resume_tolerates_missing_hash_on_older_checkpoint() {
     let mut cp = WriteCheckpoint::new(
         &info,
         "/dev/sdb",
-        4 * 1024 * 1024 * 1024,
+        &target(4 * 1024 * 1024 * 1024),
         &WriteConfig::new(),
     );
     cp.source_header_hash = None;
@@ -122,7 +136,7 @@ fn resume_tolerates_missing_hash_on_older_checkpoint() {
     let mut current = info.clone();
     current.source_header_hash = Some("anything".to_string());
 
-    let result = validate_checkpoint(&cp, &current, 4 * 1024 * 1024 * 1024);
+    let result = validate_checkpoint(&cp, &current, &target(4 * 1024 * 1024 * 1024));
     assert!(
         result.valid,
         "missing checkpoint hash must not block resume; old checkpoints stay valid"
@@ -136,10 +150,15 @@ fn checkpoint_for_remote_source_without_range_support_cannot_resume() {
     let mut info = http_source("https://example.com/image.iso", 1024 * 1024);
     info.resumable = false;
 
-    let cp = WriteCheckpoint::new(&info, "/dev/sdb", 2 * 1024 * 1024, &WriteConfig::new());
+    let cp = WriteCheckpoint::new(
+        &info,
+        "/dev/sdb",
+        &target(2 * 1024 * 1024),
+        &WriteConfig::new(),
+    );
 
     assert!(!cp.can_resume());
-    let result = validate_checkpoint(&cp, &info, 2 * 1024 * 1024);
+    let result = validate_checkpoint(&cp, &info, &target(2 * 1024 * 1024));
     assert!(
         !result.valid,
         "a source without range support must not validate for resume"
@@ -151,10 +170,15 @@ fn checkpoint_for_remote_source_with_range_support_can_resume() {
     let info = http_source("https://example.com/image.iso", 1024 * 1024);
     assert!(info.resumable);
 
-    let cp = WriteCheckpoint::new(&info, "/dev/sdb", 2 * 1024 * 1024, &WriteConfig::new());
+    let cp = WriteCheckpoint::new(
+        &info,
+        "/dev/sdb",
+        &target(2 * 1024 * 1024),
+        &WriteConfig::new(),
+    );
 
     assert!(cp.can_resume());
-    let result = validate_checkpoint(&cp, &info, 2 * 1024 * 1024);
+    let result = validate_checkpoint(&cp, &info, &target(2 * 1024 * 1024));
     assert!(
         result.valid,
         "a source with range support must validate for resume: {:?}",

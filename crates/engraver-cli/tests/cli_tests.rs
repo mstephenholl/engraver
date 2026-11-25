@@ -1421,6 +1421,27 @@ fn test_list_json_stdout_is_json_with_verbose_logging() {
 }
 
 #[test]
+fn test_list_json_has_a_serial_key_for_every_drive() {
+    // The serial is how a script tells two drives of the same model apart. It is
+    // null for a drive that reports none, but the key is always there.
+    let output = engraver()
+        .args(["list", "--json", "--all"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let json = stdout_as_json(&output);
+    let drives = json.as_array().expect("list --json is an array");
+    // A machine with no drives has nothing to check.
+    for drive in drives {
+        let serial = drive.get("serial").unwrap_or_else(|| {
+            panic!("a drive in list --json has no serial key: {drive}");
+        });
+        assert!(serial.is_string() || serial.is_null(), "{drive}");
+    }
+}
+
+#[test]
 fn test_json_stdout_is_json_when_config_file_is_invalid() {
     // A config file that does not parse logs a warning at the default log level
     let (_temp_dir, config_file) = setup_config_test();
