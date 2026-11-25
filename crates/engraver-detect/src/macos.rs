@@ -82,8 +82,45 @@ fn root_volume_info() -> Option<String> {
 ///
 /// Takes `diskutil info -plist <volume>` output. A volume that is not APFS has
 /// no stores. A Fusion drive has one on each of its two disks.
-pub(crate) fn parse_apfs_physical_stores(_plist: &str) -> Vec<String> {
-    Vec::new()
+///
+/// The stores are an array of dicts, each with an `APFSPhysicalStore` string,
+/// so `parse_disk_info` would keep only the last one.
+pub(crate) fn parse_apfs_physical_stores(plist: &str) -> Vec<String> {
+    let mut lines = plist.lines().map(str::trim);
+
+    let has_key = lines.any(|line| line == "<key>APFSPhysicalStores</key>");
+    if !has_key || lines.next() != Some("<array>") {
+        return Vec::new();
+    }
+
+    let mut stores = Vec::new();
+    let mut depth = 1;
+    let mut after_store_key = false;
+
+    for line in lines {
+        match line {
+            "<array>" => depth += 1,
+            "</array>" => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            "<key>APFSPhysicalStore</key>" => after_store_key = true,
+            _ if after_store_key => {
+                after_store_key = false;
+                if let Some(store) = line
+                    .strip_prefix("<string>")
+                    .and_then(|s| s.strip_suffix("</string>"))
+                {
+                    stores.push(store.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    stores
 }
 
 /// Whole disk that a BSD identifier lives on: `disk4s2` and `disk4` give `disk4`
