@@ -491,7 +491,20 @@ fn setup_checkpoint(
 
     if args.resume {
         if let Some(ref mgr) = checkpoint_manager {
-            if let Ok(Some(checkpoint)) = mgr.find_checkpoint(&args.source, &target_drive.path) {
+            // A checkpoint that cannot be loaded is left on disk, so say so and
+            // start fresh instead of resuming. The next save replaces it.
+            let found = match mgr.find_checkpoint(&args.source, &target_drive.path) {
+                Ok(found) => found,
+                Err(e) => {
+                    eprintln!(
+                        "{} could not load the existing checkpoint, starting a fresh write: {}",
+                        style("warning:").yellow(),
+                        e
+                    );
+                    None
+                }
+            };
+            if let Some(checkpoint) = found {
                 let validation =
                     validate_checkpoint(&checkpoint, source_info, &target_identity(target_drive));
 

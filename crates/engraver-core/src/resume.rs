@@ -321,17 +321,21 @@ impl CheckpointManager {
         let path = self.checkpoint_path(checkpoint);
         let temp_path = path.with_extension("tmp");
 
-        // Write to temp file first, then rename (atomic on most systems)
+        // Write to temp file first, then rename (atomic on most systems).
+        //
+        // The rename comes last and only after the bytes are on disk. Dropping a
+        // BufWriter ignores a failed flush, and a rename does not make the data
+        // durable, so the buffer is taken back with into_inner (which reports a
+        // failed flush) and the file is synced before it replaces the old
+        // checkpoint.
         let file = fs::File::create(&temp_path).map_err(Error::Io)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, checkpoint).map_err(|e| {
-            Error::Io(std::io::Error::other(format!(
-                "Failed to serialize checkpoint: {}",
-                e
-            )))
-        })?;
+        let mut writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, checkpoint)
+            .map_err(|e| Error::Io(std::io::Error::from(e)))?;
+        let file = writer.into_inner().map_err(|e| Error::Io(e.into_error()))?;
+        file.sync_all().map_err(Error::Io)?;
+        drop(file);
 
-        // Atomic rename
         fs::rename(&temp_path, &path).map_err(Error::Io)?;
 
         tracing::debug!("Saved checkpoint to {:?}", path);
@@ -380,6 +384,10 @@ impl CheckpointManager {
     }
 
     /// Find an existing checkpoint for a source/target combination
+    ///
+    /// Returns `Ok(None)` when there is none. A checkpoint file that exists but
+    /// cannot be loaded (damaged, or written by a newer engraver) is an error and
+    /// is left in place.
     pub fn find_checkpoint(
         &self,
         source_path: &str,
@@ -390,19 +398,20 @@ impl CheckpointManager {
         let filename = format!("{:016x}.{}", hash, CHECKPOINT_EXTENSION);
         let path = self.checkpoint_dir.join(&filename);
 
-        if path.exists() {
-            match self.load_from_path(&path) {
-                Ok(checkpoint) => Ok(Some(checkpoint)),
-                Err(e) => {
-                    tracing::warn!("Failed to load checkpoint {:?}: {}", path, e);
-                    // Remove corrupted checkpoint
-                    let _ = fs::remove_file(&path);
-                    Ok(None)
-                }
-            }
-        } else {
-            Ok(None)
+        if !path.exists() {
+            return Ok(None);
         }
+
+        // A file that cannot be loaded stays where it is. It may be a checkpoint
+        // from a newer engraver, and deleting it would destroy the only record of
+        // an interrupted write. The caller decides what to do with the error.
+        self.load_from_path(&path).map(Some).map_err(|e| match e {
+            Error::Io(io) => Error::Io(std::io::Error::new(
+                io.kind(),
+                format!("{}: {io}", path.display()),
+            )),
+            other => other,
+        })
     }
 
     /// List all checkpoints in the directory
@@ -537,7 +546,18 @@ impl CheckpointValidation {
     }
 }
 
+/// A drive property for a message: quoted when known, `unknown` when not
+fn describe(value: &Option<String>) -> String {
+    value
+        .as_ref()
+        .map_or_else(|| "unknown".to_string(), |v| format!("'{v}'"))
+}
+
 /// Validate a checkpoint against current source/target state
+///
+/// The target is invalid when its size, or its serial or model where both are
+/// known, differ from the drive the checkpoint was made for. An unknown serial
+/// on either side is valid with a warning.
 pub fn validate_checkpoint(
     checkpoint: &WriteCheckpoint,
     source_info: &SourceInfo,
@@ -563,12 +583,44 @@ pub fn validate_checkpoint(
         }
     }
 
-    // Check target size
+    // Check the target is the drive the checkpoint was made for. A device path
+    // does not say which drive sits behind it, so compare what the drive reports
+    // about itself. A different drive would get only the tail of the image, with
+    // the first part of it never written, so a mismatch makes the checkpoint
+    // invalid.
     if checkpoint.target_size != target.size {
-        result = result.with_warning(format!(
+        result = result.with_error(format!(
             "Target size changed: checkpoint has {} bytes, current is {} bytes",
             checkpoint.target_size, target.size
         ));
+    }
+
+    match (&checkpoint.target_serial, &target.serial) {
+        (Some(cp_serial), Some(cur_serial)) if cp_serial != cur_serial => {
+            result = result.with_error(format!(
+                "Target serial changed: checkpoint has '{cp_serial}', current is '{cur_serial}'"
+            ));
+        }
+        (Some(_), Some(_)) => {}
+        (cp_serial, cur_serial) => {
+            // Checkpoints from 0.1.x have no serial, and some drives report none.
+            // Resuming is allowed, since refusing would strand every old
+            // checkpoint, but the user is told the drive is unconfirmed.
+            result = result.with_warning(format!(
+                "Target serial unknown: checkpoint has {}, current is {}; \
+                 cannot confirm this is the drive the checkpoint was made for",
+                describe(cp_serial),
+                describe(cur_serial)
+            ));
+        }
+    }
+
+    if let (Some(cp_model), Some(cur_model)) = (&checkpoint.target_model, &target.model) {
+        if cp_model != cur_model {
+            result = result.with_error(format!(
+                "Target model changed: checkpoint has '{cp_model}', current is '{cur_model}'"
+            ));
+        }
     }
 
     // Check if source can be resumed
@@ -1194,7 +1246,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_checkpoint_target_size_warning() {
+    fn test_validate_checkpoint_target_size_mismatch_is_invalid() {
         let source_info = create_test_source_info();
         let config = create_test_config();
         let checkpoint = WriteCheckpoint::new(
@@ -1207,9 +1259,8 @@ mod tests {
         // Validate with different target size
         let result =
             validate_checkpoint(&checkpoint, &source_info, &target(64 * 1024 * 1024 * 1024));
-        assert!(result.valid); // Still valid, just a warning
-        assert!(!result.warnings.is_empty());
-        assert!(result.warnings[0].contains("Target size changed"));
+        assert!(!result.valid);
+        assert!(result.messages[0].contains("Target size changed"));
     }
 
     // -------------------------------------------------------------------------
