@@ -22,31 +22,31 @@ engraver-detect = { version = "0.1.1", path = "../engraver-detect" }
 engraver-platform = { version = "0.1.1", path = "../engraver-platform" }
 
 # CLI framework
-clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap = { workspace = true, features = ["wrap_help"] }
 clap_complete = "4"
 clap_mangen = "0.3"
 
 # Progress bars and terminal UI
-indicatif = "0.18"
-console = "0.16"
+indicatif = { workspace = true }
+console = { workspace = true }
 
 # Error handling
-anyhow = "1"
-thiserror = "2"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
 
 # Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Misc
 ctrlc = "3"
 humansize = "2"
-serde_json = "1"
+serde_json = { workspace = true }
 
 [dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
-tempfile = "3"
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+tempfile = { workspace = true }
 flate2 = { workspace = true }
 xz2 = { workspace = true }
 zstd = { workspace = true }

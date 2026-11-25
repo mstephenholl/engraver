@@ -27,8 +27,8 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Async runtime
-tokio = { version = "1", features = ["full"] }
+# Async runtime. Only engraver-core uses it, and only for the multi-thread runtime.
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
