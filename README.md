@@ -158,7 +158,7 @@ engraver write s3://my-bucket/images/firmware.img /dev/sdb
 engraver write gs://my-bucket/images/ubuntu.iso /dev/sdb
 
 # Write from Azure Blob Storage
-engraver write az://my-container/images/debian.iso /dev/sdb
+engraver write azure://my-account/my-container/images/debian.iso /dev/sdb
 
 # Presigned URLs work as regular HTTPS URLs
 engraver write "https://my-bucket.s3.amazonaws.com/image.iso?X-Amz-..." /dev/sdb
