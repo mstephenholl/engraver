@@ -490,6 +490,230 @@ fn find_checkpoint_keeps_a_checkpoint_it_cannot_load() {
 }
 
 // =============================================================================
+// 4c. Another drive's checkpoint is kept, and found again when it comes back
+// =============================================================================
+
+/// A source image on disk, and the SourceInfo that describes it.
+fn source_in(dir: &TempDir) -> SourceInfo {
+    let source_path = dir.path().join("source.iso");
+    let size = 128 * 1024;
+    write_file(&source_path, &image_bytes(size, 0xCC));
+    local_source_info_with_hash(&source_path, size as u64)
+}
+
+/// A checkpoint for `info` written to `target_path` on a drive `made_for`.
+fn checkpoint_on(
+    info: &SourceInfo,
+    target_path: &str,
+    made_for: &TargetIdentity,
+) -> WriteCheckpoint {
+    WriteCheckpoint::new(info, target_path, made_for, &WriteConfig::new())
+}
+
+const STICK_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
+#[test]
+fn checkpoint_of_another_drive_is_not_found_at_the_same_path() {
+    let dir = TempDir::new().unwrap();
+    let info = source_in(&dir);
+    let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
+    let a = drive(STICK_SIZE, Some("SER-AAAA"), Some("Flash"));
+    mgr.save(&checkpoint_on(&info, "/dev/sdb", &a)).unwrap();
+
+    // Another stick shows up at /dev/sdb, with a serial or without one. A
+    // lookup that only knew the path would hand it A's checkpoint.
+    for serial_b in [Some("SER-BBBB"), None] {
+        let found = mgr
+            .find_checkpoint(&info.path, "/dev/sdb", serial_b)
+            .unwrap();
+
+        assert!(
+            found.is_none(),
+            "a checkpoint of drive SER-AAAA must not be found for {serial_b:?} at the same path"
+        );
+    }
+}
+
+#[test]
+fn checkpoint_of_another_drive_survives_a_save_and_remove_at_the_same_path() {
+    let dir = TempDir::new().unwrap();
+    let info = source_in(&dir);
+    let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
+    let a = checkpoint_on(
+        &info,
+        "/dev/sdb",
+        &drive(STICK_SIZE, Some("SER-AAAA"), Some("Flash")),
+    );
+    mgr.save(&a).unwrap();
+    let a_path = mgr.checkpoint_path(&a);
+    let a_before = read_file(&a_path);
+
+    // A fresh write to another stick at the same path saves its own
+    // checkpoint when cancelled and removes it when it completes.
+    for b_drive in [
+        drive(STICK_SIZE, Some("SER-BBBB"), Some("Flash")),
+        drive(STICK_SIZE, None, Some("Flash")),
+    ] {
+        let b = checkpoint_on(&info, "/dev/sdb", &b_drive);
+        mgr.save(&b).unwrap();
+        assert_eq!(
+            read_file(&a_path),
+            a_before,
+            "saving a checkpoint for {b_drive:?} must not replace drive A's"
+        );
+        mgr.remove(&b).unwrap();
+        assert!(
+            a_path.exists(),
+            "removing the checkpoint of {b_drive:?} must not remove drive A's"
+        );
+        assert_eq!(read_file(&a_path), a_before, "or change it");
+    }
+}
+
+#[test]
+fn checkpoint_is_found_when_its_drive_comes_back_at_another_path() {
+    let dir = TempDir::new().unwrap();
+    let info = source_in(&dir);
+    let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
+    let a = drive(STICK_SIZE, Some("SER-AAAA"), Some("Flash"));
+    mgr.save(&checkpoint_on(&info, "/dev/sdb", &a)).unwrap();
+
+    // The stick is plugged in again and the kernel names it /dev/sdc.
+    let found = mgr
+        .find_checkpoint(&info.path, "/dev/sdc", Some("SER-AAAA"))
+        .unwrap();
+
+    let found = found.expect("the checkpoint of drive SER-AAAA should be found at /dev/sdc");
+    assert_eq!(found.target_serial.as_deref(), Some("SER-AAAA"));
+    assert_eq!(found.target_path, "/dev/sdb");
+}
+
+#[test]
+fn checkpoint_without_a_serial_is_still_found_for_a_drive_with_one() {
+    // Written by 0.1.x, or for a drive that reports no serial: its file is named
+    // after the path alone. A drive with a serial looks for its own file first
+    // and then falls back to that one, so these checkpoints are not stranded.
+    let dir = TempDir::new().unwrap();
+    let info = source_in(&dir);
+    let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
+    let legacy = checkpoint_on(&info, "/dev/sdb", &drive(STICK_SIZE, None, Some("Flash")));
+    mgr.save(&legacy).unwrap();
+
+    let found = mgr
+        .find_checkpoint(&info.path, "/dev/sdb", Some("SER-AAAA"))
+        .unwrap();
+
+    let found = found.expect("a checkpoint without a serial should be found through the fallback");
+    assert_eq!(found.target_serial, None);
+    assert_eq!(found.target_path, "/dev/sdb");
+}
+
+#[test]
+fn checkpoint_of_the_drive_is_preferred_over_one_without_a_serial() {
+    // Both files exist at /dev/sdb. A drive with a serial must get its own, not
+    // the one that may belong to any drive that was ever at that path.
+    let dir = TempDir::new().unwrap();
+    let info = source_in(&dir);
+    let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
+    let mut legacy = checkpoint_on(&info, "/dev/sdb", &drive(STICK_SIZE, None, Some("Flash")));
+    legacy.bytes_written = 1024;
+    mgr.save(&legacy).unwrap();
+    let mut own = checkpoint_on(
+        &info,
+        "/dev/sdb",
+        &drive(STICK_SIZE, Some("SER-AAAA"), Some("Flash")),
+    );
+    own.bytes_written = 2048;
+    mgr.save(&own).unwrap();
+
+    let found = mgr
+        .find_checkpoint(&info.path, "/dev/sdb", Some("SER-AAAA"))
+        .unwrap()
+        .expect("a checkpoint should be found");
+
+    assert_eq!(found.target_serial.as_deref(), Some("SER-AAAA"));
+    assert_eq!(found.bytes_written, 2048);
+}
+
+#[test]
+fn a_drive_mismatch_is_marked_as_belonging_to_another_drive() {
+    let dir = TempDir::new().unwrap();
+    let made_for = drive(STICK_SIZE, Some("SER-AAAA"), Some("Flash"));
+    let (checkpoint, info) = checkpoint_for(&dir, &made_for);
+
+    let cases = [
+        (
+            "size",
+            drive(2 * STICK_SIZE, Some("SER-AAAA"), Some("Flash")),
+        ),
+        ("serial", drive(STICK_SIZE, Some("SER-BBBB"), Some("Flash"))),
+        (
+            "model",
+            drive(STICK_SIZE, Some("SER-AAAA"), Some("Ultra Fit")),
+        ),
+    ];
+    for (what, now) in cases {
+        let validation = validate_checkpoint(&checkpoint, &info, &now);
+
+        assert!(!validation.valid, "a {what} mismatch should be invalid");
+        assert!(
+            validation.for_another_drive,
+            "a {what} mismatch means the checkpoint is for another drive"
+        );
+    }
+
+    let same = validate_checkpoint(&checkpoint, &info, &made_for);
+    assert!(same.valid);
+    assert!(
+        !same.for_another_drive,
+        "a valid checkpoint is not for another drive"
+    );
+}
+
+#[test]
+fn a_source_problem_is_not_marked_as_belonging_to_another_drive() {
+    let dir = TempDir::new().unwrap();
+    let made_for = drive(STICK_SIZE, Some("SER-AAAA"), Some("Flash"));
+    let (checkpoint, info) = checkpoint_for(&dir, &made_for);
+
+    let mut other_path = info.clone();
+    other_path.path = "/somewhere/else.iso".to_string();
+    let mut other_size = info.clone();
+    other_size.size = Some(info.size.unwrap() + 1);
+    let mut other_content = info.clone();
+    other_content.source_header_hash = Some("0".repeat(64));
+    let mut other_etag = info.clone();
+    other_etag.etag = Some("\"new\"".to_string());
+    let mut checkpoint_with_etag = checkpoint.clone();
+    checkpoint_with_etag.etag = Some("\"old\"".to_string());
+
+    // The drive is the right one here and also a wrong one: when the source is
+    // the problem, the checkpoint is no good for its own drive either.
+    for now in [
+        made_for.clone(),
+        drive(2 * STICK_SIZE, Some("SER-BBBB"), Some("Other")),
+    ] {
+        for (what, cp, source) in [
+            ("path", &checkpoint, &other_path),
+            ("size", &checkpoint, &other_size),
+            ("content", &checkpoint, &other_content),
+            ("etag", &checkpoint_with_etag, &other_etag),
+        ] {
+            let validation = validate_checkpoint(cp, source, &now);
+
+            assert!(
+                !validation.valid,
+                "a changed source {what} should be invalid"
+            );
+            assert!(
+                !validation.for_another_drive,
+                "a changed source {what} is not a reason to keep the checkpoint ({now:?})"
+            );
+        }
+    }
+}
+
+// =============================================================================
 // 5. CheckpointManager round-trip through disk preserves the hash
 // =============================================================================
 

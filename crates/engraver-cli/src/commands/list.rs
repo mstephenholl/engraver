@@ -355,6 +355,23 @@ mod tests {
     }
 
     #[test]
+    fn test_serde_json_drives_includes_the_serial() {
+        let mut drive = create_test_drive();
+        drive.serial = Some("SN-12345".to_string());
+
+        let json = serde_json_drives(&[drive]);
+
+        assert!(json.contains("\"serial\": \"SN-12345\""), "{json}");
+    }
+
+    #[test]
+    fn test_serde_json_drives_unknown_serial_is_null() {
+        let json = serde_json_drives(&[create_test_drive()]);
+
+        assert!(json.contains("\"serial\": null"), "{json}");
+    }
+
+    #[test]
     fn test_serde_json_drives_multiple() {
         let drive1 = create_test_drive();
         let mut drive2 = create_test_drive();
