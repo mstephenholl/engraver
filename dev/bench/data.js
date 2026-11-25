@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795640390508,
+  "lastUpdate": 1795645642407,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -2877,6 +2877,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 124.77,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d4ad4a1e96f22fddacfe86cc2a29632e3bd0c925",
+          "message": "chore: release 0.2.0, and stop a release whose tag doesn't match the crates (#82)\n\n* ci(release): stop a tag that names a version the crates don't have\n\nA v0.2.0 tag pushed on a commit whose crates are still 0.1.1 would build\narchives whose binary reports 0.1.1, stamp 0.2.0 into their man pages,\nand create the v0.2.0 release. publish-crates would then find 0.1.1\nalready on crates.io and pass without publishing anything.\n\nOn tag pushes, check-crates now compares the tag with every publishable\ncrate's version. release needs check-crates, so a mismatch stops the run\nbefore a release is created.\n\n* chore: bump version to 0.2.0\n\n#79 changed engraver-core's public API. WriteCheckpoint::new and\nvalidate_checkpoint take a TargetIdentity, and two public structs gained\nfields. A 0.x crate marks a breaking change by raising its minor\nversion, so the next release is 0.2.0, not 0.1.2.\n\npackaging/scripts/release.sh 0.2.0 made this change. Its commit and tag\nprompts were answered no.",
+          "timestamp": "2026-11-25T17:21:58-05:00",
+          "tree_id": "94d29df41715f1d507adb6953d5714c49f922a0a",
+          "url": "https://github.com/mstephenholl/engraver/commit/d4ad4a1e96f22fddacfe86cc2a29632e3bd0c925"
+        },
+        "date": 1795645641637,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 1238.36,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 59257.79,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 52786.86,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 17734.32,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 104.25,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 57047.68,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 18819.05,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1642.07,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 36.17,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 53592.09,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 8132.24,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 576.83,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 42.74,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 54067.91,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 9483.46,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 685.55,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 123.64,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 15474.61,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1740.35,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 97.4,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 105.04,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 105.05,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 106.86,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 103.93,
             "unit": "iter/sec"
           }
         ]
