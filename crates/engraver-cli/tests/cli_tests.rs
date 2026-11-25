@@ -1615,6 +1615,150 @@ fn test_quiet_hides_the_invalid_config_warning() {
 }
 
 // ============================================================================
+// Quiet Output Tests
+// ============================================================================
+//
+// `-q`, and `quiet = true` in the configuration file, hide the command output
+// that `--silent` hides: only errors and a command's one useful result remain.
+// Unlike `--silent`, they do not skip confirmation prompts.
+
+/// SHA-256 of "Hello, World!\n"
+const HELLO_SHA256: &str = "c98c24b677eff44860afea6f493bbaec5bb1c4cbb209c6fc2bbb47f66ff2ad31";
+
+/// A small file holding "Hello, World!\n"
+fn hello_file() -> (TempDir, std::path::PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("hello.bin");
+    fs::write(&file, "Hello, World!\n").unwrap();
+    (dir, file)
+}
+
+#[test]
+fn test_quiet_checksum_prints_only_the_hash() {
+    let (_dir, file) = hello_file();
+
+    for flag in ["-q", "--quiet"] {
+        engraver()
+            .args([flag, "checksum", file.to_str().unwrap()])
+            .assert()
+            .success()
+            .stdout(format!("{HELLO_SHA256}\n"))
+            .stderr(predicate::str::is_empty());
+    }
+}
+
+#[test]
+fn test_config_file_quiet_checksum_prints_only_the_hash() {
+    let (dir, file) = hello_file();
+    let config_file = dir.path().join("engraver_config.toml");
+    fs::write(&config_file, "[behavior]\nquiet = true\n").unwrap();
+
+    engraver()
+        .args(["--config-file", config_file.to_str().unwrap()])
+        .args(["checksum", file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(format!("{HELLO_SHA256}\n"))
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn test_config_file_quiet_false_leaves_checksum_output_alone() {
+    let (dir, file) = hello_file();
+    let config_file = dir.path().join("engraver_config.toml");
+    fs::write(&config_file, "[behavior]\nquiet = false\n").unwrap();
+
+    engraver()
+        .args(["--config-file", config_file.to_str().unwrap()])
+        .args(["checksum", file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Source:"))
+        .stdout(predicate::str::contains("Checksum file format:"));
+}
+
+#[test]
+fn test_quiet_checksum_still_reports_an_error() {
+    let dir = TempDir::new().unwrap();
+    let missing = dir.path().join("missing.bin");
+
+    engraver()
+        .args(["-q", "checksum", missing.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("Failed to validate source"));
+}
+
+#[test]
+fn test_quiet_list_prints_nothing_but_json_still_prints() {
+    engraver()
+        .args(["-q", "list", "--all"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+
+    let output = engraver()
+        .args(["-q", "list", "--all", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(stdout_as_json(&output).is_array());
+}
+
+#[test]
+fn test_quiet_config_prints_nothing() {
+    let (_temp_dir, config_file) = setup_config_test();
+
+    engraver()
+        .args(["--config-file", config_file.to_str().unwrap()])
+        .args(["-q", "config"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn test_quiet_verify_prints_nothing_when_the_drive_matches() {
+    let dir = TempDir::new().unwrap();
+    let image = verify_test_image();
+    let source = dir.path().join("img.raw");
+    fs::write(&source, &image).unwrap();
+    let target = write_target(&dir, &image_then_other_data(&image));
+
+    engraver()
+        .args(["-q", "verify", source.to_str().unwrap()])
+        .arg(target.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
+fn test_quiet_verify_reports_only_the_error_when_the_drive_differs() {
+    let dir = TempDir::new().unwrap();
+    let image = verify_test_image();
+    let source = dir.path().join("img.raw");
+    fs::write(&source, &image).unwrap();
+    let mut drive = image_then_other_data(&image);
+    drive[image.len() / 2] ^= 0xFF;
+    let target = write_target(&dir, &drive);
+
+    engraver()
+        .args(["-q", "verify", source.to_str().unwrap()])
+        .arg(target.to_str().unwrap())
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("Verification failed"));
+}
+
+// ============================================================================
 // Benchmark Command Tests
 // ============================================================================
 
