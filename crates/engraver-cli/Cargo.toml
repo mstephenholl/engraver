@@ -7,7 +7,7 @@ authors = ["Engraver Contributors"]
 license = "MIT"
 description = "A safe, fast tool for creating bootable USB drives, SD cards, and NVMe drives"
 repository = "https://github.com/mstephenholl/engraver"
-keywords = ["disk", "imaging", "iso", "usb", "flash", "bootable"]
+keywords.workspace = true
 categories = ["command-line-utilities", "filesystem"]
 default-run = "engraver"
 
