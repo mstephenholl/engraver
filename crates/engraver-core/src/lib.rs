@@ -22,9 +22,7 @@
 //! let target = File::create("/dev/sdb")?;
 //! let source_size = source.metadata()?.len();
 //!
-//! let config = WriteConfig::new()
-//!     .block_size(4 * 1024 * 1024)
-//!     .verify(true);
+//! let config = WriteConfig::new().block_size(4 * 1024 * 1024);
 //!
 //! let mut writer = Writer::with_config(config)
 //!     .on_progress(|p| println!("{:.1}% - {}", p.percentage(), p.speed_display()));
