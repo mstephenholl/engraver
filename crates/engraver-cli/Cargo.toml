@@ -17,9 +17,9 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace crates
-engraver-core = { version = "0.1.1", path = "../engraver-core" }
-engraver-detect = { version = "0.1.1", path = "../engraver-detect" }
-engraver-platform = { version = "0.1.1", path = "../engraver-platform" }
+engraver-core = { version = "0.2.0", path = "../engraver-core" }
+engraver-detect = { version = "0.2.0", path = "../engraver-detect" }
+engraver-platform = { version = "0.2.0", path = "../engraver-platform" }
 
 # CLI framework
 clap = { workspace = true, features = ["wrap_help"] }
