@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795636447604,
+  "lastUpdate": 1795640390508,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -2733,6 +2733,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 120.13,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4651a876cf1c4c8ff428b2a393164211c4893358",
+          "message": "fix: make -q quiet, keep man pages in source installs, run clippy everywhere, and clear cargo's warnings (#81)\n\n* test(cli): pin what -q and quiet = true print\n\n`-q` and `behavior.quiet` only turned logging off, so `engraver -q checksum\nFILE` printed the Source and Size lines, the progress and the result block\nlike a run without it, and `-q list`, `-q config` and `-q verify` printed their\nfull status output. The help and man page promise that -q suppresses\neverything except errors.\n\nAdd integration tests for the behaviour the help describes. `-q` and\n`quiet = true` in a --config-file each leave a checksum run printing only the\nhash, `-q list` and `-q config` print nothing (list --json still prints its\ndocument), and `-q verify` prints nothing on a match and only the error on a\nmismatch. A config with `quiet = false` keeps the normal output. These fail on\nthis commit and pass with the fix that follows.\n\n* fix(cli): make -q hide the command output its help says it hides\n\n`--help` and engraver(1) say `-q` suppresses all output except errors, and\n`behavior.quiet` turns on the same mode from the config file. In fact `main`\nused `-q` only to switch tracing off, so every command printed its Source and\nSize lines, progress and result block as usual. Only `--silent` reached the\ncommands.\n\nThree decisions shared the name `silent`: hide status output, skip\nconfirmation prompts, and hide the Ctrl+C messages. `OutputMode` (Normal,\nQuiet, Silent) now answers each with its own method. `-q` and `quiet = true`\nturn on only the first, so `-q write` and `-q erase` still ask before they\noverwrite a drive, and still print the Ctrl+C messages. `--silent` turns on\nall three, as before.\n\nThat makes a prompt reachable with status output hidden, which was impossible\nwhile `--silent` implied `--yes`. The unsafe-target and resume questions did\nnot name what they were about once the Source and Target lines were hidden. A\nrun that will ask now prints the lines that lead up to the confirmation (the\nimage, the drive, the mount points that will be unmounted, the checkpoint\nfound) and hides only what follows the answer. `hides_lead_up` is the one\nplace that decides this, for write and erase.\n\n`-q list` and `-q config` print nothing, as `--silent` does today, so a config\nwith `quiet = true` makes `engraver list` and `engraver config` print nothing\ntoo. `test_config_loads_custom_settings` set `quiet = true` only to exercise\nthe behavior section, and now sets `skip_confirmation` instead.\n\nDescribe both flags in `--help`, engraver(1) (which did not list `--silent`\nat all), engraver-checksum(1), engraver-config(1), the quickstart and both\nREADMEs.\n\n* docs(readme): give read_buffer_size's real default of 4M\n\nThe configuration example and the options table both said\n`read_buffer_size = \"64K\"`, but the code's default is \"4M\"\n(`DEFAULT_READ_BUFFER_SIZE_STR` in engraver-core's settings.rs). A user who\ncopied the example got a 64K read buffer, 64 times smaller than the default,\nand the table told them that was what they already had.\n\nCompare every other default in the table and example with\n`engraver config --json` on a missing config file. They all match; this was\nthe only one that differed. The `verify = true` in the example is an example\nvalue, not a default, and stays.\n\n* docs(quickstart): stop saying the pre-built binaries are not GA\n\nThe quickstart called the pre-built binaries \"not currently GA\". Release 0.1.1\nships them for Linux, macOS and Windows, along with install.sh, so a reader\nwas told to build from source for a download that exists.\n\nGive the section the heading and the one line the README's \"Pre-built\nBinaries\" section has, and nothing the README does not say.\n\n* fix(install): keep the curated man pages in a source install\n\nWhen `install.sh` cannot reach the release API it builds from source, and it\nran `engraver mangen --out-dir man` before installing the man pages. That\noverwrote the clone's hand-written `man/*.1` with the pages clap generates,\nwhich have no EXAMPLES, NOTES or FILES sections. #80 fixed the same bug in\nrelease.yml, and this path still had it.\n\nDelete the `mangen` call and stamp the built binary's version into the `.TH`\nlines of the checked-in pages, with the same `sed -i.bak -E` command the\nrelease workflow uses, so the pages say 0.1.1 and not the version they were\nlast edited for.\n\n`cargo build` also put its binary in `$CARGO_TARGET_DIR` when the user had set\nit, and the next line copied `target/release/engraver`, which was not there.\nPass `--target-dir target` so the binary is where the script looks for it.\n\nRun through the real source path with git's `insteadOf` pointing the clone\nat a bare copy of this branch, `--no-sudo`, and scratch directories. All 8\ninstalled pages match the branch's `man/` except the `.TH` line, which reads\n`\"engraver 0.1.1\"`, and a `CARGO_TARGET_DIR` set in the environment stayed\nunused. README.md holds install.sh's sha256, so update it in the same commit.\n\n* fix(cli): keep each command's result under -q\n\nThe -q fix hid list's drives, config's output and benchmark's results\ntable along with the status lines. With `quiet = true` in a config\nfile, `engraver config --path` then printed nothing, so the documented\n`sudo engraver --config-file \"$(engraver config --path)\"` passed an\nempty path. checksum already keeps its result, the hash, even under\n--silent.\n\nOutputMode gains hides_results(), which only --silent sets. list and\nconfig take it in place of the status flag, and benchmark uses it for\nits results tables while -q still hides its progress lines. The help\ntext and docs say what -q keeps.\n\nThe list and config tests now check that -q prints the same output as\na plain run, and a new test checks that `config --path` prints the path\nunder `quiet = true`. All three fail on the previous commit.\nNothing can run benchmark here without a device, so its results\nchange has no test.\n\n* refactor(platform): delete WindowsDevice::lock and unlock, which nothing calls\n\nClippy on x86_64-pc-windows-msvc refuses `lock` as dead code, so the\nWindows build could not pass `-D warnings`. Nothing in the workspace\ncalls `lock`, and `unlock` has no caller but `Drop`, which unlocks a lock\nthat is never taken. `lock` could not work anyway: it sends\nFSCTL_LOCK_VOLUME, which Microsoft documents as taking a volume handle,\nand `WindowsDevice::open` returns a `\\\\.\\PhysicalDriveN` handle.\nUnmounting happens in `unmount_windows_device`, through PowerShell.\n\nDelete both methods, the unlock in `Drop`, the two FSCTL imports only they\nused, and \"and volume locking\" from the module doc. DeviceIoControl stays\nfor `get_device_size`.\n\n* fix(detect): clear the clippy lints that only a Windows build compiles\n\nengraver-detect sets `clippy::pedantic`, but `windows.rs` is compiled only\nfor Windows, so Linux clippy never saw its 18 lints and `cargo clippy\n--target x86_64-pc-windows-msvc -- -D warnings` failed on them. Fix each\nin the code:\n\n- needless_raw_string_hashes (4): the PowerShell commands are plain `r\"...\"`.\n- useless_format (2): `\"PowerShell failed\".to_string()`.\n- unnecessary_wraps (1): `parse_powershell_disks` cannot fail, so it\n  returns the Vec and its caller and tests drop the `Result`.\n- redundant_closure_for_method_calls (3): `.map(ToString::to_string)`.\n- single_char_pattern (4): `starts_with('3')` and the like.\n- uninlined_format_args (1): `{mp}`.\n- missing_errors_doc (1): `list_drives` gains an `# Errors` section.\n- unreadable_literal (1) and ignore_without_reason (1), both in tests.\n\nNo behavior changes.\n\n* ci: run clippy on Linux, macOS and Windows\n\nCI ran clippy on ubuntu-latest only, so lints in `cfg(windows)` and\n`cfg(target_os = \"macos\")` code reached main unseen: a dead `lock` method\nand 18 pedantic lints in engraver-detect's windows.rs. The test matrix\nalready builds on all three, so this only costs the lint pass.\n\nMake `clippy` a matrix over ubuntu-latest, macos-latest and\nwindows-latest, with the same command and `fail-fast: false` as the test\nmatrix, so one platform's lints do not hide another's. `ci-success` reads\n`needs.clippy.result`, which is the matrix's aggregate, and `test-unit`\nand the others `need: clippy`, so neither changes. The job's name becomes\n\"Clippy (<os>)\"; nothing requires the old name, since main has no branch\nprotection. The `changes` filter lists `**/*.rs`, `**/Cargo.toml` and\nci.yml, so a PR touching any of them runs the job.\n\n* build: take every shared dependency's version from the workspace table\n\nCargo 1.100 warns `unused workspace dependency` for each\n`[workspace.dependencies]` entry that no crate inherits. All 26 entries\nname a dependency the workspace uses, but for 19 of them the crates gave\nthe version themselves, so the table did nothing and the versions could\ndrift apart. The warnings also buried the others in `cargo check`.\n\nSwitch each dependency that the table lists to `workspace = true` in\nengraver-cli, engraver-core, engraver-detect and engraver-platform. Each\ncrate keeps its own `features` (clap's `wrap_help`, reqwest's `blocking`),\nits `optional` and its target-specific placement. reqwest's\n`default-features = false` is now inherited from the table, which\nalready had it.\n\ntokio is the one mismatch. The table said `features = [\"full\"]`, but its\nonly user, engraver-core, wanted `rt-multi-thread`, and inheriting would\nhave turned `full` on for core: the `cargo tree -e features` output for\nengraver-core gained parking_lot, signal-hook-registry and more. Put\n`rt-multi-thread` on the table entry instead, so the features are the same\nas before.\n\nChecked with a script that records Cargo.lock, `cargo tree -e features\n--target all` for each crate (with all features, default features and no\ndefault features), the cargo warning counts, and the `Cargo.toml` that\n`cargo publish --dry-run` packages for the four published crates. Cargo.lock\nand all 15 trees are byte-identical, the packaged dependency tables are the\nsame, and `unused workspace dependency` goes from 19 warnings to 0.\n\n* build: inherit shared package fields, and drop dependencies nothing uses\n\nCargo warned about 8 unused [workspace.package] fields and 5 unused\ndependencies on every build.\n\n- version, authors, license and repository are the same in every\n  crate, so each crate now inherits them.\n- edition said \"2024\" in the workspace while every crate used \"2021\".\n  The workspace now says \"2021\" and the crates inherit it, so no crate\n  changes edition.\n- homepage, description and categories come out of the table. No crate\n  set homepage, and the crates' descriptions and categories differ.\n- humansize in engraver-cli, and anyhow, tracing, engraver-core and\n  engraver-detect in the engraver-gui stub, were never used.\n\nCargo.lock loses humansize and libm, which only humansize pulled in.\nThe four published crates package with identical [package] tables,\nand only engraver-cli's dependencies change, losing humansize.\nrelease.sh's version edit still bumps every crate, through the\nworkspace version line.\n\n* build(lints): declare the lint policy once, as the crates enforce it\n\nThe workspace lint table asked for clippy's pedantic, nursery and cargo\ngroups, but only the engraver-gui stub inherited it. The other crates\nset their own tables with clippy::all, and engraver-detect added\npedantic. Pointing every crate at the workspace table raised 1016\nwarnings on Linux, so the table described a policy nothing followed.\n\nThe workspace table now holds the policy the crates do follow:\nunsafe_code and missing_docs from rustc, and clippy::all. engraver-cli,\nengraver-core, engraver-platform and engraver-gui inherit it.\nengraver-detect keeps its own table, because cargo can't add pedantic\non top of an inherited one, and restates missing_docs to match.\n\nmissing_docs is new for four crates. It found three test files without\na crate doc, which now have one. engraver-gui's allow for\nclippy::multiple_crate_versions goes, since that lint belonged to the\ncargo group.\n\nclippy --workspace --all-targets --all-features -D warnings passes for\nx86_64-unknown-linux-gnu, x86_64-pc-windows-msvc and\naarch64-apple-darwin.\n\n* fix(cli): keep config's JSON and bare path under --silent\n\n`list --json` and `benchmark --json` print under --silent, and so does\nchecksum's bare hash, because a script asked for them. config hid its\nJSON, its `--path` and its `--init --json` result, so\n`$(engraver --silent config --path)` was empty. The old\ntest_config_path_silent_mode said the path \"should still output\", but\nasserted empty output.\n\nconfig now prints its JSON and the bare path under --silent, and hides\nonly its human-readable output. The --silent help text and engraver(1)\nsay what still prints.\n\ntest_config_path_silent_mode now expects the path, and a new test\nchecks the three JSON outputs. Both fail on the previous commit.",
+          "timestamp": "2026-11-25T15:53:07-05:00",
+          "tree_id": "a4dbbb8bda2df74b5f4f2b101338c25a8997527e",
+          "url": "https://github.com/mstephenholl/engraver/commit/4651a876cf1c4c8ff428b2a393164211c4893358"
+        },
+        "date": 1795640389507,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 91.42,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 92.61,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 88.78,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 90.93,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 89.69,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 16554.56,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 52019.97,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1390.3,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 88.65,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 6904,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 49218.63,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 486.58,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 30.86,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 6842.73,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 50039.3,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 483.61,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 30.45,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 44684.06,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 59752.39,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 10855,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 798.67,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 15370.05,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 1969.28,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 124.77,
             "unit": "iter/sec"
           }
         ]
