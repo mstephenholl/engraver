@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795561204134,
+  "lastUpdate": 1795616865273,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -2301,6 +2301,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "compare/identical/16MB",
             "value": 121.43,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2d728794af32e5d8aa458bc40a11b86908a00c76",
+          "message": "fix(release): stop a crate crates.io refuses before releasing, and release 0.1.1 (#77)\n\n* ci(release): check the metadata crates.io enforces before releasing\n\nThe v0.1.0 publish uploaded engraver-detect, engraver-platform and\nengraver-core, then crates.io refused engraver-cli: \"expected at most 5\nkeywords per crate\". cargo publish --dry-run passed, because crates.io\napplies its own limits only when it receives an upload.\n\ncheck-crates now reads every publishable crate from cargo metadata and\nfails if one has more than 5 keywords, a keyword crates.io refuses, or\nno description or license. The release job needs check-crates, so a\ncrate like this one now stops the release before anything is published.\n\nAt this commit the step fails: engraver-cli has 6 keywords.\n\n* fix(cli): use the workspace's five keywords\n\nengraver-cli listed six keywords, and crates.io refuses a crate with\nmore than five, so engraver-cli 0.1.0 was never published. Its list\nwithout \"disk\" is the workspace's list, so inherit that.\n\n* chore: bump version to 0.1.1\n\nengraver-cli 0.1.0 never reached crates.io, and the v0.1.0 tag still\nhas the six keywords, so it can't be published from that tag. Release\n0.1.1 instead, with every crate moved together as release.sh does.\n\n* test(cli): check --version against the crate's own version\n\ntest_version_flag expected \"0.1.0\" in the output, so the bump to 0.1.1\nfailed it on every integration runner and in coverage. Compare against\nCARGO_PKG_VERSION instead, so the test checks that --version reports the\nversion Cargo builds and keeps passing across releases.",
+          "timestamp": "2026-11-25T09:21:18-05:00",
+          "tree_id": "b646605626eaa351c6711f407048a20f4bb0af42",
+          "url": "https://github.com/mstephenholl/engraver/commit/2d728794af32e5d8aa458bc40a11b86908a00c76"
+        },
+        "date": 1795616864576,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 90.81,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 92.19,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 88.4,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 90.59,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 89.22,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 17129.24,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 50930.48,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1405,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 89.13,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 7022.55,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 55996.2,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 489.67,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 30.86,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 6962.79,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 56979.46,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 483.11,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 30.42,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 51427.84,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 53637.96,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 11918.58,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 865.27,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 17041.95,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 2078.72,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 126.7,
             "unit": "iter/sec"
           }
         ]
