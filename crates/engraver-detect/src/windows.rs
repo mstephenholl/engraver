@@ -7,6 +7,11 @@ use std::collections::HashMap;
 use std::process::Command;
 
 /// List all drives on Windows
+///
+/// # Errors
+///
+/// Returns an error if PowerShell cannot be started, or if the query for the physical disks
+/// fails.
 pub fn list_drives() -> Result<Vec<Drive>> {
     let disks = get_physical_disks()?;
     let volumes = get_volumes()?;
@@ -71,13 +76,13 @@ pub(crate) struct PhysicalDisk {
 
 /// Get physical disks using PowerShell Get-CimInstance
 fn get_physical_disks() -> Result<Vec<PhysicalDisk>> {
-    let ps_command = r#"Get-CimInstance -ClassName Win32_DiskDrive | Select-Object Index,DeviceID,Model,Size,MediaType,InterfaceType,SerialNumber | ConvertTo-Csv -NoTypeInformation"#;
+    let ps_command = r"Get-CimInstance -ClassName Win32_DiskDrive | Select-Object Index,DeviceID,Model,Size,MediaType,InterfaceType,SerialNumber | ConvertTo-Csv -NoTypeInformation";
 
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
         .output()
         .map_err(|e| DetectError::CommandFailed {
-            message: format!("PowerShell failed"),
+            message: "PowerShell failed".to_string(),
             source: Some(e),
         })?;
 
@@ -92,22 +97,22 @@ fn get_physical_disks() -> Result<Vec<PhysicalDisk>> {
     }
 
     let output_str = String::from_utf8_lossy(&output.stdout);
-    parse_powershell_disks(&output_str)
+    Ok(parse_powershell_disks(&output_str))
 }
 
 /// Parse PowerShell CSV output for disks
-pub(crate) fn parse_powershell_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
+pub(crate) fn parse_powershell_disks(csv: &str) -> Vec<PhysicalDisk> {
     let mut disks = Vec::new();
     let mut lines = csv.lines().peekable();
 
     // First line should be headers
     let headers: Vec<String> = match lines.next() {
         Some(line) => parse_csv_line(line),
-        None => return Ok(disks),
+        None => return disks,
     };
 
     if headers.is_empty() {
-        return Ok(disks);
+        return disks;
     }
 
     for line in lines {
@@ -143,7 +148,7 @@ pub(crate) fn parse_powershell_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
         let serial = row
             .get("SerialNumber")
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
 
         // Skip disks with zero size
         if size == 0 {
@@ -161,7 +166,7 @@ pub(crate) fn parse_powershell_disks(csv: &str) -> Result<Vec<PhysicalDisk>> {
         });
     }
 
-    Ok(disks)
+    disks
 }
 
 /// Parse a CSV line handling quoted fields
@@ -195,13 +200,13 @@ pub(crate) struct VolumeInfo {
 
 /// Get volumes using PowerShell Get-CimInstance
 fn get_volumes() -> Result<Vec<VolumeInfo>> {
-    let ps_command = r#"Get-CimInstance -ClassName Win32_Volume | Where-Object { $_.DriveLetter -ne $null } | Select-Object DriveLetter,Label,FileSystem,Capacity | ConvertTo-Csv -NoTypeInformation"#;
+    let ps_command = r"Get-CimInstance -ClassName Win32_Volume | Where-Object { $_.DriveLetter -ne $null } | Select-Object DriveLetter,Label,FileSystem,Capacity | ConvertTo-Csv -NoTypeInformation";
 
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
         .output()
         .map_err(|e| DetectError::CommandFailed {
-            message: format!("PowerShell failed"),
+            message: "PowerShell failed".to_string(),
             source: Some(e),
         })?;
 
@@ -254,11 +259,11 @@ pub(crate) fn parse_powershell_volumes(csv: &str) -> Vec<VolumeInfo> {
         let label = row
             .get("Label")
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
         let filesystem = row
             .get("FileSystem")
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
         let size = row
             .get("Capacity")
             .and_then(|s| s.parse::<u64>().ok())
@@ -285,7 +290,7 @@ pub(crate) type VolumeDisks = HashMap<String, Vec<u32>>;
 /// Fails closed. On any failure the map is empty, and `get_disk_partitions` gives every
 /// volume to every disk, so every disk is treated as holding the system drive.
 fn get_volume_disks() -> VolumeDisks {
-    let ps_command = r#"Get-Partition | Where-Object DriveLetter | Select-Object DiskNumber,DriveLetter | ConvertTo-Csv -NoTypeInformation"#;
+    let ps_command = r"Get-Partition | Where-Object DriveLetter | Select-Object DiskNumber,DriveLetter | ConvertTo-Csv -NoTypeInformation";
 
     let output = match Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
@@ -462,11 +467,11 @@ fn get_usb_speed_for_disk(disk: &PhysicalDisk) -> Option<UsbSpeed> {
 
     // Try to get USB speed via PowerShell CIM query
     // This queries Win32_USBHub and related classes
-    let ps_command = r#"
+    let ps_command = r"
         Get-CimInstance -ClassName Win32_USBHub |
         Select-Object DeviceID, Status, USBVersion |
         ConvertTo-Csv -NoTypeInformation
-    "#;
+    ";
 
     let output = Command::new("powershell")
         .args(["-NoProfile", "-Command", ps_command])
@@ -539,17 +544,17 @@ fn detect_usb_speed_from_device_id(device_id: &str) -> Option<UsbSpeed> {
 fn parse_usb_version_string(version: &str) -> Option<UsbSpeed> {
     let version = version.trim();
 
-    if version.starts_with("3.2") || version.starts_with("4") {
+    if version.starts_with("3.2") || version.starts_with('4') {
         Some(UsbSpeed::SuperSpeedPlus20)
     } else if version.starts_with("3.1") {
         Some(UsbSpeed::SuperSpeedPlus)
-    } else if version.starts_with("3.0") || version.starts_with("3") {
+    } else if version.starts_with("3.0") || version.starts_with('3') {
         Some(UsbSpeed::SuperSpeed)
-    } else if version.starts_with("2.0") || version.starts_with("2") {
+    } else if version.starts_with("2.0") || version.starts_with('2') {
         Some(UsbSpeed::High)
     } else if version.starts_with("1.1") {
         Some(UsbSpeed::Full)
-    } else if version.starts_with("1.0") || version.starts_with("1") {
+    } else if version.starts_with("1.0") || version.starts_with('1') {
         Some(UsbSpeed::Low)
     } else {
         None
@@ -565,7 +570,7 @@ pub(crate) fn check_if_system_drive(
     // Check for system drive letter
     for mp in mount_points {
         if is_system_mount_point(mp) {
-            return (true, Some(format!("Contains Windows system drive: {}", mp)));
+            return (true, Some(format!("Contains Windows system drive: {mp}")));
         }
     }
 
@@ -596,12 +601,12 @@ mod tests {
 "0","\\.\PHYSICALDRIVE0","Samsung SSD 970","512110190592","Fixed hard disk media","SCSI","S123456"
 "1","\\.\PHYSICALDRIVE1","SanDisk Ultra","32015679488","Removable Media","USB",""
 "#;
-        let disks = parse_powershell_disks(csv).unwrap();
+        let disks = parse_powershell_disks(csv);
         assert_eq!(disks.len(), 2);
 
         assert_eq!(disks[0].index, 0);
         assert_eq!(disks[0].model, "Samsung SSD 970");
-        assert_eq!(disks[0].size, 512110190592);
+        assert_eq!(disks[0].size, 512_110_190_592);
         assert_eq!(disks[0].interface_type, "SCSI");
         assert_eq!(disks[0].serial, Some("S123456".to_string()));
 
@@ -614,14 +619,14 @@ mod tests {
     #[test]
     fn test_parse_powershell_disks_empty() {
         let csv = "";
-        let disks = parse_powershell_disks(csv).unwrap();
+        let disks = parse_powershell_disks(csv);
         assert!(disks.is_empty());
     }
 
     #[test]
     fn test_parse_powershell_disks_headers_only() {
         let csv = r#""Index","DeviceID","Model","Size","MediaType","InterfaceType","SerialNumber""#;
-        let disks = parse_powershell_disks(csv).unwrap();
+        let disks = parse_powershell_disks(csv);
         assert!(disks.is_empty());
     }
 
@@ -631,7 +636,7 @@ mod tests {
 "0","\\.\PHYSICALDRIVE0","Drive1","0","Fixed hard disk media","SCSI",""
 "1","\\.\PHYSICALDRIVE1","Drive2","32015679488","Removable Media","USB",""
 "#;
-        let disks = parse_powershell_disks(csv).unwrap();
+        let disks = parse_powershell_disks(csv);
         assert_eq!(disks.len(), 1);
         assert_eq!(disks[0].model, "Drive2");
     }
@@ -697,7 +702,7 @@ mod tests {
 
     #[test]
     fn test_each_disk_gets_only_its_own_volumes() {
-        let disks = parse_powershell_disks(TWO_DISKS_CSV).unwrap();
+        let disks = parse_powershell_disks(TWO_DISKS_CSV);
         let volumes = parse_powershell_volumes(C_AND_E_VOLUMES_CSV);
         let volume_disks = parse_partition_disks(C_ON_0_E_ON_1_CSV);
 
@@ -716,7 +721,7 @@ mod tests {
     #[test]
     fn test_empty_map_gives_every_disk_every_volume() {
         // Get-Partition failed or listed nothing: fail closed.
-        let disks = parse_powershell_disks(TWO_DISKS_CSV).unwrap();
+        let disks = parse_powershell_disks(TWO_DISKS_CSV);
         let volumes = parse_powershell_volumes(C_AND_E_VOLUMES_CSV);
         let volume_disks = parse_partition_disks("");
 
@@ -733,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_unmapped_volume_lands_on_every_disk() {
-        let disks = parse_powershell_disks(TWO_DISKS_CSV).unwrap();
+        let disks = parse_powershell_disks(TWO_DISKS_CSV);
         let volumes = parse_powershell_volumes(
             r#""DriveLetter","Label","FileSystem","Capacity"
 "C:","Windows","NTFS","511999156224"
@@ -753,7 +758,7 @@ mod tests {
     fn test_unmapped_system_volume_makes_every_disk_system() {
         // Get-Partition omitted C: (Storage Spaces, dynamic disks). The real system disk
         // must not look safe, so C: goes to every disk.
-        let disks = parse_powershell_disks(TWO_DISKS_CSV).unwrap();
+        let disks = parse_powershell_disks(TWO_DISKS_CSV);
         let volumes = parse_powershell_volumes(C_AND_E_VOLUMES_CSV);
         let volume_disks = parse_partition_disks("\"DiskNumber\",\"DriveLetter\"\n\"1\",\"E\"\n");
 
@@ -770,7 +775,7 @@ mod tests {
     fn test_volume_on_an_unlisted_disk_lands_on_every_disk() {
         // C: sits on disk 5, which Win32_DiskDrive does not list, as with a native-boot VHDX.
         // The real host disk must not look safe, so C: goes to every listed disk.
-        let disks = parse_powershell_disks(TWO_DISKS_CSV).unwrap();
+        let disks = parse_powershell_disks(TWO_DISKS_CSV);
         let volumes = parse_powershell_volumes(
             r#""DriveLetter","Label","FileSystem","Capacity"
 "C:","Windows","NTFS","511999156224"
@@ -791,7 +796,7 @@ mod tests {
 
     #[test]
     fn test_volume_spanning_disks_is_listed_on_each_of_them() {
-        let disks = parse_powershell_disks(TWO_DISKS_CSV).unwrap();
+        let disks = parse_powershell_disks(TWO_DISKS_CSV);
         let volumes = parse_powershell_volumes(C_AND_E_VOLUMES_CSV);
         let volume_disks = parse_partition_disks(
             "\"DiskNumber\",\"DriveLetter\"\n\"0\",\"C\"\n\"1\",\"C\"\n\"1\",\"E\"\n",
@@ -992,7 +997,7 @@ mod tests {
     // -------------------------------------------------------------------------
 
     #[test]
-    #[ignore]
+    #[ignore = "needs a real Windows system"]
     fn test_list_drives_real() {
         let drives = list_drives();
         assert!(drives.is_ok(), "Should be able to list drives");
