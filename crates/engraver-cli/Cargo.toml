@@ -77,8 +77,5 @@ gcs = ["engraver-core/gcs"]
 azure = ["engraver-core/azure"]
 cloud = ["s3", "gcs", "azure"]
 
-[lints.rust]
-unsafe_code = "warn"
-
-[lints.clippy]
-all = "warn"
+[lints]
+workspace = true

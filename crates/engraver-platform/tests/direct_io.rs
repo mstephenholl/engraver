@@ -1,3 +1,4 @@
+//! Integration tests for reads through a device opened for direct I/O.
 #![cfg(any(target_os = "linux", target_os = "windows"))]
 
 use engraver_platform::{open_device, OpenOptions, PlatformError, RawDevice};

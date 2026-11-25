@@ -69,8 +69,5 @@ rand = "0.10"
 name = "checksums"
 harness = false
 
-[lints.rust]
-unsafe_code = "warn"
-
-[lints.clippy]
-all = "warn"
+[lints]
+workspace = true

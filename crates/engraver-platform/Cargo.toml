@@ -42,8 +42,5 @@ tempfile = { workspace = true }
 name = "uring_bench"
 required-features = ["io_uring"]
 
-[lints.rust]
-unsafe_code = "warn"
-
-[lints.clippy]
-all = "warn"
+[lints]
+workspace = true
