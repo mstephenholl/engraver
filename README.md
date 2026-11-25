@@ -384,7 +384,7 @@ verify = true
 checkpoint = false
 retry_attempts = 3
 retry_delay_ms = 100
-read_buffer_size = "64K"
+read_buffer_size = "4M"
 
 [checksum]
 algorithm = "sha256"
@@ -416,7 +416,7 @@ cloud_chunk_size = "4M"
 | `[write]` | `checkpoint` | Enable checkpointing by default | `false` |
 | `[write]` | `retry_attempts` | Number of retry attempts on transient errors | `3` |
 | `[write]` | `retry_delay_ms` | Delay between retries in milliseconds | `100` |
-| `[write]` | `read_buffer_size` | Buffer size for reading source data | `"64K"` |
+| `[write]` | `read_buffer_size` | Buffer size for reading source data | `"4M"` |
 | `[checksum]` | `algorithm` | Default checksum algorithm | `"sha256"` |
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
 | `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
