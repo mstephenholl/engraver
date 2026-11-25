@@ -220,7 +220,9 @@ pub struct WriteConfig {
     /// Delay between retries
     pub retry_delay: Duration,
 
-    /// Whether to verify writes (read back and compare)
+    /// Saved in a resume checkpoint. The writer does not read it. For
+    /// read-back verification, set `checksum_algorithm` and call
+    /// [`Writer::write_and_verify`].
     pub verify: bool,
 
     /// Checksum algorithm for parallel verification (calculated during write)

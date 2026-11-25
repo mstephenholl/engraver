@@ -1,8 +1,13 @@
 //! Persistent user settings for Engraver
 //!
 //! Settings are stored in a TOML configuration file at:
-//! - Linux/macOS: `~/.config/engraver/engraver_config.toml`
+//! - Linux: `~/.config/engraver/engraver_config.toml`, or
+//!   `$XDG_CONFIG_HOME/engraver/engraver_config.toml` if `XDG_CONFIG_HOME` is set
+//! - macOS: `~/Library/Application Support/engraver/engraver_config.toml`
 //! - Windows: `%APPDATA%\engraver\engraver_config.toml`
+//!
+//! The path comes from `dirs_next::config_dir()`, which reads `HOME` on Linux
+//! and macOS.
 //!
 //! # Example Configuration
 //!

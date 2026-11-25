@@ -112,10 +112,12 @@ sudo engraver write ubuntu.iso /dev/sdb --auto-checksum
 
 # Enable auto-detection by default in config
 engraver config --init
-# Then edit ~/.config/engraver/engraver_config.toml:
+# Then edit the file that `engraver config --path` prints:
 # [checksum]
 # auto_detect = true
 ```
+
+Under `sudo`, Engraver usually reads root's configuration file instead of this one. To use this file, see [Configuration](#configuration).
 
 Supported checksum file formats:
 - Direct: `image.iso.sha256`, `image.iso.sha512`, `image.iso.md5`
@@ -133,7 +135,19 @@ engraver config --init
 engraver config
 ```
 
-Configuration file location: `~/.config/engraver/engraver_config.toml`
+Configuration file location:
+
+- Linux: `~/.config/engraver/engraver_config.toml`, or `$XDG_CONFIG_HOME/engraver/engraver_config.toml` if you set `XDG_CONFIG_HOME`
+- macOS: `~/Library/Application Support/engraver/engraver_config.toml`
+- Windows: `%APPDATA%\engraver\engraver_config.toml`
+
+`engraver config --path` prints the path Engraver uses.
+
+`sudo` usually sets `HOME` to root's home directory, so `sudo engraver` reads root's configuration file, not yours. To use your file under `sudo`, pass its path with `--config-file`:
+
+```bash
+sudo engraver --config-file "$(engraver config --path)" write ubuntu.iso /dev/sdb
+```
 
 Example settings:
 ```toml

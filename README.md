@@ -158,7 +158,7 @@ engraver write s3://my-bucket/images/firmware.img /dev/sdb
 engraver write gs://my-bucket/images/ubuntu.iso /dev/sdb
 
 # Write from Azure Blob Storage
-engraver write az://my-container/images/debian.iso /dev/sdb
+engraver write azure://my-account/my-container/images/debian.iso /dev/sdb
 
 # Presigned URLs work as regular HTTPS URLs
 engraver write "https://my-bucket.s3.amazonaws.com/image.iso?X-Amz-..." /dev/sdb
@@ -166,7 +166,11 @@ engraver write "https://my-bucket.s3.amazonaws.com/image.iso?X-Amz-..." /dev/sdb
 
 Cloud sources support resume via Range headers, just like HTTP/HTTPS. The cloud chunk size is configurable in the `[network]` section of the configuration file.
 
-> **Note:** Cloud storage support is an optional feature flag. Pre-built binaries include it by default. When building from source, enable it with `cargo build --features cloud`.
+> **Note:** Cloud storage support is an optional feature, and the pre-built binaries and the install script leave it out. They treat an `s3://`, `gs://` or `azure://` source as a local file path, and the command fails with `Failed to validate source`. To get cloud support, build Engraver with the `cloud` feature:
+>
+> ```bash
+> cargo install engraver-cli --features cloud
+> ```
 
 ## Compression Support
 
@@ -279,6 +283,8 @@ engraver config --json | jq '.write.block_size'
 | `2` | Usage error (unknown option, missing argument) |
 | `130` | Cancelled with Ctrl+C (SIGINT). A cancelled write or erase can leave the target partly written. |
 
+An option value that Engraver checks itself, such as `--algorithm nope` or `--block-size nope`, is an error and exits 1, not 2.
+
 Ctrl+C at a confirmation prompt also exits 130, before anything is written. Answering no when asked to write, erase or benchmark prints `Aborted.` and exits 0.
 
 ### Example: Scripted Write with Verification
@@ -335,8 +341,17 @@ Engraver supports a configuration file for persistent settings. This allows you 
 
 ### Configuration File Location
 
-- Linux/macOS: `~/.config/engraver/engraver_config.toml`
+- Linux: `~/.config/engraver/engraver_config.toml`, or `$XDG_CONFIG_HOME/engraver/engraver_config.toml` if you set `XDG_CONFIG_HOME`
+- macOS: `~/Library/Application Support/engraver/engraver_config.toml`
 - Windows: `%APPDATA%\engraver\engraver_config.toml`
+
+`engraver config --path` prints the path Engraver uses.
+
+Engraver finds this file from your home directory. `sudo` usually sets `HOME` to root's home directory, so `sudo engraver` reads root's configuration file, not yours. To use your file under `sudo`, pass its path with `--config-file`:
+
+```bash
+sudo engraver --config-file "$(engraver config --path)" write ubuntu.iso /dev/sdb
+```
 
 ### Managing Configuration
 
@@ -473,7 +488,7 @@ These are used by pre-commit hooks and standard development workflows:
 | **clippy** | Linter | `rustup component add clippy` |
 | **rustfmt** | Code formatter | `rustup component add rustfmt` |
 
-Pre-commit hooks are managed by [cargo-husky](https://github.com/rhysd/cargo-husky) and install automatically on `cargo build` or `cargo test`. They run `cargo fmt --check`, `cargo clippy`, and `cargo test --lib`.
+Pre-commit hooks are managed by [cargo-husky](https://github.com/rhysd/cargo-husky) and install automatically on `cargo build` or `cargo test`. They run `cargo fmt --check`, `cargo clippy`, `cargo deny check` if `cargo-deny` is installed, and `cargo test --lib --bins`.
 
 ### Optional Cargo Tools
 
@@ -508,14 +523,15 @@ cargo fmt --check
 # Build release
 cargo build --release
 
-# Run CLI
-cargo r -- list
+# Run CLI (the `r` alias already ends in `--`)
+cargo r list
 
 # Run benchmarks
 cargo bench -p engraver-core
 
-# Run fuzz targets (requires nightly)
-cargo +nightly fuzz run fuzz_writer -p engraver-core
+# List and run fuzz targets (requires nightly and cargo-fuzz)
+cargo fuzz list --fuzz-dir crates/engraver-core/fuzz
+cargo +nightly fuzz run --fuzz-dir crates/engraver-core/fuzz fuzz_format_functions
 
 # Generate code coverage
 cargo llvm-cov --html

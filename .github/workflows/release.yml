@@ -86,15 +86,21 @@ jobs:
             ./target/${{ matrix.target }}/release/engraver completions elvish > completions/engraver.elv
           fi
 
-      - name: Generate man pages
+      # The archives carry the curated pages checked in under man/. Their .TH
+      # lines name the version they were last edited for, so stamp this
+      # release's version in. `sed -i.bak` is the form GNU and BSD sed share.
+      - name: Stamp the release version into the man pages
         shell: bash
         run: |
-          mkdir -p man
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            ./target/${{ matrix.target }}/release/engraver.exe mangen --out-dir man
-          else
-            ./target/${{ matrix.target }}/release/engraver mangen --out-dir man
-          fi
+          version="${TAG#v}"
+          sed -i.bak -E "/^\.TH /s/\"engraver [^\"]*\"/\"engraver ${version}\"/" man/*.1
+          rm man/*.1.bak
+          for page in man/*.1; do
+            if ! grep '^\.TH ' "$page" | grep -qF "\"engraver ${version}\""; then
+              echo "::error file=$page::the .TH line does not carry version ${version}"
+              exit 1
+            fi
+          done
 
       - name: Create archive (Unix)
         if: matrix.archive == 'tar.gz'

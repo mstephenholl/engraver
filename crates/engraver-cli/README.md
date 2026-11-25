@@ -5,7 +5,7 @@ A safe, fast command-line tool for creating bootable USB drives, SD cards, and N
 ## Features
 
 - **Safe by default**: Refuses to write to system drives
-- **Multiple sources**: Local files, URLs, compressed archives, cloud storage
+- **Multiple sources**: Local files, URLs, compressed archives, and cloud storage with the `cloud` feature (not in the pre-built binaries)
 - **Verification**: Parallel write verification — hashes source during write, reads back to compare
 - **Progress display**: Real-time progress with speed and ETA
 - **Resumable**: Checkpoint-based resume for interrupted writes
@@ -198,7 +198,17 @@ engraver mangen --out-dir ./man
 
 ## Configuration File
 
-Engraver supports a configuration file at `~/.config/engraver/engraver_config.toml` (Linux/macOS) or `%APPDATA%\engraver\engraver_config.toml` (Windows).
+Engraver reads a configuration file from:
+
+- Linux: `~/.config/engraver/engraver_config.toml`, or `$XDG_CONFIG_HOME/engraver/engraver_config.toml` if you set `XDG_CONFIG_HOME`
+- macOS: `~/Library/Application Support/engraver/engraver_config.toml`
+- Windows: `%APPDATA%\engraver\engraver_config.toml`
+
+`engraver config --path` prints the path Engraver uses. `sudo` usually sets `HOME` to root's home directory, so `sudo engraver` reads root's file, not yours. To use your file under `sudo`, pass its path:
+
+```bash
+sudo engraver --config-file "$(engraver config --path)" write ubuntu.iso /dev/sdb
+```
 
 ```toml
 [write]
@@ -279,6 +289,8 @@ engraver write image.iso /dev/sda --force --yes
 | 130 | Cancelled with Ctrl+C (SIGINT). A cancelled write or erase can leave the target partly written. |
 
 A second Ctrl+C while a run is stopping exits immediately, also with 130.
+
+An option value that Engraver checks itself, such as `--algorithm nope` or `--block-size nope`, is an error and exits 1, not 2.
 
 Ctrl+C at a confirmation prompt also exits 130, before anything is written. Answering no when asked to write, erase or benchmark prints `Aborted.` and exits 0.
 

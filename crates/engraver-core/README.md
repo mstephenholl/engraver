@@ -41,10 +41,12 @@ Core library for the Engraver disk imaging tool.
 
 ## Usage
 
+Each example is the body of a function that returns `Result<(), Box<dyn std::error::Error>>`.
+
 ### Basic Write
 
 ```rust
-use engraver_core::{Writer, WriteConfig};
+use engraver_core::Writer;
 use std::io::Cursor;
 
 let source = Cursor::new(vec![0xABu8; 1024 * 1024]); // 1 MB
@@ -60,6 +62,11 @@ println!("Wrote {} bytes", result.bytes_written);
 
 ```rust
 use engraver_core::{Writer, WriteConfig};
+use std::io::Cursor;
+
+let source_size = 8 * 1024 * 1024; // 8 MB
+let source = Cursor::new(vec![0xABu8; source_size]);
+let target = Cursor::new(vec![0u8; source_size]);
 
 let config = WriteConfig::new()
     .block_size(4 * 1024 * 1024)  // 4 MB blocks
@@ -75,29 +82,39 @@ let mut writer = Writer::with_config(config)
         );
     });
 
-let result = writer.write(source, target, source_size)?;
+let result = writer.write(source, target, source_size as u64)?;
+println!("Wrote {} bytes", result.bytes_written);
 ```
 
 ### With Cancellation
 
 ```rust
-use engraver_core::Writer;
+use engraver_core::{Error, Writer};
+use std::io::Cursor;
 use std::sync::atomic::Ordering;
 use std::thread;
+
+let size = 64 * 1024 * 1024; // 64 MB
+let source = Cursor::new(vec![0xABu8; size]);
+let target = Cursor::new(vec![0u8; size]);
 
 let mut writer = Writer::new();
 let cancel_handle = writer.cancel_handle();
 
 // Spawn write in background
 let handle = thread::spawn(move || {
-    writer.write(source, target, size)
+    writer.write(source, target, size as u64)
 });
 
 // Cancel after some condition
 cancel_handle.store(true, Ordering::SeqCst);
 
-let result = handle.join().unwrap();
-// result will be Err(Error::Cancelled)
+// The write returns Err(Error::Cancelled) if it sees the flag before it finishes
+match handle.join().unwrap() {
+    Err(Error::Cancelled) => println!("Write cancelled"),
+    Err(e) => return Err(e.into()),
+    Ok(result) => println!("Write finished first: {} bytes", result.bytes_written),
+}
 ```
 
 ### Source Handling
@@ -118,25 +135,34 @@ println!("Size: {:?}", source.info().size);
 
 ```rust
 use engraver_core::{Verifier, ChecksumAlgorithm};
+use std::fs::File;
 
 let mut verifier = Verifier::new();
 
 // Calculate checksum
-let checksum = verifier.calculate_checksum(&mut reader, ChecksumAlgorithm::Sha256, None)?;
+let mut file = File::open("image.iso")?;
+let checksum = verifier.calculate_checksum(&mut file, ChecksumAlgorithm::Sha256, None)?;
+println!("SHA-256: {checksum}");
 
-// Verify against expected
-verifier.verify_checksum(&mut reader, ChecksumAlgorithm::Sha256, &expected, None)?;
+// Verify against an expected hash. A mismatch returns Err(Error::ChecksumMismatch).
+let expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+let mut file = File::open("image.iso")?;
+verifier.verify_checksum(&mut file, ChecksumAlgorithm::Sha256, expected, None)?;
 
 // Auto-detect checksum from companion files (.sha256, SHA256SUMS, etc.)
-let detected = engraver_core::verifier::auto_detect_checksum("image.iso")?;
+if let Some(detected) = engraver_core::verifier::auto_detect_checksum("image.iso") {
+    println!("Found {} checksum: {}", detected.algorithm, detected.checksum);
+}
 ```
 
 ### Partition Inspection
 
 ```rust
 use engraver_core::partition::inspect_partitions;
+use std::fs::File;
 
-let info = inspect_partitions("image.iso")?;
+let mut file = File::open("image.iso")?;
+let info = inspect_partitions(&mut file)?;
 println!("Partition table: {:?}", info.table_type);
 for partition in &info.partitions {
     println!("  Partition {}: {} bytes", partition.number, partition.size);
@@ -152,7 +178,8 @@ for partition in &info.partitions {
 | `sync_on_complete` | true | fsync when write completes |
 | `retry_attempts` | 3 | Number of retry attempts |
 | `retry_delay` | 100ms | Delay between retries |
-| `verify` | false | Read-back verification |
+| `verify` | false | Saved in a resume checkpoint. `Writer` does not read it |
+| `checksum_algorithm` | None | Hash the source during the write. `Writer::write_and_verify` then reads the target back and compares hashes |
 
 ## Progress Information
 

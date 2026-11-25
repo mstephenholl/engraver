@@ -8,7 +8,8 @@ engraver \- A safe, fast tool for creating bootable USB drives, SD cards, and NV
 .SH DESCRIPTION
 Engraver is a fast, safe command-line tool for writing disk images to USB drives,
 SD cards, and NVMe drives. It supports local files, HTTP/HTTPS URLs, and cloud
-storage sources (S3, GCS, Azure Blob). Compressed images (.gz, .xz, .zst, .bz2)
+storage sources (S3, GCS, Azure Blob) when built with the \fBcloud\fR feature,
+which the pre-built binaries leave out. Compressed images (.gz, .xz, .zst, .bz2)
 are automatically decompressed during write.
 .PP
 Engraver includes multiple safety mechanisms: system drive detection prevents
@@ -58,6 +59,23 @@ Generate shell completions for bash, zsh, fish, powershell, or elvish.
 .TP
 \fBengraver mangen\fR [\fB\-o\fR \fI<DIR>\fR]
 Generate man pages in roff format.
+.SH EXIT STATUS
+.TP
+\fB0\fR
+Success. Answering no when asked to write, erase or benchmark prints
+\fBAborted.\fR and also exits 0.
+.TP
+\fB1\fR
+Error, such as permission denied, device not found, or a failed verification.
+An option value that Engraver checks itself, such as
+\fB\-\-algorithm nope\fR or \fB\-\-block\-size nope\fR, also exits 1.
+.TP
+\fB2\fR
+Usage error, such as an unknown option or a missing argument.
+.TP
+\fB130\fR
+Cancelled with Ctrl+C (SIGINT), including at a confirmation prompt.
+A cancelled write or erase can leave the target partly written.
 .SH EXAMPLES
 List available drives:
 .PP
@@ -85,7 +103,13 @@ Benchmark a drive to find the optimal block size:
 .SH FILES
 .TP
 \fB~/.config/engraver/engraver_config.toml\fR
-Configuration file (Linux/macOS). See \fBengraver\-config\fR(1).
+Configuration file on Linux, or
+.br
+\fB\%$XDG_CONFIG_HOME/engraver/engraver_config.toml\fR if \fB\%XDG_CONFIG_HOME\fR is set.
+See \fBengraver\-config\fR(1).
+.TP
+\fB~/Library/Application Support/engraver/engraver_config.toml\fR
+Configuration file on macOS.
 .TP
 \fB~/.local/state/engraver/checkpoints/\fR
 Checkpoint files for resume support (Linux/macOS).

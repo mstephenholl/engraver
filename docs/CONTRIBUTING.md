@@ -20,7 +20,8 @@ Hooks are **automatically installed** when you run `cargo build` or `cargo test`
 The pre-commit hook runs:
 - `cargo fmt --check` - Verify code formatting
 - `cargo clippy --all-targets --all-features -- -D warnings` - Lint checking
-- `cargo test --lib` - Unit tests
+- `cargo deny check` - License, advisory and dependency checks, if `cargo-deny` is installed
+- `cargo test --lib --bins` - Unit tests, including the CLI binary's (`--lib` alone skips them)
 
 To bypass hooks temporarily (not recommended):
 ```bash

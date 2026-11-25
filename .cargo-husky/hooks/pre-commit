@@ -31,9 +31,10 @@ else
     echo "  cargo-deny not installed, skipping. Install with: cargo install cargo-deny"
 fi
 
-# Unit tests (library tests only for speed)
+# Unit tests (library and binary tests, no integration tests, for speed).
+# engraver-cli is a binary crate, so --lib alone skips its unit tests.
 echo "Running tests..."
-cargo test --lib || {
+cargo test --lib --bins || {
     echo ""
     echo "Tests failed. Fix the failing tests before committing."
     exit 1
