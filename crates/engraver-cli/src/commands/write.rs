@@ -18,8 +18,8 @@ use std::time::Instant;
 
 use engraver_core::{
     auto_detect_checksum, validate_checkpoint, validate_source, CheckpointManager,
-    ChecksumAlgorithm, Source, SourceType, Verifier, VerifyConfig, WriteCheckpoint, WriteConfig,
-    WritePhase, Writer,
+    ChecksumAlgorithm, Source, SourceType, TargetIdentity, Verifier, VerifyConfig, WriteCheckpoint,
+    WriteConfig, WritePhase, Writer,
 };
 #[cfg(feature = "partition-info")]
 use engraver_core::{inspect_from_buffer, read_partition_header, PartitionTableType};
@@ -457,6 +457,16 @@ fn setup_checksum(args: &WriteArgs, image_size: Option<u64>, ctx: &WriteContext)
     Ok(())
 }
 
+/// What a checkpoint records about the drive it is writing, and what a resume
+/// checks the drive at the same path against.
+fn target_identity(drive: &Drive) -> TargetIdentity {
+    TargetIdentity {
+        size: drive.size,
+        serial: drive.serial.clone(),
+        model: drive.model.clone(),
+    }
+}
+
 /// Set up checkpoint manager and handle resume logic
 fn setup_checkpoint(
     args: &WriteArgs,
@@ -482,7 +492,8 @@ fn setup_checkpoint(
     if args.resume {
         if let Some(ref mgr) = checkpoint_manager {
             if let Ok(Some(checkpoint)) = mgr.find_checkpoint(&args.source, &target_drive.path) {
-                let validation = validate_checkpoint(&checkpoint, source_info, target_drive.size);
+                let validation =
+                    validate_checkpoint(&checkpoint, source_info, &target_identity(target_drive));
 
                 if validation.valid {
                     println_if!(
@@ -646,7 +657,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         WriteCheckpoint::new(
             &source_info,
             &target_drive.path,
-            target_drive.size,
+            &target_identity(target_drive),
             &write_config,
         )
     };

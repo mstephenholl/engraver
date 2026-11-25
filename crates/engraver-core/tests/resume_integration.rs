@@ -13,6 +13,7 @@
 //! then carried into the `WriteCheckpoint` exactly the way the CLI's
 //! `commands/write.rs` does it.
 
+use engraver_core::resume::TargetIdentity;
 use engraver_core::{
     compute_local_header_hash, validate_checkpoint, CheckpointManager, SourceInfo, SourceType,
     WriteCheckpoint, WriteConfig, Writer,
@@ -24,6 +25,15 @@ use tempfile::TempDir;
 // =============================================================================
 // Helpers
 // =============================================================================
+
+/// A target that is known only by its size, as a drive with no serial.
+fn target(size: u64) -> TargetIdentity {
+    TargetIdentity {
+        size,
+        serial: None,
+        model: None,
+    }
+}
 
 /// Produce deterministic, distinguishable image bytes: each image is
 /// the same length but differs in every byte from any other (we vary
@@ -142,7 +152,7 @@ fn interrupted_write_resumes_to_full_image_when_source_unchanged() {
     let mut checkpoint = WriteCheckpoint::new(
         &info,
         device_path.to_str().unwrap(),
-        size as u64,
+        &target(size as u64),
         &WriteConfig::new().block_size(block_size),
     );
     checkpoint.update_progress(
@@ -153,7 +163,7 @@ fn interrupted_write_resumes_to_full_image_when_source_unchanged() {
     mgr.save(&checkpoint).unwrap();
 
     // --- Resume: validate against the unchanged source, then finish.
-    let validation = validate_checkpoint(&checkpoint, &info, size as u64);
+    let validation = validate_checkpoint(&checkpoint, &info, &target(size as u64));
     assert!(
         validation.valid,
         "validation should pass: {:?}",
@@ -218,7 +228,7 @@ fn resume_blocked_when_source_replaced_with_different_image() {
     let mut checkpoint = WriteCheckpoint::new(
         &info_a,
         device_path.to_str().unwrap(),
-        size as u64,
+        &target(size as u64),
         &WriteConfig::new().block_size(block_size),
     );
     checkpoint.update_progress(
@@ -237,7 +247,7 @@ fn resume_blocked_when_source_replaced_with_different_image() {
     );
 
     // Validation must refuse to resume.
-    let validation = validate_checkpoint(&checkpoint, &info_b, size as u64);
+    let validation = validate_checkpoint(&checkpoint, &info_b, &target(size as u64));
     assert!(
         !validation.valid,
         "validate_checkpoint must reject the replaced image"
@@ -276,7 +286,7 @@ fn target_size_mismatch_warns_but_does_not_block_resume() {
     let checkpoint = WriteCheckpoint::new(
         &info,
         "/dev/imaginary",
-        4 * 1024 * 1024 * 1024, // original target was 4 GB
+        &target(4 * 1024 * 1024 * 1024), // original target was 4 GB
         &WriteConfig::new(),
     );
 
@@ -284,7 +294,7 @@ fn target_size_mismatch_warns_but_does_not_block_resume() {
     // they switched USB sticks). validate_checkpoint should warn but
     // permit the resume — only path / size / hash / etag mismatches
     // are fatal.
-    let validation = validate_checkpoint(&checkpoint, &info, 8 * 1024 * 1024 * 1024);
+    let validation = validate_checkpoint(&checkpoint, &info, &target(8 * 1024 * 1024 * 1024));
     assert!(
         validation.valid,
         "target size mismatch must NOT invalidate the checkpoint"
@@ -320,7 +330,12 @@ fn checkpoint_manager_round_trip_preserves_header_hash_and_etag() {
     info.etag = Some("\"fake-etag\"".to_string());
 
     let mgr = CheckpointManager::new(dir.path().join("checkpoints")).unwrap();
-    let original = WriteCheckpoint::new(&info, "/dev/test", 1024 * 1024, &WriteConfig::new());
+    let original = WriteCheckpoint::new(
+        &info,
+        "/dev/test",
+        &target(1024 * 1024),
+        &WriteConfig::new(),
+    );
     mgr.save(&original).unwrap();
 
     let loaded = mgr.load(&original).unwrap();

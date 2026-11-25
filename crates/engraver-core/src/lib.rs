@@ -66,7 +66,7 @@ pub use partition::{
 };
 pub use resume::{
     default_checkpoint_dir, validate_checkpoint, CheckpointManager, CheckpointValidation,
-    WriteCheckpoint, CHECKPOINT_VERSION,
+    TargetIdentity, WriteCheckpoint, CHECKPOINT_VERSION,
 };
 pub use settings::{
     BehaviorSettings, BenchmarkSettings, ChecksumSettings, NetworkSettings, Settings,
