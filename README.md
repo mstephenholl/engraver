@@ -166,7 +166,11 @@ engraver write "https://my-bucket.s3.amazonaws.com/image.iso?X-Amz-..." /dev/sdb
 
 Cloud sources support resume via Range headers, just like HTTP/HTTPS. The cloud chunk size is configurable in the `[network]` section of the configuration file.
 
-> **Note:** Cloud storage support is an optional feature flag. Pre-built binaries include it by default. When building from source, enable it with `cargo build --features cloud`.
+> **Note:** Cloud storage support is an optional feature, and the pre-built binaries and the install script leave it out. They treat an `s3://`, `gs://` or `azure://` source as a local file path, and the command fails with `Failed to validate source`. To get cloud support, build Engraver with the `cloud` feature:
+>
+> ```bash
+> cargo install engraver-cli --features cloud
+> ```
 
 ## Compression Support
 
