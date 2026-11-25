@@ -523,14 +523,15 @@ cargo fmt --check
 # Build release
 cargo build --release
 
-# Run CLI
-cargo r -- list
+# Run CLI (the `r` alias already ends in `--`)
+cargo r list
 
 # Run benchmarks
 cargo bench -p engraver-core
 
-# Run fuzz targets (requires nightly)
-cargo +nightly fuzz run fuzz_writer -p engraver-core
+# List and run fuzz targets (requires nightly and cargo-fuzz)
+cargo fuzz list --fuzz-dir crates/engraver-core/fuzz
+cargo +nightly fuzz run --fuzz-dir crates/engraver-core/fuzz fuzz_format_functions
 
 # Generate code coverage
 cargo llvm-cov --html
