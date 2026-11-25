@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/mstephenholl/engraver/main/install.
 less install.sh
 
 # Verify checksum
-echo "d1230d6062915d71b0e966ba3ed6ccf499633fb8579ad3a1ffb8cc0e336c43ad  install.sh" | sha256sum -c
+echo "887f1a746135808ee342997ededa75df46a406885dd66cf6ae980d8f848d2181  install.sh" | sha256sum -c
 
 # Run after inspection
 bash install.sh

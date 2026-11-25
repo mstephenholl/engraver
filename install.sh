@@ -269,7 +269,9 @@ install_from_source() {
     git clone "https://github.com/${REPO}.git" "$tmpdir/engraver"
     cd "$tmpdir/engraver"
     
-    cargo build --release -p engraver-cli
+    # --target-dir beats CARGO_TARGET_DIR, so the binary is in ./target even
+    # when the user has pointed cargo somewhere else.
+    cargo build --release -p engraver-cli --target-dir target
     
     info "Installing to ${INSTALL_DIR}..."
     if [[ -w "$INSTALL_DIR" ]]; then
@@ -288,9 +290,14 @@ install_from_source() {
     ./target/release/engraver completions powershell > completions/_engraver.ps1
     ./target/release/engraver completions elvish > completions/engraver.elv
     
-    mkdir -p man
-    ./target/release/engraver mangen --out-dir man
-    
+    # The clone's man/ holds the curated pages. Their .TH lines name the version
+    # they were last edited for, so stamp the built version in. `sed -i.bak` is
+    # the form GNU and BSD sed share.
+    local version
+    version=$(./target/release/engraver --version | awk '{ print $2 }')
+    sed -i.bak -E "/^\.TH /s/\"engraver [^\"]*\"/\"engraver ${version}\"/" man/*.1
+    rm man/*.1.bak
+
     install_completions "."
     install_man_pages "."
 }
