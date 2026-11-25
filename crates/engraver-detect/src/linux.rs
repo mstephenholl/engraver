@@ -121,6 +121,8 @@ fn parse_block_device(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
+    let serial = read_serial(&sys_path);
+
     let drive_type = detect_drive_type(name, &sys_path);
 
     // Many USB bridges report `removable` as 0 for fixed media such as USB SSDs.
@@ -163,7 +165,7 @@ fn parse_block_device(
         drive_type,
         vendor,
         model,
-        serial: None,
+        serial,
         mount_points,
         partitions,
         system_reason,
@@ -634,6 +636,28 @@ pub(crate) fn detect_usb_speed(sys_path: &str) -> Option<UsbSpeed> {
                 None
             }
         }
+    })
+}
+
+/// Read the serial number of a block device
+///
+/// `NVMe` and MMC devices keep it in `{sys_path}/device/serial`. A USB disk reaches the
+/// block layer through SCSI, which has no serial, so it comes from the `serial` of
+/// the USB device above it, the nearest ancestor that has an `idVendor`. A USB
+/// device with no serial of its own gives `None`: the `serial` of a hub or root hub
+/// further up names the hub or its controller, and would make every disk behind it
+/// look like the same drive. An empty serial counts as none.
+pub(crate) fn read_serial(sys_path: &str) -> Option<String> {
+    let serial_in = |dir: &Path| {
+        read_sys_value(&dir.join("serial").to_string_lossy())
+            .ok()
+            .filter(|s| !s.is_empty())
+    };
+
+    serial_in(&Path::new(sys_path).join("device")).or_else(|| {
+        device_ancestors(sys_path)
+            .find(|dir| dir.join("idVendor").exists())
+            .and_then(|dir| serial_in(&dir))
     })
 }
 
@@ -1494,5 +1518,80 @@ Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
         let sys_path = usb_attached_disk(root.path());
 
         assert_eq!(detect_usb_speed(&sys_path), Some(UsbSpeed::SuperSpeedPlus));
+    }
+
+    // -------------------------------------------------------------------------
+    // read_serial tests
+    // -------------------------------------------------------------------------
+
+    /// Mark `dir` as a USB device, with the serial it reports if it has one.
+    fn add_usb_identity(dir: &Path, serial: Option<&str>) {
+        fs::write(dir.join("idVendor"), "0951\n").unwrap();
+        if let Some(serial) = serial {
+            fs::write(dir.join("serial"), format!("{serial}\n")).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_read_serial_nvme_reads_the_device_serial_and_trims_it() {
+        let root = TempDir::new().unwrap();
+        let disk = root.path().join("block/nvme0n1");
+        fs::create_dir_all(disk.join("device")).unwrap();
+        // The kernel pads an NVMe serial with spaces.
+        fs::write(disk.join("device/serial"), "S4EVNX0R123456   \n").unwrap();
+
+        assert_eq!(
+            read_serial(disk.to_str().unwrap()),
+            Some("S4EVNX0R123456".to_string())
+        );
+    }
+
+    #[test]
+    fn test_read_serial_usb_disk_reads_the_usb_device_serial() {
+        let root = TempDir::new().unwrap();
+        let sys_path = usb_attached_disk(root.path());
+        let hub = root.path().join("devices/pci0000:00/0000:00:0d.0/usb2");
+        add_usb_identity(&hub, Some("0000:00:0d.0"));
+        add_usb_identity(&hub.join("2-3"), Some("AA00000000000489"));
+
+        assert_eq!(read_serial(&sys_path), Some("AA00000000000489".to_string()));
+    }
+
+    #[test]
+    fn test_read_serial_usb_device_without_a_serial_is_none_not_the_hubs() {
+        // A cheap stick has no iSerialNumber. The root hub above it does, and
+        // that names the controller, so it must not stand in for the stick.
+        let root = TempDir::new().unwrap();
+        let sys_path = usb_attached_disk(root.path());
+        let hub = root.path().join("devices/pci0000:00/0000:00:0d.0/usb2");
+        add_usb_identity(&hub, Some("0000:00:0d.0"));
+        add_usb_identity(&hub.join("2-3"), None);
+
+        assert_eq!(read_serial(&sys_path), None);
+    }
+
+    #[test]
+    fn test_read_serial_empty_serial_is_none() {
+        let root = TempDir::new().unwrap();
+        let sys_path = usb_attached_disk(root.path());
+        add_usb_identity(
+            &root.path().join("devices/pci0000:00/0000:00:0d.0/usb2/2-3"),
+            Some("  "),
+        );
+
+        assert_eq!(read_serial(&sys_path), None);
+    }
+
+    #[test]
+    fn test_read_serial_sata_disk_with_no_usb_ancestor_is_none() {
+        let root = TempDir::new().unwrap();
+        let sys_path = sata_attached_disk(root.path());
+
+        assert_eq!(read_serial(&sys_path), None);
+    }
+
+    #[test]
+    fn test_read_serial_missing_device_is_none() {
+        assert_eq!(read_serial("/sys/block/nonexistent"), None);
     }
 }
