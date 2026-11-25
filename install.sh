@@ -175,42 +175,52 @@ install_binary() {
     install_man_pages "$extract_dir"
 }
 
+# copy_files <what> <dest> <file>...: copy the files to dest, a directory or a
+# file path, then say whether that worked. When the directory isn't writable,
+# copy through sudo, unless --no-sudo is set or the directory is under HOME.
+copy_files() {
+    local what="$1" dest="$2"
+    shift 2
+    local dir="$dest"
+    [[ -d "$dest" ]] || dir="$(dirname "$dest")"
+
+    local copied=false
+    if [[ -w "$dir" ]]; then
+        cp "$@" "$dest" 2>/dev/null && copied=true
+    elif [[ "$USE_SUDO" == "true" && "$dir" != "$HOME"/* ]]; then
+        sudo cp "$@" "$dest" 2>/dev/null && copied=true
+    fi
+
+    if [[ "$copied" == true ]]; then
+        info "Installed ${what} to ${dest}"
+    else
+        warn "Skipped ${what}: could not write to ${dir}"
+    fi
+}
+
 install_completions() {
     local src_dir="$1"
-    
-    # Helper to copy with optional sudo
-    maybe_sudo_cp() {
-        if [[ -w "$(dirname "$2")" ]]; then
-            cp "$1" "$2" 2>/dev/null || true
-        elif [[ "$USE_SUDO" == "true" ]]; then
-            sudo cp "$1" "$2" 2>/dev/null || true
-        fi
-    }
 
     # Bash
     if [[ -d /usr/local/share/bash-completion/completions ]]; then
-        info "Installing bash completions..."
-        maybe_sudo_cp "${src_dir}/completions/engraver.bash" /usr/local/share/bash-completion/completions/engraver
+        copy_files "bash completions" /usr/local/share/bash-completion/completions/engraver "${src_dir}/completions/engraver.bash"
     elif [[ -d /etc/bash_completion.d ]]; then
-        maybe_sudo_cp "${src_dir}/completions/engraver.bash" /etc/bash_completion.d/engraver
+        copy_files "bash completions" /etc/bash_completion.d/engraver "${src_dir}/completions/engraver.bash"
     fi
 
     # Zsh
     if [[ -d /usr/local/share/zsh/site-functions ]]; then
-        info "Installing zsh completions..."
-        maybe_sudo_cp "${src_dir}/completions/_engraver" /usr/local/share/zsh/site-functions/_engraver
+        copy_files "zsh completions" /usr/local/share/zsh/site-functions/_engraver "${src_dir}/completions/_engraver"
     fi
-    
+
     # Fish
     if [[ -d ~/.config/fish/completions ]]; then
-        info "Installing fish completions..."
-        cp "${src_dir}/completions/engraver.fish" ~/.config/fish/completions/ 2>/dev/null || true
+        copy_files "fish completions" ~/.config/fish/completions/engraver.fish "${src_dir}/completions/engraver.fish"
     fi
 
     # Elvish
     if [[ -d ~/.elvish/lib ]]; then
-        info "Installing elvish completions..."
-        cp "${src_dir}/completions/engraver.elv" ~/.elvish/lib/ 2>/dev/null || true
+        copy_files "elvish completions" ~/.elvish/lib/engraver.elv "${src_dir}/completions/engraver.elv"
     fi
 
     # PowerShell
@@ -219,8 +229,7 @@ install_completions() {
     # shellcheck disable=SC2016
     if ps_dir="$(pwsh -NoProfile -Command 'Split-Path $PROFILE' 2>/dev/null)"; then
         if [[ -d "$ps_dir" ]]; then
-            info "Installing PowerShell completions..."
-            cp "${src_dir}/completions/_engraver.ps1" "${ps_dir}/engraver.ps1" 2>/dev/null || true
+            copy_files "PowerShell completions" "${ps_dir}/engraver.ps1" "${src_dir}/completions/_engraver.ps1"
         fi
     fi
 }
@@ -231,20 +240,17 @@ install_man_pages() {
     # Try to create MAN_DIR if needed
     if [[ ! -d "$MAN_DIR" ]]; then
         if [[ "$USE_SUDO" == "true" ]]; then
-            sudo mkdir -p "$MAN_DIR" 2>/dev/null || return
+            sudo mkdir -p "$MAN_DIR" 2>/dev/null || true
         else
-            mkdir -p "$MAN_DIR" 2>/dev/null || return
+            mkdir -p "$MAN_DIR" 2>/dev/null || true
         fi
+    fi
+    if [[ ! -d "$MAN_DIR" ]]; then
+        warn "Skipped man pages: could not create ${MAN_DIR}"
+        return
     fi
 
-    if [[ -d "$MAN_DIR" ]]; then
-        info "Installing man pages..."
-        if [[ -w "$MAN_DIR" ]]; then
-            cp "${src_dir}"/man/*.1 "$MAN_DIR/" 2>/dev/null || true
-        elif [[ "$USE_SUDO" == "true" ]]; then
-            sudo cp "${src_dir}"/man/*.1 "$MAN_DIR/" 2>/dev/null || true
-        fi
-    fi
+    copy_files "man pages" "$MAN_DIR" "${src_dir}"/man/*.1
 }
 
 # Build from source
