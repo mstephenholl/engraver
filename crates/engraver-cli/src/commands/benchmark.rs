@@ -45,6 +45,8 @@ pub struct BenchmarkArgs {
     pub skip_confirm: bool,
     /// Hide status output (`-q`, `--silent`)
     pub silent: bool,
+    /// Hide the results table too (`--silent`). `-q` keeps it.
+    pub hide_results: bool,
     /// Test multiple block sizes
     pub test_block_sizes: Option<String>,
     /// Cancellation flag
@@ -170,6 +172,7 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
             pattern,
             args.json,
             silent,
+            args.hide_results,
             args.cancel_flag,
         )
     } else {
@@ -182,6 +185,7 @@ pub fn execute(args: BenchmarkArgs) -> Result<()> {
             args.passes,
             args.json,
             silent,
+            args.hide_results,
             args.cancel_flag,
         )
     };
@@ -443,6 +447,7 @@ fn run_single_benchmark<W>(
     passes: u32,
     json: bool,
     silent: bool,
+    hide_results: bool,
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<()>
 where
@@ -497,7 +502,7 @@ where
             if json {
                 output_json(&result)?;
             } else {
-                output_human_readable(&result, silent);
+                output_human_readable(&result, hide_results);
             }
             Ok(())
         }
@@ -515,6 +520,7 @@ fn run_multi_block_benchmark<W>(
     pattern: DataPattern,
     json: bool,
     silent: bool,
+    hide_results: bool,
     cancel_flag: Arc<AtomicBool>,
 ) -> Result<()>
 where
@@ -614,7 +620,7 @@ where
     if json {
         output_multi_block_json(&results)?;
     } else {
-        output_multi_block_human(&results, silent);
+        output_multi_block_human(&results, hide_results);
     }
 
     Ok(())
@@ -770,6 +776,7 @@ mod tests {
             json: false,
             skip_confirm: true,
             silent: false,
+            hide_results: false,
             test_block_sizes: None,
             cancel_flag: Arc::new(AtomicBool::new(true)),
         };
@@ -794,6 +801,7 @@ mod tests {
             json,
             skip_confirm: true,
             silent,
+            hide_results: silent,
             test_block_sizes: None,
             cancel_flag: Arc::new(AtomicBool::new(false)),
         };
@@ -819,6 +827,7 @@ mod tests {
             json: false,
             skip_confirm: true,
             silent: false,
+            hide_results: false,
             test_block_sizes: None,
             cancel_flag: Arc::new(AtomicBool::new(true)),
         };
@@ -837,6 +846,7 @@ mod tests {
             json: false,
             skip_confirm: true,
             silent: false,
+            hide_results: false,
             test_block_sizes: Some("4K,1M,4M".to_string()),
             cancel_flag: Arc::new(AtomicBool::new(true)),
         };
@@ -858,6 +868,7 @@ mod tests {
             json: false,
             skip_confirm: true,
             silent: false,
+            hide_results: false,
             test_block_sizes: None,
             cancel_flag: Arc::new(AtomicBool::new(true)),
         };
@@ -879,6 +890,7 @@ mod tests {
             json: false,
             skip_confirm: true,
             silent: false,
+            hide_results: false,
             test_block_sizes: None,
             cancel_flag: Arc::new(AtomicBool::new(true)),
         };
@@ -900,6 +912,7 @@ mod tests {
             json: false,
             skip_confirm: true,
             silent: false,
+            hide_results: false,
             test_block_sizes: None,
             cancel_flag: Arc::new(AtomicBool::new(true)),
         };
@@ -920,6 +933,7 @@ mod tests {
                 json: false,
                 skip_confirm: true,
                 silent: false,
+                hide_results: false,
                 test_block_sizes: None,
                 cancel_flag: Arc::new(AtomicBool::new(true)),
             };
@@ -943,6 +957,7 @@ mod tests {
             json: false,
             skip_confirm: true,
             silent: false,
+            hide_results: false,
             test_block_sizes: Some("4K,64K,1M,4M,16M".to_string()),
             cancel_flag: Arc::new(AtomicBool::new(true)),
         };
@@ -962,6 +977,7 @@ mod tests {
             json: false,
             skip_confirm: true,
             silent: false,
+            hide_results: false,
             test_block_sizes: None,
             cancel_flag: Arc::new(AtomicBool::new(true)),
         }
@@ -1185,6 +1201,7 @@ mod tests {
             1,
             true,
             true,
+            true,
             Arc::new(AtomicBool::new(true)),
         )
         .expect_err("a pending cancel must stop the benchmark");
@@ -1205,6 +1222,7 @@ mod tests {
             1,
             true,
             true,
+            true,
             Arc::new(AtomicBool::new(false)),
         )
         .expect("an uncancelled benchmark must succeed");
@@ -1220,6 +1238,7 @@ mod tests {
             TEST_SIZE,
             &[TEST_BLOCK, 2 * TEST_BLOCK],
             DataPattern::Zeros,
+            true,
             true,
             true,
             Arc::new(AtomicBool::new(true)),
@@ -1270,6 +1289,7 @@ mod tests {
             1,
             true,
             true,
+            true,
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
@@ -1290,6 +1310,7 @@ mod tests {
             DataPattern::Zeros,
             true,
             true,
+            true,
             Arc::new(AtomicBool::new(false)),
         )
         .unwrap();
@@ -1307,6 +1328,7 @@ mod tests {
             TEST_SIZE,
             &[TEST_BLOCK, 2 * TEST_BLOCK],
             DataPattern::Zeros,
+            true,
             true,
             true,
             Arc::new(AtomicBool::new(false)),

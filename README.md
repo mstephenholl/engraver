@@ -420,7 +420,7 @@ cloud_chunk_size = "4M"
 | `[checksum]` | `algorithm` | Default checksum algorithm | `"sha256"` |
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
 | `[behavior]` | `skip_confirmation` | Skip confirmation prompts | `false` |
-| `[behavior]` | `quiet` | Hide progress and status output, like `-q` (`engraver list` and `engraver config` then print nothing) | `false` |
+| `[behavior]` | `quiet` | Hide progress and status output, like `-q` | `false` |
 | `[benchmark]` | `block_size` | Default block size for benchmarks | `"32M"` |
 | `[benchmark]` | `test_size` | Default test data size, raised to 10 blocks when smaller | `"256M"` |
 | `[benchmark]` | `pattern` | Default data pattern (`zeros`, `random`, `sequential`) | `"zeros"` |

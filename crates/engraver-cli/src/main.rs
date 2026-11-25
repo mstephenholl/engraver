@@ -42,11 +42,11 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Hide progress and status output (errors and confirmation prompts still print)
+    /// Hide progress and status output (results, errors and confirmation prompts still print)
     #[arg(short, long, global = true)]
     quiet: bool,
 
-    /// Like --quiet, and also skip confirmation prompts and the Ctrl+C messages (implies --yes)
+    /// Like --quiet, and also hide the drive list, configuration and benchmark results, skip confirmation prompts (implies --yes) and hide the Ctrl+C messages
     #[arg(long, global = true)]
     silent: bool,
 
@@ -236,9 +236,10 @@ enum Commands {
 /// How much a run prints, from `--quiet`, `--silent` and `quiet` in the
 /// configuration file.
 ///
-/// Three decisions hang on it, and `-q` makes only the first: hide the progress
-/// and status output, answer yes to every confirmation prompt, and hide the
-/// Ctrl+C messages. Each has a method, so a caller asks for the one it means.
+/// Four decisions hang on it, and `-q` makes only the first: hide the progress
+/// and status output, hide a command's result, answer yes to every confirmation
+/// prompt, and hide the Ctrl+C messages. Each has a method, so a caller asks for
+/// the one it means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputMode {
     /// Everything prints.
@@ -263,6 +264,13 @@ impl OutputMode {
     /// Hide the logs, and the progress and status lines each command prints.
     fn hides_status(self) -> bool {
         self != Self::Normal
+    }
+
+    /// Hide what a command is run to show: the drive list, the configuration,
+    /// a benchmark's results. `-q` keeps them, so `$(engraver config --path)`
+    /// still works with `quiet = true` in the configuration file.
+    fn hides_results(self) -> bool {
+        self == Self::Silent
     }
 
     /// Answer yes to every confirmation prompt.
@@ -413,7 +421,7 @@ fn run() -> Result<()> {
     })?;
 
     match cli.command {
-        Commands::List { all, json } => commands::list::execute(all, json, silent),
+        Commands::List { all, json } => commands::list::execute(all, json, output.hides_results()),
         Commands::Write {
             source,
             target,
@@ -546,7 +554,7 @@ fn run() -> Result<()> {
                 init,
                 path,
                 json,
-                silent,
+                silent: output.hides_results(),
                 settings,
                 config_file: cli.config_file,
             })
@@ -587,6 +595,7 @@ fn run() -> Result<()> {
                 json: effective_json,
                 skip_confirm: effective_skip_confirm,
                 silent,
+                hide_results: output.hides_results(),
                 test_block_sizes,
                 cancel_flag: cancel,
             })
@@ -690,6 +699,7 @@ mod tests {
 
         assert_eq!(mode, OutputMode::Normal);
         assert!(!mode.hides_status());
+        assert!(!mode.hides_results());
         assert!(!mode.skips_confirmation());
         assert!(!mode.hides_cancel_notices());
     }
@@ -705,6 +715,7 @@ mod tests {
         ] {
             assert_eq!(mode, OutputMode::Quiet);
             assert!(mode.hides_status());
+            assert!(!mode.hides_results());
             assert!(!mode.skips_confirmation());
             assert!(!mode.hides_cancel_notices());
         }
@@ -719,6 +730,7 @@ mod tests {
         ] {
             assert_eq!(mode, OutputMode::Silent);
             assert!(mode.hides_status());
+            assert!(mode.hides_results());
             assert!(mode.skips_confirmation());
             assert!(mode.hides_cancel_notices());
         }

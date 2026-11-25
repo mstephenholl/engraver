@@ -13,7 +13,8 @@ pub struct ConfigArgs {
     pub path: bool,
     /// Show configuration in JSON format
     pub json: bool,
-    /// Hide status output (`-q`, `--silent`)
+    /// Hide the output (`--silent`). `-q` keeps it, because it is what
+    /// `config` is run to show.
     pub silent: bool,
     pub settings: Settings,
     /// Custom configuration file path (overrides default)

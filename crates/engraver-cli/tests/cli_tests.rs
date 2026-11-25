@@ -1692,13 +1692,17 @@ fn test_quiet_checksum_still_reports_an_error() {
 }
 
 #[test]
-fn test_quiet_list_prints_nothing_but_json_still_prints() {
-    engraver()
-        .args(["-q", "list", "--all"])
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::is_empty());
+fn test_quiet_list_prints_the_same_drives() {
+    let plain = engraver().args(["list", "--all"]).output().unwrap();
+    let quiet = engraver().args(["-q", "list", "--all"]).output().unwrap();
+    assert!(plain.status.success() && quiet.status.success());
+    assert!(!plain.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&quiet.stdout),
+        String::from_utf8_lossy(&plain.stdout),
+        "-q must not hide the drive list"
+    );
+    assert!(quiet.stderr.is_empty());
 
     let output = engraver()
         .args(["-q", "list", "--all", "--json"])
@@ -1709,16 +1713,40 @@ fn test_quiet_list_prints_nothing_but_json_still_prints() {
 }
 
 #[test]
-fn test_quiet_config_prints_nothing() {
+fn test_quiet_config_prints_the_same_configuration() {
     let (_temp_dir, config_file) = setup_config_test();
+    let config = config_file.to_str().unwrap();
+
+    let plain = engraver()
+        .args(["--config-file", config, "config"])
+        .output()
+        .unwrap();
+    let quiet = engraver()
+        .args(["--config-file", config, "-q", "config"])
+        .output()
+        .unwrap();
+    assert!(plain.status.success() && quiet.status.success());
+    assert!(!plain.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&quiet.stdout),
+        String::from_utf8_lossy(&plain.stdout),
+        "-q must not hide the configuration"
+    );
+}
+
+#[test]
+fn test_config_file_quiet_still_prints_the_config_path() {
+    // The docs pass `--config-file "$(engraver config --path)"` to sudo, so the
+    // path must print for a user who sets `quiet = true`.
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, "[behavior]\nquiet = true\n").unwrap();
 
     engraver()
         .args(["--config-file", config_file.to_str().unwrap()])
-        .args(["-q", "config"])
+        .args(["config", "--path"])
         .assert()
         .success()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::is_empty());
+        .stdout(format!("{}\n", config_file.display()));
 }
 
 #[test]
