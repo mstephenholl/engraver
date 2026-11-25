@@ -143,6 +143,19 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # A tag on a commit whose crates carry another version would release
+      # binaries that report that version, and publish-crates would find those
+      # crates already on crates.io and publish nothing.
+      - name: Check the tag names every crate's version
+        if: github.ref_type == 'tag'
+        run: |
+          mismatched=$(cargo metadata --no-deps --format-version 1 | jq -r --arg version "${TAG#v}" '
+            .packages[] | select(.publish == null and .version != $version) | "\(.name) is \(.version)"')
+          if [[ -n "$mismatched" ]]; then
+            while IFS= read -r line; do echo "::error::${TAG} names version ${TAG#v}, but $line"; done <<< "$mismatched"
+            exit 1
+          fi
+
       # cargo publish --dry-run doesn't apply the limits crates.io checks on
       # upload, so a crate can package here and still be refused at publish.
       - name: Check the metadata crates.io requires
