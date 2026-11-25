@@ -290,6 +290,8 @@ engraver write image.iso /dev/sda --force --yes
 
 A second Ctrl+C while a run is stopping exits immediately, also with 130.
 
+An option value that Engraver checks itself, such as `--algorithm nope` or `--block-size nope`, is an error and exits 1, not 2.
+
 Ctrl+C at a confirmation prompt also exits 130, before anything is written. Answering no when asked to write, erase or benchmark prints `Aborted.` and exits 0.
 
 ## Environment Variables

@@ -58,6 +58,23 @@ Generate shell completions for bash, zsh, fish, powershell, or elvish.
 .TP
 \fBengraver mangen\fR [\fB\-o\fR \fI<DIR>\fR]
 Generate man pages in roff format.
+.SH EXIT STATUS
+.TP
+\fB0\fR
+Success. Answering no when asked to write, erase or benchmark prints
+\fBAborted.\fR and also exits 0.
+.TP
+\fB1\fR
+Error, such as permission denied, device not found, or a failed verification.
+An option value that Engraver checks itself, such as
+\fB\-\-algorithm nope\fR or \fB\-\-block\-size nope\fR, also exits 1.
+.TP
+\fB2\fR
+Usage error, such as an unknown option or a missing argument.
+.TP
+\fB130\fR
+Cancelled with Ctrl+C (SIGINT), including at a confirmation prompt.
+A cancelled write or erase can leave the target partly written.
 .SH EXAMPLES
 List available drives:
 .PP
