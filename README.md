@@ -488,7 +488,7 @@ These are used by pre-commit hooks and standard development workflows:
 | **clippy** | Linter | `rustup component add clippy` |
 | **rustfmt** | Code formatter | `rustup component add rustfmt` |
 
-Pre-commit hooks are managed by [cargo-husky](https://github.com/rhysd/cargo-husky) and install automatically on `cargo build` or `cargo test`. They run `cargo fmt --check`, `cargo clippy`, and `cargo test --lib`.
+Pre-commit hooks are managed by [cargo-husky](https://github.com/rhysd/cargo-husky) and install automatically on `cargo build` or `cargo test`. They run `cargo fmt --check`, `cargo clippy`, `cargo deny check` if `cargo-deny` is installed, and `cargo test --lib --bins`.
 
 ### Optional Cargo Tools
 
