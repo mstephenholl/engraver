@@ -172,6 +172,10 @@ fn serde_json_drives(drives: &[engraver_detect::Drive]) -> String {
             opt_json_str(&drive.vendor)
         ));
         output.push_str(&format!("    \"model\": {},\n", opt_json_str(&drive.model)));
+        output.push_str(&format!(
+            "    \"serial\": {},\n",
+            opt_json_str(&drive.serial)
+        ));
         output.push_str(&format!("    \"size\": {},\n", drive.size));
         output.push_str(&format!(
             "    \"size_display\": \"{}\",\n",
