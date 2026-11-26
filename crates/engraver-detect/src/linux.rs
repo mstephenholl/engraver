@@ -128,10 +128,12 @@ fn parse_block_device(
 
     let drive_type = detect_drive_type(name, &sys_path);
 
-    // Many USB bridges report `removable` as 0 for fixed media such as USB SSDs.
-    // A USB-attached disk is external, so count it as removable. This matches
-    // macOS (ejectable) and Windows (external media).
-    let removable = drive_type == DriveType::Usb
+    // The sysfs flag can't be trusted, so the drive type decides first. Many USB
+    // bridges report 0 for fixed media such as USB SSDs, but a USB-attached disk is
+    // external. That matches macOS (ejectable) and Windows (external media). The kernel
+    // never sets the flag for MMC at all, yet the SD card itself comes out of its
+    // reader. eMMC soldered to the board is `Other` and stays non-removable.
+    let removable = matches!(drive_type, DriveType::Usb | DriveType::SdCard)
         || read_sys_value(&format!("{sys_path}/removable")).is_ok_and(|s| s.trim() == "1");
 
     let partitions = get_partitions(name, &sys_path, mount_map, label_map);
@@ -516,9 +518,16 @@ pub(crate) fn detect_drive_type(name: &str, sys_path: &str) -> DriveType {
         return DriveType::Nvme;
     }
 
-    // SD cards via MMC subsystem
+    // The MMC subsystem serves SD cards and eMMC alike, and the card's `type` tells them
+    // apart: `SD` or `SDcombo` for an SD card, `MMC` for eMMC. Anything else, an
+    // unreadable `type` included, is not trusted to be a card that comes out.
     if name.starts_with("mmcblk") {
-        return DriveType::SdCard;
+        let card_type = read_sys_value(&format!("{sys_path}/device/type"))
+            .inspect_err(|e| debug!("Failed to read the card type of {name}: {e}"));
+        return match card_type.as_deref() {
+            Ok("SD" | "SDcombo") => DriveType::SdCard,
+            _ => DriveType::Other,
+        };
     }
 
     // USB disks reach the block layer through SCSI (usb-storage and uas), so the
@@ -754,6 +763,41 @@ mod tests {
         }
 
         add_block_disk(root, "sda", &scsi_dev)
+    }
+
+    /// A card in a built-in MMC reader, as the `mmcblk<N>` disk of the card `mmc<N>:0001`.
+    ///
+    /// Laid out like real sysfs. The disk has one partition and `removable` = 0, which is
+    /// all the kernel ever reports for MMC. The card's `type` holds `SD`, `SDcombo` or
+    /// `MMC` (eMMC), and `None` leaves the file out. Several disks in one `root` share
+    /// the reader's PCI device. Returns the disk's path in `<root>/block`.
+    fn add_mmc_disk(root: &Path, name: &str, card_type: Option<&str>) -> String {
+        let index = name.trim_start_matches("mmcblk");
+        let pci = root.join("devices/pci0000:00/0000:00:14.5");
+        let card = pci.join(format!("mmc_host/mmc{index}/mmc{index}:0001"));
+        if !pci.exists() {
+            add_node(root, &pci, "pci");
+        }
+        add_node(root, &card, "mmc");
+        if let Some(card_type) = card_type {
+            fs::write(card.join("type"), format!("{card_type}\n")).unwrap();
+        }
+
+        let sys_path = add_block_disk(root, name, &card);
+        let disk = Path::new(&sys_path);
+        fs::write(disk.join("size"), "62333952\n").unwrap();
+        fs::write(disk.join("removable"), "0\n").unwrap();
+        let partition = disk.join(format!("{name}p1"));
+        fs::create_dir_all(&partition).unwrap();
+        fs::write(partition.join("size"), "62325760\n").unwrap();
+        sys_path
+    }
+
+    /// The `Drive` that `parse_block_device` gives for `name` in the fake sysfs at `root`,
+    /// with `mounts` as the contents of /proc/mounts and no swap or labels
+    fn parse_in(root: &Path, name: &str, mounts: &str) -> Drive {
+        let mount_map = parse_mounts(mounts, Path::new("/nonexistent"));
+        parse_block_device(name, &root.join("block"), &mount_map, &[], &HashMap::new()).unwrap()
     }
 
     // -------------------------------------------------------------------------
@@ -1169,15 +1213,17 @@ Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
     }
 
     #[test]
-    fn test_detect_drive_type_sd_card() {
-        assert_eq!(
-            detect_drive_type("mmcblk0", "/sys/block/mmcblk0"),
-            DriveType::SdCard
-        );
-        assert_eq!(
-            detect_drive_type("mmcblk1", "/sys/block/mmcblk1"),
-            DriveType::SdCard
-        );
+    fn test_detect_drive_type_sd_card_is_told_from_emmc_by_the_card_type() {
+        let root = TempDir::new().unwrap();
+        let sd = add_mmc_disk(root.path(), "mmcblk0", Some("SD"));
+        let sd_combo = add_mmc_disk(root.path(), "mmcblk1", Some("SDcombo"));
+        let emmc = add_mmc_disk(root.path(), "mmcblk2", Some("MMC"));
+        let unknown = add_mmc_disk(root.path(), "mmcblk3", None);
+
+        assert_eq!(detect_drive_type("mmcblk0", &sd), DriveType::SdCard);
+        assert_eq!(detect_drive_type("mmcblk1", &sd_combo), DriveType::SdCard);
+        assert_eq!(detect_drive_type("mmcblk2", &emmc), DriveType::Other);
+        assert_eq!(detect_drive_type("mmcblk3", &unknown), DriveType::Other);
     }
 
     #[test]
@@ -1200,6 +1246,86 @@ Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
         let sys_path = sata_attached_disk(root.path());
 
         assert_eq!(detect_drive_type("sda", &sys_path), DriveType::Sata);
+    }
+
+    // -------------------------------------------------------------------------
+    // parse_block_device tests for MMC disks
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_sd_card_in_a_built_in_reader_is_a_safe_target() {
+        let root = TempDir::new().unwrap();
+        add_mmc_disk(root.path(), "mmcblk0", Some("SD"));
+
+        let drive = parse_in(root.path(), "mmcblk0", "");
+
+        assert_eq!(drive.drive_type, DriveType::SdCard);
+        assert!(drive.removable);
+        assert!(!drive.is_system);
+        assert_eq!(drive.system_reason, None);
+        assert!(drive.is_safe_target());
+    }
+
+    #[test]
+    fn test_sd_card_with_sdio_functions_is_a_safe_target() {
+        let root = TempDir::new().unwrap();
+        add_mmc_disk(root.path(), "mmcblk0", Some("SDcombo"));
+
+        let drive = parse_in(root.path(), "mmcblk0", "");
+
+        assert_eq!(drive.drive_type, DriveType::SdCard);
+        assert!(drive.removable);
+        assert!(!drive.is_system);
+        assert!(drive.is_safe_target());
+    }
+
+    #[test]
+    fn test_emmc_soldered_to_the_board_is_a_system_drive() {
+        let root = TempDir::new().unwrap();
+        add_mmc_disk(root.path(), "mmcblk0", Some("MMC"));
+
+        let drive = parse_in(root.path(), "mmcblk0", "");
+
+        assert!(!drive.removable);
+        assert!(drive.is_system);
+        assert_eq!(
+            drive.system_reason.as_deref(),
+            Some("Non-removable internal drive")
+        );
+        assert!(!drive.is_safe_target());
+    }
+
+    #[test]
+    fn test_mmc_disk_with_no_card_type_is_a_system_drive() {
+        let root = TempDir::new().unwrap();
+        add_mmc_disk(root.path(), "mmcblk0", None);
+
+        let drive = parse_in(root.path(), "mmcblk0", "");
+
+        assert!(!drive.removable);
+        assert!(drive.is_system);
+        assert_eq!(
+            drive.system_reason.as_deref(),
+            Some("Non-removable internal drive")
+        );
+        assert!(!drive.is_safe_target());
+    }
+
+    #[test]
+    fn test_sd_card_holding_the_root_filesystem_is_a_system_drive() {
+        // A Raspberry Pi boots from its SD card
+        let root = TempDir::new().unwrap();
+        add_mmc_disk(root.path(), "mmcblk0", Some("SD"));
+
+        let drive = parse_in(root.path(), "mmcblk0", "/dev/mmcblk0p1 / ext4 rw 0 0\n");
+
+        assert_eq!(drive.drive_type, DriveType::SdCard);
+        assert!(drive.is_system);
+        assert_eq!(
+            drive.system_reason.as_deref(),
+            Some("Contains system mount point: /")
+        );
+        assert!(!drive.is_safe_target());
     }
 
     // -------------------------------------------------------------------------
