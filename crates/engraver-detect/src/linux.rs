@@ -62,7 +62,9 @@ pub fn list_drives() -> Result<Vec<Drive>> {
             continue;
         }
 
-        if let Some(drive) = parse_block_device(&name, &mount_map, &swap_devices, &label_map) {
+        if let Some(drive) =
+            parse_block_device(&name, block_dir, &mount_map, &swap_devices, &label_map)
+        {
             drives.push(drive);
         }
     }
@@ -80,14 +82,15 @@ pub(crate) fn should_skip_device(name: &str) -> bool {
         || name.starts_with("fd") // Floppy drives
 }
 
-/// Parse a block device from /sys/block
+/// Parse a block device from `sys_block`, the directory of disk entries (`/sys/block`)
 fn parse_block_device(
     name: &str,
+    sys_block: &Path,
     mount_map: &HashMap<String, Vec<MountInfo>>,
     swap_devices: &[String],
     label_map: &HashMap<String, String>,
 ) -> Option<Drive> {
-    let sys_path = format!("/sys/block/{name}");
+    let sys_path = sys_block.join(name).to_string_lossy().into_owned();
     let dev_path = format!("/dev/{name}");
 
     if !Path::new(&sys_path).exists() {
@@ -131,7 +134,7 @@ fn parse_block_device(
     let removable = drive_type == DriveType::Usb
         || read_sys_value(&format!("{sys_path}/removable")).is_ok_and(|s| s.trim() == "1");
 
-    let partitions = get_partitions(name, mount_map, label_map);
+    let partitions = get_partitions(name, &sys_path, mount_map, label_map);
 
     let mount_points = disk_mount_points(&dev_path, &partitions, mount_map);
     let swaps = swap_names(&dev_path, &partitions, swap_devices);
@@ -451,16 +454,16 @@ pub(crate) fn read_holders(sys_path: &Path, device_name: &str) -> Vec<Holder> {
     holders
 }
 
-/// Get partitions for a device
+/// Get partitions for a device, from the disk's sysfs node `sys_path`
 fn get_partitions(
     device_name: &str,
+    sys_path: &str,
     mount_map: &HashMap<String, Vec<MountInfo>>,
     label_map: &HashMap<String, String>,
 ) -> Vec<Partition> {
     let mut partitions = Vec::new();
-    let sys_path = format!("/sys/block/{device_name}");
 
-    if let Ok(entries) = fs::read_dir(&sys_path)
+    if let Ok(entries) = fs::read_dir(sys_path)
         .inspect_err(|e| debug!("Failed to enumerate partitions for {device_name}: {e}"))
     {
         for entry in entries.flatten() {
