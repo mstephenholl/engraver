@@ -24,6 +24,8 @@ use console::style;
 use engraver_core::Settings;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[macro_use]
@@ -72,57 +74,7 @@ enum Commands {
     },
 
     /// Write an image to a drive
-    Write {
-        /// Source image (local file or URL)
-        source: String,
-
-        /// Target device (e.g., /dev/sdb, /dev/disk2, \\.\PhysicalDrive1)
-        target: String,
-
-        /// Verify write by reading back and comparing (can be set in config)
-        #[arg(long)]
-        verify: bool,
-
-        /// Skip confirmation prompt (use with caution!)
-        #[arg(short = 'y', long)]
-        yes: bool,
-
-        /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 32M
-        #[arg(short, long)]
-        block_size: Option<String>,
-
-        /// Verify checksum against expected value
-        #[arg(long, value_name = "CHECKSUM")]
-        checksum: Option<String>,
-
-        /// Checksum algorithm (sha256, sha512, md5). Default from config or sha256
-        #[arg(long)]
-        checksum_algo: Option<String>,
-
-        /// Force write even to system drives (DANGEROUS!)
-        #[arg(long, hide = true)]
-        force: bool,
-
-        /// Do not unmount partitions before writing
-        #[arg(long)]
-        no_unmount: bool,
-
-        /// Resume an interrupted write operation
-        #[arg(long)]
-        resume: bool,
-
-        /// Enable checkpointing for resume support (auto-enabled with --resume, can be set in config)
-        #[arg(long)]
-        checkpoint: bool,
-
-        /// Automatically detect and verify checksum from .sha256, .sha512, .md5 files
-        #[arg(long)]
-        auto_checksum: bool,
-
-        /// Show partition layout of source image before writing
-        #[arg(long, short = 'p')]
-        show_partitions: bool,
-    },
+    Write(WriteOpts),
 
     /// Verify a drive against a source image
     Verify {
@@ -177,60 +129,220 @@ enum Commands {
     },
 
     /// Erase a drive by zero-filling the entire device
-    Erase {
-        /// Target device (e.g., /dev/sdb, /dev/disk2, \\.\PhysicalDrive1)
-        target: String,
-
-        /// Skip confirmation prompt (use with caution!)
-        #[arg(short = 'y', long)]
-        yes: bool,
-
-        /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 32M
-        #[arg(short, long)]
-        block_size: Option<String>,
-
-        /// Force erase even on system drives (DANGEROUS!)
-        #[arg(long, hide = true)]
-        force: bool,
-
-        /// Do not unmount partitions before erasing
-        #[arg(long)]
-        no_unmount: bool,
-    },
+    Erase(EraseOpts),
 
     /// Benchmark write speed of a drive (DESTRUCTIVE)
-    Benchmark {
-        /// Target device (e.g., /dev/sdb, \\.\PhysicalDrive1)
-        target: String,
+    Benchmark(BenchmarkOpts),
+}
 
-        /// Amount of data to write per pass, exactly (e.g., 256M, 1G). Must hold at least one block. Mutually exclusive with --test-block-sizes. Default from config or 256M, raised to ten blocks of the largest block size when smaller
-        #[arg(short, long)]
-        size: Option<String>,
+/// The options of `engraver write`.
+#[derive(clap::Args)]
+struct WriteOpts {
+    /// Source image (local file or URL)
+    source: String,
 
-        /// Block size for writing (e.g., 4K, 1M, 4M). Must be power of 2, max 64M. Default from config or 32M
-        #[arg(short, long)]
-        block_size: Option<String>,
+    /// Target device (e.g., /dev/sdb, /dev/disk2, \\.\PhysicalDrive1)
+    target: String,
 
-        /// Data pattern: zeros, random, sequential. Default from config or zeros
-        #[arg(long)]
-        pattern: Option<String>,
+    /// Verify write by reading back and comparing (can be set in config)
+    #[arg(long)]
+    verify: bool,
 
-        /// Number of benchmark passes. Default from config or 1
-        #[arg(long)]
-        passes: Option<u32>,
+    /// Skip confirmation prompt (use with caution!)
+    #[arg(short = 'y', long)]
+    yes: bool,
 
-        /// Test multiple block sizes (comma-separated, e.g., "4K,64K,1M,4M,16M"). Mutually exclusive with --size
-        #[arg(long)]
-        test_block_sizes: Option<String>,
+    /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 32M
+    #[arg(short, long)]
+    block_size: Option<String>,
 
-        /// Output in JSON format
-        #[arg(long)]
-        json: bool,
+    /// Verify checksum against expected value
+    #[arg(long, value_name = "CHECKSUM")]
+    checksum: Option<String>,
 
-        /// Skip confirmation prompt (DANGEROUS!)
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
+    /// Checksum algorithm (sha256, sha512, md5). Default from config or sha256
+    #[arg(long)]
+    checksum_algo: Option<String>,
+
+    /// Force write even to system drives (DANGEROUS!)
+    #[arg(long, hide = true)]
+    force: bool,
+
+    /// Do not unmount partitions before writing
+    #[arg(long)]
+    no_unmount: bool,
+
+    /// Resume an interrupted write operation
+    #[arg(long)]
+    resume: bool,
+
+    /// Enable checkpointing for resume support (auto-enabled with --resume, can be set in config)
+    #[arg(long)]
+    checkpoint: bool,
+
+    /// Automatically detect and verify checksum from .sha256, .sha512, .md5 files
+    #[arg(long)]
+    auto_checksum: bool,
+
+    /// Show partition layout of source image before writing
+    #[arg(long, short = 'p')]
+    show_partitions: bool,
+}
+
+impl WriteOpts {
+    /// Apply the configuration file's settings to what the command line left
+    /// unsaid, and give `commands::write` its arguments.
+    fn resolve(
+        self,
+        settings: &Settings,
+        output: OutputMode,
+        cancel: Arc<AtomicBool>,
+    ) -> commands::write::WriteArgs {
+        commands::write::WriteArgs {
+            source: self.source,
+            target: self.target,
+            // CLI flags || settings defaults
+            verify: self.verify || settings.write.verify,
+            skip_confirm: self.yes
+                || output.skips_confirmation()
+                || settings.behavior.skip_confirmation,
+            block_size: self
+                .block_size
+                .unwrap_or_else(|| settings.write.block_size.clone()),
+            checksum: self.checksum,
+            checksum_algo: self
+                .checksum_algo
+                .unwrap_or_else(|| settings.checksum.algorithm.clone()),
+            force: self.force,
+            no_unmount: self.no_unmount,
+            cancel_flag: cancel,
+            silent: output.hides_status(),
+            resume: self.resume,
+            checkpoint: self.checkpoint || self.resume || settings.write.checkpoint,
+            auto_checksum: self.auto_checksum || settings.checksum.auto_detect,
+            show_partitions: self.show_partitions,
+        }
+    }
+}
+
+/// The options of `engraver erase`.
+#[derive(clap::Args)]
+struct EraseOpts {
+    /// Target device (e.g., /dev/sdb, /dev/disk2, \\.\PhysicalDrive1)
+    target: String,
+
+    /// Skip confirmation prompt (use with caution!)
+    #[arg(short = 'y', long)]
+    yes: bool,
+
+    /// Block size for writing (e.g., 4M, 1M, 512K). Must be a power of 2 from 4K to 64M. Default from config or 32M
+    #[arg(short, long)]
+    block_size: Option<String>,
+
+    /// Force erase even on system drives (DANGEROUS!)
+    #[arg(long, hide = true)]
+    force: bool,
+
+    /// Do not unmount partitions before erasing
+    #[arg(long)]
+    no_unmount: bool,
+}
+
+impl EraseOpts {
+    /// Apply the configuration file's settings to what the command line left
+    /// unsaid, and give `commands::erase` its arguments.
+    fn resolve(
+        self,
+        settings: &Settings,
+        output: OutputMode,
+        cancel: Arc<AtomicBool>,
+    ) -> commands::erase::EraseArgs {
+        commands::erase::EraseArgs {
+            target: self.target,
+            skip_confirm: self.yes
+                || output.skips_confirmation()
+                || settings.behavior.skip_confirmation,
+            block_size: self
+                .block_size
+                .unwrap_or_else(|| settings.write.block_size.clone()),
+            force: self.force,
+            no_unmount: self.no_unmount,
+            cancel_flag: cancel,
+            silent: output.hides_status(),
+        }
+    }
+}
+
+/// The options of `engraver benchmark`.
+#[derive(clap::Args)]
+struct BenchmarkOpts {
+    /// Target device (e.g., /dev/sdb, \\.\PhysicalDrive1)
+    target: String,
+
+    /// Amount of data to write per pass, exactly (e.g., 256M, 1G). Must hold at least one block. Mutually exclusive with --test-block-sizes. Default from config or 256M, raised to ten blocks of the largest block size when smaller
+    #[arg(short, long)]
+    size: Option<String>,
+
+    /// Block size for writing (e.g., 4K, 1M, 4M). Must be power of 2, max 64M. Default from config or 32M
+    #[arg(short, long)]
+    block_size: Option<String>,
+
+    /// Data pattern: zeros, random, sequential. Default from config or zeros
+    #[arg(long)]
+    pattern: Option<String>,
+
+    /// Number of benchmark passes. Default from config or 1
+    #[arg(long)]
+    passes: Option<u32>,
+
+    /// Test multiple block sizes (comma-separated, e.g., "4K,64K,1M,4M,16M"). Mutually exclusive with --size
+    #[arg(long)]
+    test_block_sizes: Option<String>,
+
+    /// Output in JSON format
+    #[arg(long)]
+    json: bool,
+
+    /// Skip confirmation prompt (DANGEROUS!)
+    #[arg(short = 'y', long)]
+    yes: bool,
+}
+
+impl BenchmarkOpts {
+    /// Apply the configuration file's settings to what the command line left
+    /// unsaid, and give `commands::benchmark` its arguments.
+    fn resolve(
+        self,
+        settings: &Settings,
+        output: OutputMode,
+        cancel: Arc<AtomicBool>,
+    ) -> commands::benchmark::BenchmarkArgs {
+        commands::benchmark::BenchmarkArgs {
+            target: self.target,
+            test_size: match self.size {
+                Some(size) => commands::benchmark::TestSize::Exact(size),
+                None => {
+                    commands::benchmark::TestSize::Default(settings.benchmark.test_size.clone())
+                }
+            },
+            block_size: self
+                .block_size
+                .unwrap_or_else(|| settings.benchmark.block_size.clone()),
+            pattern: self
+                .pattern
+                .unwrap_or_else(|| settings.benchmark.pattern.clone()),
+            passes: self.passes.unwrap_or(settings.benchmark.passes),
+            // JSON output: CLI flag overrides config
+            json: self.json || settings.benchmark.json,
+            skip_confirm: self.yes
+                || output.skips_confirmation()
+                || settings.behavior.skip_confirmation,
+            silent: output.hides_status(),
+            hide_results: output.hides_results(),
+            test_block_sizes: self.test_block_sizes,
+            cancel_flag: cancel,
+        }
+    }
 }
 
 /// How much a run prints, from `--quiet`, `--silent` and `quiet` in the
@@ -422,73 +534,8 @@ fn run() -> Result<()> {
 
     match cli.command {
         Commands::List { all, json } => commands::list::execute(all, json, output.hides_results()),
-        Commands::Write {
-            source,
-            target,
-            verify,
-            yes,
-            block_size,
-            checksum,
-            checksum_algo,
-            force,
-            no_unmount,
-            resume,
-            checkpoint,
-            auto_checksum,
-            show_partitions,
-        } => {
-            // Apply settings as defaults when CLI options are not explicitly set
-            let effective_block_size =
-                block_size.unwrap_or_else(|| settings.write.block_size.clone());
-            let effective_checksum_algo =
-                checksum_algo.unwrap_or_else(|| settings.checksum.algorithm.clone());
-            // CLI flags || settings defaults
-            let effective_verify = verify || settings.write.verify;
-            let effective_checkpoint = checkpoint || resume || settings.write.checkpoint;
-            let effective_skip_confirm =
-                yes || output.skips_confirmation() || settings.behavior.skip_confirmation;
-            let effective_auto_checksum = auto_checksum || settings.checksum.auto_detect;
-
-            commands::write::execute(commands::write::WriteArgs {
-                source,
-                target,
-                verify: effective_verify,
-                skip_confirm: effective_skip_confirm,
-                block_size: effective_block_size,
-                checksum,
-                checksum_algo: effective_checksum_algo,
-                force,
-                no_unmount,
-                cancel_flag: cancel,
-                silent,
-                resume,
-                checkpoint: effective_checkpoint,
-                auto_checksum: effective_auto_checksum,
-                show_partitions,
-            })
-        }
-        Commands::Erase {
-            target,
-            yes,
-            block_size,
-            force,
-            no_unmount,
-        } => {
-            let effective_block_size =
-                block_size.unwrap_or_else(|| settings.write.block_size.clone());
-            let effective_skip_confirm =
-                yes || output.skips_confirmation() || settings.behavior.skip_confirmation;
-
-            commands::erase::execute(commands::erase::EraseArgs {
-                target,
-                skip_confirm: effective_skip_confirm,
-                block_size: effective_block_size,
-                force,
-                no_unmount,
-                cancel_flag: cancel,
-                silent,
-            })
-        }
+        Commands::Write(opts) => commands::write::execute(opts.resolve(&settings, output, cancel)),
+        Commands::Erase(opts) => commands::erase::execute(opts.resolve(&settings, output, cancel)),
         Commands::Verify {
             source,
             target,
@@ -559,46 +606,8 @@ fn run() -> Result<()> {
                 config_file: cli.config_file,
             })
         }
-        Commands::Benchmark {
-            target,
-            size,
-            block_size,
-            pattern,
-            passes,
-            test_block_sizes,
-            json,
-            yes,
-        } => {
-            let effective_skip_confirm =
-                yes || output.skips_confirmation() || settings.behavior.skip_confirmation;
-
-            // Apply settings as defaults when CLI options are not explicitly set
-            let effective_block_size =
-                block_size.unwrap_or_else(|| settings.benchmark.block_size.clone());
-            let effective_pattern = pattern.unwrap_or_else(|| settings.benchmark.pattern.clone());
-            let effective_passes = passes.unwrap_or(settings.benchmark.passes);
-            let effective_test_size = match size {
-                Some(size) => commands::benchmark::TestSize::Exact(size),
-                None => {
-                    commands::benchmark::TestSize::Default(settings.benchmark.test_size.clone())
-                }
-            };
-            // JSON output: CLI flag overrides config
-            let effective_json = json || settings.benchmark.json;
-
-            commands::benchmark::execute(commands::benchmark::BenchmarkArgs {
-                target,
-                test_size: effective_test_size,
-                block_size: effective_block_size,
-                pattern: effective_pattern,
-                passes: effective_passes,
-                json: effective_json,
-                skip_confirm: effective_skip_confirm,
-                silent,
-                hide_results: output.hides_results(),
-                test_block_sizes,
-                cancel_flag: cancel,
-            })
+        Commands::Benchmark(opts) => {
+            commands::benchmark::execute(opts.resolve(&settings, output, cancel))
         }
     }
 }
