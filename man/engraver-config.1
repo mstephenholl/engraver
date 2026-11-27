@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH engraver\-config 1  "engraver 0.1.0"
+.TH engraver\-config 1  "engraver 0.2.0"
 .SH NAME
 engraver\-config \- Manage configuration settings
 .SH SYNOPSIS
@@ -81,8 +81,9 @@ To use your file under \fBsudo\fR, pass its path:
 \fB[write]\fR
 Default block size, verify, checkpoint, retry settings, and read buffer size.
 \fBread_buffer_size\fR applies to a local image file, plain or compressed.
-\fBverify\fR compares a plain image in blocks of its \fB\-\-block\-size\fR instead.
 \fBretry_attempts\fR and \fBretry_delay_ms\fR apply to \fBwrite\fR.
+\fBretry_delay_ms\fR is the wait before the first retry.
+Each retry after that waits twice as long, up to eight times this value.
 \fBerase\fR does not retry.
 .TP
 \fB[checksum]\fR

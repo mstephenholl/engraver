@@ -67,20 +67,30 @@ struct Cli {
 }
 
 impl Cli {
-    /// Parse a command line like `Cli::try_parse_from`, then reject `--silent`
-    /// together with `--confirm`.
+    /// Parse a command line like `Cli::try_parse_from`, then settle what clap
+    /// can't for a global flag: which of `--quiet` and `--no-quiet` came last,
+    /// and a `--silent` that `--confirm` contradicts.
     ///
-    /// `--silent` answers yes to every prompt, which `--confirm` contradicts.
-    /// clap can't report this itself. `--silent` is global, and a global flag
-    /// given before the subcommand isn't visible to the subcommand's own
-    /// conflict check. So the check is here, and it reports the error the way
-    /// clap does, with the same wording and exit status 2.
+    /// clap parses each side of the subcommand on its own. So it sets both
+    /// `--quiet` and `--no-quiet` when each side gives a different one, and
+    /// the check for `--silent` with `--confirm` can't see a `--silent` given
+    /// before the subcommand. `--silent` answers yes to every prompt, which
+    /// `--confirm` contradicts, so the check is here, and it reports the
+    /// error the way clap does, with the same wording and exit status 2.
+    ///
+    /// Afterwards at most one of `quiet` and `no_quiet` is set, and it is the
+    /// last one given on the command line.
     fn try_parse_checked<I, T>(args: I) -> Result<Self, clap::Error>
     where
         I: IntoIterator<Item = T>,
         T: Into<std::ffi::OsString> + Clone,
     {
-        let cli = Self::try_parse_from(args)?;
+        let args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
+        let mut cli = Self::try_parse_from(&args)?;
+        if cli.quiet && cli.no_quiet {
+            cli.quiet = Self::quiet_came_last(&args);
+            cli.no_quiet = !cli.quiet;
+        }
         if cli.silent && cli.command.asks_for_confirmation() {
             return Err(Self::command().error(
                 ErrorKind::ArgumentConflict,
@@ -88,6 +98,24 @@ impl Cli {
             ));
         }
         Ok(cli)
+    }
+
+    /// For a command line that leaves both `--quiet` and `--no-quiet` set,
+    /// whether `--quiet` came last.
+    ///
+    /// Within one side of the subcommand the flags override each other. Both
+    /// are set only when one side gives `--quiet` and the other gives
+    /// `--no-quiet`, and nothing says which side came last. The flag after
+    /// the subcommand did, so this parses again with both flags local to the
+    /// top level. Then `--quiet` is set only when the top level gave it, and
+    /// `--no-quiet` is the one after the subcommand.
+    fn quiet_came_last(args: &[std::ffi::OsString]) -> bool {
+        let before_subcommand = Self::command()
+            .mut_arg("quiet", |arg| arg.global(false))
+            .mut_arg("no_quiet", |arg| arg.global(false))
+            .ignore_errors(true)
+            .get_matches_from(args);
+        !before_subcommand.get_flag("quiet")
     }
 }
 
@@ -186,9 +214,9 @@ impl Commands {
 /// setting decides when neither was.
 ///
 /// The two flags override each other in clap, so at most one is set, and it is
-/// the last one on the command line. The exception is a global flag, such as
-/// `--quiet` and `--no-quiet`, given on both sides of the subcommand. clap
-/// checks each side alone and sets both, so the off flag wins.
+/// the last one on the command line. `Cli::try_parse_checked` makes that so
+/// for `--quiet` and `--no-quiet`, which are global and can sit on both sides
+/// of the subcommand.
 fn flag_or_setting(on: bool, off: bool, setting: bool) -> bool {
     let flag = match (on, off) {
         (_, true) => Some(false),
@@ -520,15 +548,12 @@ fn main() {
         if let Some(line) = &exit.cancelled_line {
             eprintln!("{line}");
         } else {
-            eprintln!("{} {}", style("Error:").red().bold(), e);
-
-            // Show cause chain in verbose mode
-            if std::env::var("RUST_BACKTRACE").is_ok() {
-                let mut source = e.source();
-                while let Some(cause) = source {
-                    eprintln!("  {} {}", style("Caused by:").yellow(), cause);
-                    source = cause.source();
-                }
+            let mut messages = error_messages(&e).into_iter();
+            if let Some(message) = messages.next() {
+                eprintln!("{} {}", style("Error:").red().bold(), message);
+            }
+            for cause in messages {
+                eprintln!("  {} {}", style("Caused by:").yellow(), cause);
             }
         }
 
@@ -571,6 +596,27 @@ fn exit_for(err: &anyhow::Error) -> Exit {
         code: EXIT_CANCELLED,
         cancelled_line: Some(line),
     }
+}
+
+/// The messages of an error report: the error's own message, then each cause
+/// down to the root, so a user sees why a command failed and not only what it
+/// was doing.
+///
+/// A cause is left out when the message above it already ends with its text.
+/// `engraver_core::Error::Io` is one: it shows as `IO error: <message>` and
+/// returns that same io error as its source, which would print `<message>`
+/// again on the next line.
+fn error_messages(err: &anyhow::Error) -> Vec<String> {
+    let mut messages = vec![err.to_string()];
+    let mut parent = err.to_string();
+    for cause in err.chain().skip(1) {
+        let message = cause.to_string();
+        if !parent.ends_with(&message) {
+            messages.push(message.clone());
+        }
+        parent = message;
+    }
+    messages
 }
 
 fn run() -> Result<()> {
@@ -789,6 +835,46 @@ mod tests {
 
         assert_eq!(exit.code, 1);
         assert_eq!(exit.cancelled_line, None);
+    }
+
+    #[test]
+    fn test_error_messages_say_why_a_timeout_stopped_the_run_once() {
+        // `Error::Io` displays its io error and also returns it as its source,
+        // so the io error's text would print twice.
+        let io = std::io::Error::new(std::io::ErrorKind::TimedOut, "operation timed out");
+        let err = anyhow::Error::new(Error::Io(io)).context("Failed to calculate checksum");
+
+        assert_eq!(
+            error_messages(&err),
+            [
+                "Failed to calculate checksum",
+                "IO error: operation timed out"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_error_messages_keep_a_cause_that_its_parent_does_not_quote() {
+        // The second message holds the cause's text without ending with it.
+        let err = anyhow::anyhow!("operation timed out")
+            .context("Network error: operation timed out after 1 seconds")
+            .context("Failed to validate source: http://example.test/a.iso");
+
+        assert_eq!(
+            error_messages(&err),
+            [
+                "Failed to validate source: http://example.test/a.iso",
+                "Network error: operation timed out after 1 seconds",
+                "operation timed out",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_error_messages_of_an_error_without_a_cause_is_just_its_message() {
+        let err = anyhow::anyhow!("disk exploded");
+
+        assert_eq!(error_messages(&err), ["disk exploded"]);
     }
 
     fn prompt_failure(kind: std::io::ErrorKind, message: &str) -> anyhow::Error {
@@ -1263,18 +1349,45 @@ mod tests {
     }
 
     #[test]
-    fn test_no_quiet_wins_over_quiet_on_the_other_side_of_the_subcommand() {
-        // clap checks the two sides of the subcommand apart, so it sets both
-        // flags and can't say which came last.
-        for args in [
-            ["engraver", "-q", "list", "--no-quiet"],
-            ["engraver", "--no-quiet", "list", "-q"],
-        ] {
-            let cli = Cli::try_parse_checked(args).unwrap();
-            assert_eq!(
-                OutputMode::new(&cli, &Settings::default()),
-                OutputMode::Normal
-            );
+    fn test_the_last_of_quiet_and_no_quiet_wins_wherever_each_is_given() {
+        // clap sets both flags when they sit on opposite sides of the
+        // subcommand, and `Cli::try_parse_checked` settles which came last.
+        // The setting plays no part once a flag is given.
+        let cases: [(&[&str], bool); 14] = [
+            // Opposite sides: the one after the subcommand came last.
+            (&["-q", "list", "--no-quiet"], false),
+            (&["--no-quiet", "list", "-q"], true),
+            (&["--quiet", "list", "-a", "--no-quiet"], false),
+            (&["--no-quiet", "list", "-aq"], true),
+            // A flag given twice on one side, and the other flag on the other.
+            (&["-q", "--no-quiet", "list", "-q"], true),
+            (&["--no-quiet", "-q", "list", "--no-quiet"], false),
+            (&["-q", "list", "--no-quiet", "-q"], true),
+            (&["-q", "list", "-q", "--no-quiet"], false),
+            // The same side.
+            (&["-q", "--no-quiet", "list"], false),
+            (&["--no-quiet", "-q", "list"], true),
+            (&["list", "-q", "--no-quiet"], false),
+            (&["list", "--no-quiet", "-q"], true),
+            (&["list", "-qa", "--no-quiet"], false),
+            // One flag.
+            (&["list", "-q"], true),
+        ];
+        let mut wrong = Vec::new();
+
+        for setting in [false, true] {
+            for (flags, quiet) in cases {
+                let args: Vec<&str> = ["engraver"].iter().chain(flags).copied().collect();
+                let got = mode(&args, setting) == OutputMode::Quiet;
+                if got != quiet {
+                    wrong.push(format!(
+                        "setting {setting}, `{}`: quiet is {got}, expected {quiet}",
+                        flags.join(" ")
+                    ));
+                }
+            }
         }
+
+        assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
     }
 }

@@ -40,6 +40,12 @@ for cargo_file in crates/*/Cargo.toml Cargo.toml; do
     fi
 done
 
+# Stamp the version into the man pages (scripts/check-man-pages.sh checks it)
+echo "Updating versions in man pages..."
+sed -i.bak -E "/^\.TH /s/\"engraver [^\"]*\"/\"engraver ${VERSION}\"/" man/*.1
+rm -f man/*.1.bak
+echo "  Updated: man/*.1"
+
 # Update workspace dependencies
 echo "Updating workspace dependency versions..."
 sed -i.bak "s/engraver-detect = { version = \"[^\"]*\"/engraver-detect = { version = \"${VERSION}\"/" crates/*/Cargo.toml 2>/dev/null || true

@@ -415,7 +415,7 @@ cloud_chunk_size = "4M"
 | `[write]` | `verify` | Always verify writes | `false` |
 | `[write]` | `checkpoint` | Enable checkpointing by default | `false` |
 | `[write]` | `retry_attempts` | Number of retry attempts on transient errors | `3` |
-| `[write]` | `retry_delay_ms` | Delay between retries in milliseconds | `100` |
+| `[write]` | `retry_delay_ms` | Wait before the first retry, in milliseconds. Each retry after that waits twice as long, up to 8 times this value | `100` |
 | `[write]` | `read_buffer_size` | Buffer size for reading source data | `"4M"` |
 | `[checksum]` | `algorithm` | Default checksum algorithm | `"sha256"` |
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |
@@ -432,7 +432,7 @@ cloud_chunk_size = "4M"
 
 A size or timeout that can't be used stops `write`, `verify`, and `checksum` with an error that names the setting and the configuration file. `list` and `config` open no source and don't check these values. A size must be a power of two, such as `"4M"`. A timeout must be at least 1 second.
 
-`read_buffer_size` applies when Engraver reads a local image file, plain or compressed. The exception is `verify` of a plain image, which compares in blocks of its `--block-size`. `retry_attempts` and `retry_delay_ms` apply to `write`. `erase` does not retry.
+`read_buffer_size` applies when Engraver reads a local image file, plain or compressed. `retry_attempts` and `retry_delay_ms` apply to `write`. `erase` does not retry.
 
 Command-line flags always override configuration file settings. Each on/off setting has a flag that turns it off for one run:
 
@@ -445,7 +445,7 @@ Command-line flags always override configuration file settings. Each on/off sett
 | `[behavior]` `quiet` | `-q`, `--quiet` | `--no-quiet` |
 | `[benchmark]` `json` | `--json` | `--no-json` |
 
-If you give both flags of a pair, the last one wins. With `alias ew='engraver write -y'`, the command `ew --confirm ...` asks for confirmation. `--confirm` works on `write`, `erase`, and `benchmark`. `--quiet` and `--no-quiet` can come before or after the subcommand. On opposite sides, `--no-quiet` wins.
+If you give both flags of a pair, the last one wins. With `alias ew='engraver write -y'`, the command `ew --confirm ...` asks for confirmation. `--confirm` works on `write`, `erase`, and `benchmark`. `--quiet` and `--no-quiet` can come before or after the subcommand. The last one you give wins, on whichever side it sits.
 
 Two pairs of flags contradict each other and are usage errors. `--resume` turns checkpointing on, so `--resume --no-checkpoint` fails. `--silent` answers yes to every prompt, so `--silent --confirm` fails. `--no-quiet` only cancels `quiet` from the file, so `--silent --no-quiet` is still silent.
 

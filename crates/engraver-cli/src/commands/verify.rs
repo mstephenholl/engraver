@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use engraver_core::{
-    validate_source_with_options, SourceOptions, SourceType, Verifier, VerifyConfig,
+    validate_source_with_options, Source, SourceOptions, SourceType, Verifier, VerifyConfig,
 };
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, OpenOptions};
@@ -100,9 +100,15 @@ pub fn execute(
     if source_is_local {
         let total_size = source_info.size.unwrap_or(0);
 
-        // Direct byte-by-byte comparison for local files
-        let mut source_file = std::fs::File::open(source)
-            .with_context(|| format!("Failed to open source: {}", source))?;
+        // Direct byte-by-byte comparison for local files. Reading through
+        // `Source` applies `read_buffer_size`. `compare` seeks, which only the
+        // local file inside it does, and a plain local image is always one.
+        let Source::Local(mut source_file) =
+            Source::open_with_options(source, 0, source_options)
+                .with_context(|| format!("Failed to open source: {}", source))?
+        else {
+            bail!("{} is not a plain local file", source);
+        };
 
         // Create progress bar
         let pb = if silent {

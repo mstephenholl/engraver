@@ -316,7 +316,6 @@ Ctrl+C at a confirmation prompt also exits 130, before anything is written. Answ
 
 | Variable | Description |
 |----------|-------------|
-| `RUST_BACKTRACE` | Show error backtraces |
 | `RUST_LOG` | Set log level (trace, debug, info, warn, error) |
 
 ## Shell Completions

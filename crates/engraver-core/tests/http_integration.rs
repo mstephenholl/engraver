@@ -6,8 +6,8 @@
 #![cfg(feature = "remote")]
 
 use engraver_core::{
-    detect_source_type, validate_source, validate_source_with_options, Error, Source,
-    SourceOptions, SourceType, WriteConfig, Writer, MIN_BLOCK_SIZE,
+    detect_source_type, get_source_size, validate_source, validate_source_with_options, Error,
+    Source, SourceOptions, SourceType, WriteConfig, Writer, MIN_BLOCK_SIZE,
 };
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
@@ -356,6 +356,28 @@ fn http_validate_source_succeeds() {
     let info = validate_source(&url).unwrap();
     assert_eq!(info.source_type, SourceType::Remote);
     assert!(info.size.is_some());
+}
+
+#[test]
+fn http_get_source_size_is_the_length_of_the_data_served() {
+    let data = test_data(1024);
+    let server = start_mock(MockBehavior::ServeData(data.clone()));
+    let url = format!("{}/image.iso", server.url);
+
+    assert_eq!(get_source_size(&url).unwrap(), Some(data.len() as u64));
+}
+
+#[test]
+fn http_get_source_size_of_a_404_is_an_error() {
+    let server = start_mock(MockBehavior::StatusCode(404, "Not Found".to_string()));
+    let url = format!("{}/missing.iso", server.url);
+
+    let result = get_source_size(&url);
+
+    assert!(
+        matches!(result, Err(Error::Network { .. })),
+        "expected an error for a 404, got {result:?}"
+    );
 }
 
 // ============================================================================
