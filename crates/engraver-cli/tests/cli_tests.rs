@@ -1570,7 +1570,8 @@ fn checksum_config_http_timeout_stops_a_download_that_stalls() {
     checksum_with_config("[network]\nhttp_timeout_secs = 1\n", &url)
         .failure()
         .code(1)
-        .stderr(predicate::str::contains("Failed to calculate checksum"));
+        .stderr(predicate::str::contains("Failed to calculate checksum"))
+        .stderr(predicate::str::contains("timed out"));
 }
 
 #[test]
@@ -1580,7 +1581,8 @@ fn checksum_config_validation_timeout_stops_a_server_that_stalls_its_head_answer
     checksum_with_config("[network]\nvalidation_timeout_secs = 1\n", &url)
         .failure()
         .code(1)
-        .stderr(predicate::str::contains("Failed to validate source"));
+        .stderr(predicate::str::contains("Failed to validate source"))
+        .stderr(predicate::str::contains("timed out"));
 }
 
 #[test]
