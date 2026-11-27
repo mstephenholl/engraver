@@ -1817,6 +1817,11 @@ fn open_cloud(uri: &str, offset: u64, options: &SourceOptions) -> Result<Source>
 }
 
 /// Get the size of a source without opening it for reading
+///
+/// This is the size of the file as stored, so a compressed file gives its
+/// compressed size. A URL is checked with a HEAD request that may take the
+/// default validation timeout, and an error status fails. To use another
+/// timeout, call `validate_source_with_options(path, options)?.compressed_size`.
 pub fn get_source_size(path: &str) -> Result<Option<u64>> {
     let source_type = detect_source_type(path);
 
@@ -1826,28 +1831,7 @@ pub fn get_source_size(path: &str) -> Result<Option<u64>> {
                 std::fs::metadata(path).map_err(|_| Error::SourceNotFound(path.to_string()))?;
             Ok(Some(metadata.len()))
         }
-        SourceType::Remote => {
-            #[cfg(feature = "remote")]
-            {
-                // Do a HEAD request to get size
-                let client = http_client_builder().build().map_err(|e| Error::Network {
-                    message: "Failed to create HTTP client".to_string(),
-                    source: Some(Box::new(e)),
-                })?;
-                let response = client.head(path).send().map_err(|e| Error::Network {
-                    message: "HEAD request failed".to_string(),
-                    source: Some(Box::new(e)),
-                })?;
-
-                Ok(response.content_length())
-            }
-            #[cfg(not(feature = "remote"))]
-            {
-                Err(Error::InvalidConfig(
-                    "Remote support not enabled".to_string(),
-                ))
-            }
-        }
+        SourceType::Remote => Ok(validate_source(path)?.compressed_size),
         _ => {
             // Compressed files - return compressed size
             let metadata =
