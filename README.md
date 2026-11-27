@@ -445,7 +445,7 @@ Command-line flags always override configuration file settings. Each on/off sett
 | `[behavior]` `quiet` | `-q`, `--quiet` | `--no-quiet` |
 | `[benchmark]` `json` | `--json` | `--no-json` |
 
-If you give both flags of a pair, the last one wins. With `alias ew='engraver write -y'`, the command `ew --confirm ...` asks for confirmation. `--confirm` works on `write`, `erase`, and `benchmark`. `--quiet` and `--no-quiet` can come before or after the subcommand. On opposite sides, `--no-quiet` wins.
+If you give both flags of a pair, the last one wins. With `alias ew='engraver write -y'`, the command `ew --confirm ...` asks for confirmation. `--confirm` works on `write`, `erase`, and `benchmark`. `--quiet` and `--no-quiet` can come before or after the subcommand. The last one you give wins, on whichever side it sits.
 
 Two pairs of flags contradict each other and are usage errors. `--resume` turns checkpointing on, so `--resume --no-checkpoint` fails. `--silent` answers yes to every prompt, so `--silent --confirm` fails. `--no-quiet` only cancels `quiet` from the file, so `--silent --no-quiet` is still silent.
 
