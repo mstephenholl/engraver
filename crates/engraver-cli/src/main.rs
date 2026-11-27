@@ -520,15 +520,12 @@ fn main() {
         if let Some(line) = &exit.cancelled_line {
             eprintln!("{line}");
         } else {
-            eprintln!("{} {}", style("Error:").red().bold(), e);
-
-            // Show cause chain in verbose mode
-            if std::env::var("RUST_BACKTRACE").is_ok() {
-                let mut source = e.source();
-                while let Some(cause) = source {
-                    eprintln!("  {} {}", style("Caused by:").yellow(), cause);
-                    source = cause.source();
-                }
+            let mut messages = error_messages(&e).into_iter();
+            if let Some(message) = messages.next() {
+                eprintln!("{} {}", style("Error:").red().bold(), message);
+            }
+            for cause in messages {
+                eprintln!("  {} {}", style("Caused by:").yellow(), cause);
             }
         }
 
@@ -571,6 +568,27 @@ fn exit_for(err: &anyhow::Error) -> Exit {
         code: EXIT_CANCELLED,
         cancelled_line: Some(line),
     }
+}
+
+/// The messages of an error report: the error's own message, then each cause
+/// down to the root, so a user sees why a command failed and not only what it
+/// was doing.
+///
+/// A cause is left out when the message above it already ends with its text.
+/// `engraver_core::Error::Io` is one: it shows as `IO error: <message>` and
+/// returns that same io error as its source, which would print `<message>`
+/// again on the next line.
+fn error_messages(err: &anyhow::Error) -> Vec<String> {
+    let mut messages = vec![err.to_string()];
+    let mut parent = err.to_string();
+    for cause in err.chain().skip(1) {
+        let message = cause.to_string();
+        if !parent.ends_with(&message) {
+            messages.push(message.clone());
+        }
+        parent = message;
+    }
+    messages
 }
 
 fn run() -> Result<()> {
@@ -789,6 +807,46 @@ mod tests {
 
         assert_eq!(exit.code, 1);
         assert_eq!(exit.cancelled_line, None);
+    }
+
+    #[test]
+    fn test_error_messages_say_why_a_timeout_stopped_the_run_once() {
+        // `Error::Io` displays its io error and also returns it as its source,
+        // so the io error's text would print twice.
+        let io = std::io::Error::new(std::io::ErrorKind::TimedOut, "operation timed out");
+        let err = anyhow::Error::new(Error::Io(io)).context("Failed to calculate checksum");
+
+        assert_eq!(
+            error_messages(&err),
+            [
+                "Failed to calculate checksum",
+                "IO error: operation timed out"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_error_messages_keep_a_cause_that_its_parent_does_not_quote() {
+        // The second message holds the cause's text without ending with it.
+        let err = anyhow::anyhow!("operation timed out")
+            .context("Network error: operation timed out after 1 seconds")
+            .context("Failed to validate source: http://example.test/a.iso");
+
+        assert_eq!(
+            error_messages(&err),
+            [
+                "Failed to validate source: http://example.test/a.iso",
+                "Network error: operation timed out after 1 seconds",
+                "operation timed out",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_error_messages_of_an_error_without_a_cause_is_just_its_message() {
+        let err = anyhow::anyhow!("disk exploded");
+
+        assert_eq!(error_messages(&err), ["disk exploded"]);
     }
 
     fn prompt_failure(kind: std::io::ErrorKind, message: &str) -> anyhow::Error {
