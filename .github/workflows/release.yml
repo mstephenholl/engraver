@@ -86,9 +86,10 @@ jobs:
             ./target/${{ matrix.target }}/release/engraver completions elvish > completions/engraver.elv
           fi
 
-      # The archives carry the curated pages checked in under man/. Their .TH
-      # lines name the version they were last edited for, so stamp this
-      # release's version in. `sed -i.bak` is the form GNU and BSD sed share.
+      # The archives carry the curated pages checked in under man/. CI checks
+      # that their .TH lines already name the crate version, and this stamp
+      # keeps the archive right regardless. `sed -i.bak` is the form GNU and
+      # BSD sed share.
       - name: Stamp the release version into the man pages
         shell: bash
         run: |

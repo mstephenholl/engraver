@@ -59,6 +59,8 @@ jobs:
             docs:
               - '**/*.md'
               - 'docs/**'
+              - 'man/**'
+              - 'scripts/check-man-pages.sh'
             scripts:
               - 'README.md'
               - 'install.sh'
@@ -255,6 +257,10 @@ jobs:
       - run: cargo doc --locked --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
+      - name: Check the man pages
+        run: |
+          command -v groff >/dev/null || { sudo apt-get update && sudo apt-get install -y groff-base; }
+          scripts/check-man-pages.sh
 
   shellcheck:
     name: ShellCheck
