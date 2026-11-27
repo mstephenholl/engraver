@@ -25,15 +25,16 @@
 use crate::error::{Error, Result};
 #[cfg(feature = "compression")]
 use crate::length_hint::{self, LengthHint};
-use crate::settings::{NetworkSettings, WriteSettings};
-#[cfg(feature = "remote")]
-use crate::settings::{DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_VALIDATION_TIMEOUT_SECS};
+use crate::settings::{
+    NetworkSettings, WriteSettings, DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_VALIDATION_TIMEOUT_SECS,
+};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 #[cfg(feature = "compression")]
 use std::io::BufRead;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::Duration;
 
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 use object_store::ObjectStoreExt;
@@ -53,8 +54,46 @@ use std::sync::Arc;
 pub const DEFAULT_READ_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 
 /// Default cloud chunk size in bytes (4 MB)
-#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 pub const DEFAULT_CLOUD_CHUNK_SIZE: u64 = 4 * 1024 * 1024;
+
+/// How a source is read and how a URL is validated.
+///
+/// Parse the config file's settings into one with
+/// [`Settings::source_options`](crate::settings::Settings::source_options),
+/// which rejects a value that isn't usable. Or start from
+/// [`SourceOptions::default`] and set the fields you need. A field that a
+/// source doesn't use is ignored: a local file has no timeout.
+///
+/// [`Source::open_with_options`] and [`validate_source_with_options`] take it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SourceOptions {
+    /// Capacity of the `BufReader` that a local file is read through, whether
+    /// the file is plain or compressed
+    pub read_buffer_size: usize,
+
+    /// How long to wait on an HTTP server, for its response to start and then
+    /// for each read of the body. A download that keeps data flowing can take
+    /// longer than this.
+    pub http_timeout: Duration,
+
+    /// How long the HEAD request that validates a URL may take
+    pub validation_timeout: Duration,
+
+    /// Bytes fetched per request when reading an S3, GCS or Azure object
+    pub cloud_chunk_size: u64,
+}
+
+impl Default for SourceOptions {
+    fn default() -> Self {
+        Self {
+            read_buffer_size: DEFAULT_READ_BUFFER_SIZE,
+            http_timeout: Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS),
+            validation_timeout: Duration::from_secs(DEFAULT_VALIDATION_TIMEOUT_SECS),
+            cloud_chunk_size: DEFAULT_CLOUD_CHUNK_SIZE,
+        }
+    }
+}
 
 /// Number of bytes from the start of a source that are hashed to produce
 /// `SourceInfo::source_header_hash`. One megabyte is large enough that two
@@ -423,17 +462,27 @@ pub struct LocalFileSource {
 impl LocalFileSource {
     /// Open a local file with default buffer size
     pub fn open(path: &str) -> Result<Self> {
-        Self::open_with_settings(path, None)
+        Self::open_with_buffer_size(path, DEFAULT_READ_BUFFER_SIZE)
     }
 
     /// Open a local file with custom settings
     ///
-    /// If `settings` is `None`, default buffer size is used.
+    /// If `settings` is `None`, default buffer size is used. A
+    /// `read_buffer_size` that isn't a size falls back to the default without
+    /// an error.
+    #[deprecated(
+        note = "parse the settings once with `Settings::source_options`, which rejects a value \
+                that isn't a size, and open with `Source::open_with_options`"
+    )]
     pub fn open_with_settings(path: &str, settings: Option<&WriteSettings>) -> Result<Self> {
         let buffer_size = settings
             .map(|s| parse_size_with_default(&s.read_buffer_size, DEFAULT_READ_BUFFER_SIZE))
             .unwrap_or(DEFAULT_READ_BUFFER_SIZE);
+        Self::open_with_buffer_size(path, buffer_size)
+    }
 
+    /// Open a local file, reading it through a `BufReader` of `buffer_size` bytes
+    pub(crate) fn open_with_buffer_size(path: &str, buffer_size: usize) -> Result<Self> {
         let file_path = Path::new(path);
 
         if !file_path.exists() {
@@ -805,17 +854,21 @@ pub struct HttpSource {
 impl HttpSource {
     /// Open an HTTP/HTTPS URL
     pub fn open(url: &str) -> Result<Self> {
-        Self::open_with_settings(url, 0, None)
+        Self::open_with_resume(url, 0)
     }
 
     /// Open an HTTP/HTTPS URL with resume from a specific offset
     pub fn open_with_resume(url: &str, offset: u64) -> Result<Self> {
-        Self::open_with_settings(url, offset, None)
+        Self::open_with_timeout(url, offset, SourceOptions::default().http_timeout)
     }
 
     /// Open an HTTP/HTTPS URL with custom network settings
     ///
     /// If `settings` is `None`, default timeout values are used.
+    #[deprecated(
+        note = "parse the settings once with `Settings::source_options` and open with \
+                `Source::open_with_options`"
+    )]
     pub fn open_with_settings(
         url: &str,
         offset: u64,
@@ -824,7 +877,11 @@ impl HttpSource {
         let timeout_secs = settings
             .map(|s| s.http_timeout_secs)
             .unwrap_or(DEFAULT_HTTP_TIMEOUT_SECS);
+        Self::open_with_timeout(url, offset, Duration::from_secs(timeout_secs))
+    }
 
+    /// Open an HTTP/HTTPS URL, giving the request `timeout` to finish
+    pub(crate) fn open_with_timeout(url: &str, offset: u64, timeout: Duration) -> Result<Self> {
         // Validate URL
         let parsed_url = url::Url::parse(url).map_err(|e| Error::Network {
             message: format!("Invalid URL '{}'", url),
@@ -841,7 +898,7 @@ impl HttpSource {
         // Build request
         let client = http_client_builder()
             .user_agent(concat!("engraver/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .timeout(timeout)
             .build()
             .map_err(|e| Error::Network {
                 message: "Failed to create HTTP client".to_string(),
@@ -859,7 +916,10 @@ impl HttpSource {
         let response = request.send().map_err(|e| {
             if e.is_timeout() {
                 Error::Network {
-                    message: format!("HTTP request timed out after {} seconds", timeout_secs),
+                    message: format!(
+                        "HTTP request timed out after {} seconds",
+                        timeout.as_secs_f64()
+                    ),
                     source: Some(Box::new(e)),
                 }
             } else if e.is_connect() {
@@ -1017,7 +1077,7 @@ pub struct CloudSource {
 impl CloudSource {
     /// Open a cloud object from URI with default settings
     pub fn open(uri: &str) -> Result<Self> {
-        Self::open_with_settings(uri, 0, None)
+        Self::open_with_resume(uri, 0)
     }
 
     /// Open with resume from specific offset
@@ -1025,12 +1085,18 @@ impl CloudSource {
     /// This uses Range headers to resume from a specific byte offset,
     /// which is useful for resuming interrupted writes.
     pub fn open_with_resume(uri: &str, offset: u64) -> Result<Self> {
-        Self::open_with_settings(uri, offset, None)
+        Self::open_with_chunk_size(uri, offset, DEFAULT_CLOUD_CHUNK_SIZE)
     }
 
     /// Open with resume and custom network settings
     ///
-    /// If `settings` is `None`, default chunk size is used.
+    /// If `settings` is `None`, default chunk size is used. A
+    /// `cloud_chunk_size` that isn't a size falls back to the default without
+    /// an error.
+    #[deprecated(
+        note = "parse the settings once with `Settings::source_options`, which rejects a value \
+                that isn't a size, and open with `Source::open_with_options`"
+    )]
     pub fn open_with_settings(
         uri: &str,
         offset: u64,
@@ -1042,6 +1108,18 @@ impl CloudSource {
                     .unwrap_or(DEFAULT_CLOUD_CHUNK_SIZE)
             })
             .unwrap_or(DEFAULT_CLOUD_CHUNK_SIZE);
+        Self::open_with_chunk_size(uri, offset, chunk_size)
+    }
+
+    /// Open with resume, fetching `chunk_size` bytes per request
+    pub(crate) fn open_with_chunk_size(uri: &str, offset: u64, chunk_size: u64) -> Result<Self> {
+        // A zero chunk would fetch nothing and read as the end of the object,
+        // so the source would end early without an error.
+        if chunk_size == 0 {
+            return Err(Error::InvalidConfig(
+                "The cloud chunk size must be more than zero".to_string(),
+            ));
+        }
 
         let runtime = tokio::runtime::Runtime::new().map_err(|e| Error::Network {
             message: "Failed to create tokio runtime".to_string(),
@@ -1315,11 +1393,31 @@ impl Source {
     /// seeks to the offset. For HTTP sources, this uses Range headers.
     /// Compressed sources cannot be resumed (returns error if offset > 0).
     pub fn open_with_offset(path: &str, offset: u64) -> Result<Self> {
+        Self::open_with_options(path, offset, &SourceOptions::default())
+    }
+
+    /// Open a source from a path or URL, seeking to the specified offset, with
+    /// the given options
+    ///
+    /// Does what [`Source::open_with_offset`] does, and applies `options` to
+    /// the source it opens: the read buffer to a local file, plain or
+    /// compressed, the timeout to an HTTP URL, and the chunk size to a cloud
+    /// object.
+    ///
+    /// ```no_run
+    /// use engraver_core::{Settings, Source};
+    ///
+    /// let options = Settings::default().source_options()?;
+    /// let source = Source::open_with_options("image.iso", 0, &options)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn open_with_options(path: &str, offset: u64, options: &SourceOptions) -> Result<Self> {
         let source_type = detect_source_type(path);
 
         match source_type {
             SourceType::LocalFile => {
-                let mut source = LocalFileSource::open(path)?;
+                let mut source =
+                    LocalFileSource::open_with_buffer_size(path, options.read_buffer_size)?;
                 if offset > 0 {
                     source.seek(SeekFrom::Start(offset))?;
                 }
@@ -1333,7 +1431,7 @@ impl Source {
                         "Cannot resume from compressed gzip source".to_string(),
                     ));
                 }
-                let file = open_file_buffered(path)?;
+                let file = open_file_buffered_with_size(path, options.read_buffer_size)?;
                 let compressed_size = file.get_ref().metadata()?.len();
                 let info = SourceInfo::local_compressed(path, compressed_size, SourceType::Gzip);
                 Ok(Source::Gzip(GzipSource::new(file, info)))
@@ -1346,7 +1444,7 @@ impl Source {
                         "Cannot resume from compressed xz source".to_string(),
                     ));
                 }
-                let file = open_file_buffered(path)?;
+                let file = open_file_buffered_with_size(path, options.read_buffer_size)?;
                 let compressed_size = file.get_ref().metadata()?.len();
                 let info = SourceInfo::local_compressed(path, compressed_size, SourceType::Xz);
                 Ok(Source::Xz(XzSource::new(file, info)))
@@ -1359,7 +1457,7 @@ impl Source {
                         "Cannot resume from compressed zstd source".to_string(),
                     ));
                 }
-                let file = open_file_buffered(path)?;
+                let file = open_file_buffered_with_size(path, options.read_buffer_size)?;
                 let compressed_size = file.get_ref().metadata()?.len();
                 let info = SourceInfo::local_compressed(path, compressed_size, SourceType::Zstd);
                 Ok(Source::Zstd(Box::new(ZstdSource::new(file, info)?)))
@@ -1372,23 +1470,23 @@ impl Source {
                         "Cannot resume from compressed bzip2 source".to_string(),
                     ));
                 }
-                let file = open_file_buffered(path)?;
+                let file = open_file_buffered_with_size(path, options.read_buffer_size)?;
                 let compressed_size = file.get_ref().metadata()?.len();
                 let info = SourceInfo::local_compressed(path, compressed_size, SourceType::Bzip2);
                 Ok(Source::Bzip2(Bzip2Source::new(file, info)))
             }
 
             #[cfg(feature = "remote")]
-            SourceType::Remote => open_http(path, offset),
+            SourceType::Remote => open_http(path, offset, options),
 
             #[cfg(feature = "s3")]
-            SourceType::S3 => open_cloud(path, offset),
+            SourceType::S3 => open_cloud(path, offset, options),
 
             #[cfg(feature = "gcs")]
-            SourceType::Gcs => open_cloud(path, offset),
+            SourceType::Gcs => open_cloud(path, offset, options),
 
             #[cfg(feature = "azure")]
-            SourceType::Azure => open_cloud(path, offset),
+            SourceType::Azure => open_cloud(path, offset, options),
 
             #[cfg(not(feature = "compression"))]
             SourceType::Gzip | SourceType::Xz | SourceType::Zstd | SourceType::Bzip2 => {
@@ -1585,15 +1683,9 @@ fn parse_azure_uri(uri: &str) -> Result<(String, String, String)> {
 
 /// Open a file with buffered reading
 ///
-/// Only callers are the `Source::open_with_offset` branches that build
+/// Only callers are the `Source::open_with_options` branches that build
 /// compression-decoder wrappers; gated on the `compression` feature to
 /// avoid a dead-code warning when that feature is disabled.
-#[cfg(feature = "compression")]
-fn open_file_buffered(path: &str) -> Result<BufReader<File>> {
-    open_file_buffered_with_size(path, DEFAULT_READ_BUFFER_SIZE)
-}
-
-/// Open a file with buffered reading and custom buffer size
 #[cfg(feature = "compression")]
 fn open_file_buffered_with_size(path: &str, buffer_size: usize) -> Result<BufReader<File>> {
     let file = File::open(path).map_err(|e| {
@@ -1637,32 +1729,32 @@ fn ensure_not_resuming(compression: SourceType, offset: u64) -> Result<()> {
 /// A URL whose path has a compression extension is decompressed as it is
 /// read, the same as a local file with that extension.
 #[cfg(feature = "remote")]
-fn open_http(url: &str, offset: u64) -> Result<Source> {
+fn open_http(url: &str, offset: u64, options: &SourceOptions) -> Result<Source> {
     let compression = type_from_extension(http_url_path(url));
     ensure_not_resuming(compression, offset)?;
 
     match compression {
         #[cfg(feature = "compression")]
         SourceType::Gzip => {
-            let http = HttpSource::open(url)?;
+            let http = HttpSource::open_with_timeout(url, 0, options.http_timeout)?;
             let info = http.info().clone().decompressed();
             Ok(Source::HttpGzip(GzipSource::new(http, info)))
         }
         #[cfg(feature = "compression")]
         SourceType::Xz => {
-            let http = HttpSource::open(url)?;
+            let http = HttpSource::open_with_timeout(url, 0, options.http_timeout)?;
             let info = http.info().clone().decompressed();
             Ok(Source::HttpXz(XzSource::new(http, info)))
         }
         #[cfg(feature = "compression")]
         SourceType::Zstd => {
-            let http = HttpSource::open(url)?;
+            let http = HttpSource::open_with_timeout(url, 0, options.http_timeout)?;
             let info = http.info().clone().decompressed();
             Ok(Source::HttpZstd(Box::new(ZstdSource::new(http, info)?)))
         }
         #[cfg(feature = "compression")]
         SourceType::Bzip2 => {
-            let http = HttpSource::open(url)?;
+            let http = HttpSource::open_with_timeout(url, 0, options.http_timeout)?;
             let info = http.info().clone().decompressed();
             Ok(Source::HttpBzip2(Bzip2Source::new(http, info)))
         }
@@ -1670,7 +1762,11 @@ fn open_http(url: &str, offset: u64) -> Result<Source> {
         SourceType::Gzip | SourceType::Xz | SourceType::Zstd | SourceType::Bzip2 => {
             Err(compression_disabled())
         }
-        _ => Ok(Source::Http(HttpSource::open_with_resume(url, offset)?)),
+        _ => Ok(Source::Http(HttpSource::open_with_timeout(
+            url,
+            offset,
+            options.http_timeout,
+        )?)),
     }
 }
 
@@ -1679,32 +1775,32 @@ fn open_http(url: &str, offset: u64) -> Result<Source> {
 /// An object whose key has a compression extension is decompressed as it is
 /// read, the same as a local file with that extension.
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
-fn open_cloud(uri: &str, offset: u64) -> Result<Source> {
+fn open_cloud(uri: &str, offset: u64, options: &SourceOptions) -> Result<Source> {
     let compression = type_from_extension(uri);
     ensure_not_resuming(compression, offset)?;
 
     match compression {
         #[cfg(feature = "compression")]
         SourceType::Gzip => {
-            let cloud = CloudSource::open(uri)?;
+            let cloud = CloudSource::open_with_chunk_size(uri, 0, options.cloud_chunk_size)?;
             let info = cloud.info().clone().decompressed();
             Ok(Source::CloudGzip(GzipSource::new(cloud, info)))
         }
         #[cfg(feature = "compression")]
         SourceType::Xz => {
-            let cloud = CloudSource::open(uri)?;
+            let cloud = CloudSource::open_with_chunk_size(uri, 0, options.cloud_chunk_size)?;
             let info = cloud.info().clone().decompressed();
             Ok(Source::CloudXz(XzSource::new(cloud, info)))
         }
         #[cfg(feature = "compression")]
         SourceType::Zstd => {
-            let cloud = CloudSource::open(uri)?;
+            let cloud = CloudSource::open_with_chunk_size(uri, 0, options.cloud_chunk_size)?;
             let info = cloud.info().clone().decompressed();
             Ok(Source::CloudZstd(Box::new(ZstdSource::new(cloud, info)?)))
         }
         #[cfg(feature = "compression")]
         SourceType::Bzip2 => {
-            let cloud = CloudSource::open(uri)?;
+            let cloud = CloudSource::open_with_chunk_size(uri, 0, options.cloud_chunk_size)?;
             let info = cloud.info().clone().decompressed();
             Ok(Source::CloudBzip2(Bzip2Source::new(cloud, info)))
         }
@@ -1712,7 +1808,11 @@ fn open_cloud(uri: &str, offset: u64) -> Result<Source> {
         SourceType::Gzip | SourceType::Xz | SourceType::Zstd | SourceType::Bzip2 => {
             Err(compression_disabled())
         }
-        _ => Ok(Source::Cloud(CloudSource::open_with_resume(uri, offset)?)),
+        _ => Ok(Source::Cloud(CloudSource::open_with_chunk_size(
+            uri,
+            offset,
+            options.cloud_chunk_size,
+        )?)),
     }
 }
 
@@ -1759,19 +1859,36 @@ pub fn get_source_size(path: &str) -> Result<Option<u64>> {
 
 /// Validate a source path or URL
 ///
-/// Uses default network settings. For custom timeouts, use [`validate_source_with_settings`].
+/// Uses default options. For a custom timeout, use [`validate_source_with_options`].
 pub fn validate_source(path: &str) -> Result<SourceInfo> {
-    validate_source_with_settings(path, None)
+    validate_source_with_options(path, &SourceOptions::default())
 }
 
 /// Validate a source path or URL with custom network settings
 ///
-/// If `settings` is `None`, default timeout values are used.
-#[allow(unused_variables)] // settings only used with remote feature
+/// If `settings` is `None`, default timeout values are used. A timeout of
+/// zero seconds is used as it is.
+#[deprecated(
+    note = "parse the settings once with `Settings::source_options` and validate with \
+            `validate_source_with_options`"
+)]
 pub fn validate_source_with_settings(
     path: &str,
     settings: Option<&NetworkSettings>,
 ) -> Result<SourceInfo> {
+    let mut options = SourceOptions::default();
+    if let Some(settings) = settings {
+        options.validation_timeout = Duration::from_secs(settings.validation_timeout_secs);
+    }
+    validate_source_with_options(path, &options)
+}
+
+/// Validate a source path or URL with the given options
+///
+/// A URL is checked with a HEAD request that may take
+/// `options.validation_timeout`. The other options don't apply to validation.
+#[allow(unused_variables)] // options only used with remote feature
+pub fn validate_source_with_options(path: &str, options: &SourceOptions) -> Result<SourceInfo> {
     let source_type = detect_source_type(path);
 
     match source_type {
@@ -1800,9 +1917,7 @@ pub fn validate_source_with_settings(
         SourceType::Remote => {
             #[cfg(feature = "remote")]
             {
-                let timeout_secs = settings
-                    .map(|s| s.validation_timeout_secs)
-                    .unwrap_or(DEFAULT_VALIDATION_TIMEOUT_SECS);
+                let timeout = options.validation_timeout;
 
                 // Validate URL format
                 url::Url::parse(path).map_err(|e| Error::Network {
@@ -1812,7 +1927,7 @@ pub fn validate_source_with_settings(
 
                 // Do a HEAD request to check availability
                 let client = http_client_builder()
-                    .timeout(std::time::Duration::from_secs(timeout_secs))
+                    .timeout(timeout)
                     .build()
                     .map_err(|e| Error::Network {
                         message: "Failed to create client".to_string(),
@@ -1824,7 +1939,7 @@ pub fn validate_source_with_settings(
                         Error::Network {
                             message: format!(
                                 "URL validation timed out after {} seconds",
-                                timeout_secs
+                                timeout.as_secs_f64()
                             ),
                             source: Some(Box::new(e)),
                         }
@@ -2375,6 +2490,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // covers the deprecated settings-based constructor
     fn test_local_file_source_buffer_capacity_honours_custom_settings() {
         use crate::settings::WriteSettings;
 
@@ -2390,6 +2506,62 @@ mod tests {
                 .unwrap();
 
         assert_eq!(source.buffer_capacity(), 1024 * 1024);
+    }
+
+    #[test]
+    #[allow(irrefutable_let_patterns)] // with no features, `Local` is the only variant
+    fn test_source_open_with_options_reads_a_local_file_through_the_configured_buffer() {
+        let mut temp = NamedTempFile::new().unwrap();
+        temp.write_all(b"contents").unwrap();
+        let path = temp.path().to_str().unwrap();
+
+        let options = SourceOptions {
+            read_buffer_size: 1024 * 1024,
+            ..SourceOptions::default()
+        };
+        let Source::Local(mut source) = Source::open_with_options(path, 0, &options).unwrap()
+        else {
+            panic!("a plain file opens as a local source");
+        };
+        assert_eq!(source.buffer_capacity(), 1024 * 1024);
+
+        let mut read = String::new();
+        source.read_to_string(&mut read).unwrap();
+        assert_eq!(read, "contents");
+
+        let Source::Local(source) = Source::open(path).unwrap() else {
+            panic!("a plain file opens as a local source");
+        };
+        assert_eq!(source.buffer_capacity(), DEFAULT_READ_BUFFER_SIZE);
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_source_open_with_options_refuses_a_zero_cloud_chunk_size() {
+        // A zero chunk would read as the end of the object. The check comes
+        // before any request, so no network is needed. Both URIs reach it only
+        // if each cloud branch passes the chunk size on.
+        let options = SourceOptions {
+            cloud_chunk_size: 0,
+            ..SourceOptions::default()
+        };
+
+        let plain = Source::open_with_options("s3://bucket/image.img", 0, &options);
+        assert!(
+            matches!(plain, Err(Error::InvalidConfig(ref m)) if m.contains("chunk size")),
+            "plain object: {:?}",
+            plain.err()
+        );
+
+        #[cfg(feature = "compression")]
+        {
+            let compressed = Source::open_with_options("s3://bucket/image.img.gz", 0, &options);
+            assert!(
+                matches!(compressed, Err(Error::InvalidConfig(ref m)) if m.contains("chunk size")),
+                "compressed object: {:?}",
+                compressed.err()
+            );
+        }
     }
 
     #[test]

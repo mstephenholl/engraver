@@ -71,14 +71,16 @@ pub use settings::{
     SettingsError, WriteSettings, DEFAULT_HTTP_TIMEOUT_SECS, DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_DELAY_MS, DEFAULT_VALIDATION_TIMEOUT_SECS,
 };
+#[allow(deprecated)] // still exported until a breaking release removes it
+pub use source::validate_source_with_settings;
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+pub use source::CloudSource;
 #[cfg(feature = "checksum")]
 pub use source::{compute_header_hash, compute_local_header_hash, SOURCE_HEADER_HASH_BYTES};
 pub use source::{
-    detect_source_type, get_source_size, validate_source, validate_source_with_settings, Source,
-    SourceInfo, SourceType, DEFAULT_READ_BUFFER_SIZE,
+    detect_source_type, get_source_size, validate_source, validate_source_with_options, Source,
+    SourceInfo, SourceOptions, SourceType, DEFAULT_CLOUD_CHUNK_SIZE, DEFAULT_READ_BUFFER_SIZE,
 };
-#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
-pub use source::{CloudSource, DEFAULT_CLOUD_CHUNK_SIZE};
 pub use verifier::{
     auto_detect_checksum, find_checksum_for_file, parse_checksum_file, verify_write, Checksum,
     ChecksumAlgorithm, ChecksumEntry, DetectedChecksum, VerificationOperation,
