@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795645642407,
+  "lastUpdate": 1795800019566,
   "repoUrl": "https://github.com/mstephenholl/engraver",
   "entries": {
     "Benchmark": [
@@ -3021,6 +3021,150 @@ window.BENCHMARK_DATA = {
           {
             "name": "block_size/SHA-256/1MB",
             "value": 103.93,
+            "unit": "iter/sec"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "m.stephen.holland@gmail.com",
+            "name": "mholl",
+            "username": "mstephenholl"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c9cc1bad1fc05f7d4145d415761a3362d43d9b4",
+          "message": "fix: make flags override the config file, and apply the settings it documents (#84)\n\n* refactor(cli): resolve each command's flags and settings in one place per command\n\nrun() merged the write, erase and benchmark flags with the configuration\nfile's settings inline. A test could not parse a command line and see what\nthe command would receive. The next commit adds off flags and needs that test.\n\nMove each command's options into WriteOpts, EraseOpts and BenchmarkOpts, each\nwith a resolve method that returns the command's args. run() calls it.\n\nNo behavior change. `engraver help write|erase|benchmark`, the shell\ncompletions and the man pages come out the same as before.\n\n* fix(cli): let a flag turn off each on/off setting from the config file\n\nThe docs say command-line flags always override configuration file settings.\nFor the six on/off settings they did not. run() ORed each flag with its\nsetting, and a clap bool can only say \"on\". With `skip_confirmation = true`\na user could not get the prompts back, and `verify = true` could not be\nskipped for one write. This is review finding M11.\n\nGive each on/off setting a flag that turns it off. The off flag and its on\nflag override each other, so the last one on the command line wins, and a\nhelper picks the flag's value or else the setting's.\n\n- write.verify: --no-verify\n- write.checkpoint: --no-checkpoint\n- checksum.auto_detect: --no-auto-checksum\n- behavior.skip_confirmation: --confirm, on write, erase and benchmark\n- benchmark.json: --no-json\n- behavior.quiet: --no-quiet, global\n\n--resume still turns checkpointing on, so --resume with --no-checkpoint is a\nusage error. --silent still answers yes to every prompt, so --silent with\n--confirm is a usage error. clap can't see a global --silent from the\nsubcommand's own conflict check, so Cli::try_parse_checked raises that error\nthrough clap and keeps its wording and exit status 2. --silent with\n--no-quiet is allowed, and --silent wins.\n\nclap checks the two sides of a subcommand apart, so `-q list --no-quiet` sets\nboth quiet flags and cannot say which came last. The off flag wins there.\n\nThe tests parse real command lines and check what write, erase and benchmark\nreceive. The README, the quickstart and the man pages list the new flags.\n\n* feat(core): give engraver-core one typed, checked set of source options\n\nThe config file's read_buffer_size, http_timeout_secs,\nvalidation_timeout_secs and cloud_chunk_size never reached a source. The\nsettings hold raw strings, and each leaf constructor parsed them where it\nused them and fell back to the default without a word, so\n`cloud_chunk_size = \"banana\"` loaded and the run succeeded. Nothing at\nthe Source level took settings, and validate_source passed none.\n\nAdd SourceOptions, a #[non_exhaustive] struct of the four values with a\nDefault from the existing DEFAULT_* constants. Settings::source_options\nparses them once. A size that isn't a power-of-two size such as \"4M\", or\nis zero, and a timeout of zero, is a SettingsError::InvalidValue that\nnames the TOML key and the value.\n\nSource::open_with_options and validate_source_with_options take the\noptions and apply them in every branch: the buffer to a local file,\nplain or compressed, the timeout to an HTTP URL, plain or compressed,\nand the chunk size to a cloud object, plain or compressed. open,\nopen_with_offset, validate_source and validate_source_with_settings call\nthem with the defaults, so no caller's behavior changes.\n\nThe open_with_settings constructors and validate_source_with_settings\nkeep their signatures and behavior and are deprecated in favor of the\noptions API. The typed values go in through crate-private constructors.\nA zero cloud chunk size is refused, because a source built with one\nwould read as the end of the object. DEFAULT_CLOUD_CHUNK_SIZE is no\nlonger gated on a cloud feature, so the defaults exist in every build.\n\nThe CLI is not wired to this yet.\n\n* test(cli): show that the config file's read, network and retry settings are ignored\n\nThe docs list [write] read_buffer_size and [network] http_timeout_secs,\nvalidation_timeout_secs and cloud_chunk_size as settings, but the CLI opens\nevery source with the defaults. A 1 s timeout waits out a 3 s stall, and\n`read_buffer_size = \"banana\"` runs without a word. This is the CLI half of\nreview finding M10.\n\nAdd four integration tests that run `engraver --config-file <file> checksum\n<source>` and nothing else, so they never open a drive:\n\n- an unusable read_buffer_size stops the command and names the setting\n- an unusable cloud_chunk_size does the same\n- an http_timeout_secs of 1 stops a download that stalls for 3 s after its\n  first MiB\n- a validation_timeout_secs of 1 stops a server that stalls its HEAD answer\n  for 3 s\n\nThe tests need a server, so add a small one on std::net::TcpListener that\nserves an image and can stall the HEAD answer or the body.\n\nAll four fail at this commit, because the command succeeds.\n\n* fix(cli): apply the config file's read buffer, network and retry settings\n\nThe docs list [write] retry_attempts, retry_delay_ms and read_buffer_size\nand [network] http_timeout_secs, validation_timeout_secs and\ncloud_chunk_size, and the CLI ignored all six. It opened every source with\nthe defaults and built the writer with WriteConfig::new(), so a 1 s\ntimeout waited out a 3 s stall, read_buffer_size = \"1M\" still read 4 MiB at\na time, and \"banana\" ran without a word. This is the CLI half of review\nfinding M10. The core half added SourceOptions and the checked parse.\n\nParse the settings once, where each command takes its other settings.\nwrite, verify and checksum call Settings::source_options() in run(). A\nvalue that can't be used stops the command before it touches a source or a\ndrive, and the error names the setting and the config file:\n\n  Error: Invalid setting in <file>: write.read_buffer_size = \"banana\" is\n  not a size, such as \"4M\"\n\nlist and config open no source, so they never parse these values and a bad\none doesn't break them.\n\nPass the typed values down. WriteArgs gains the SourceOptions, retry_attempts\nand retry_delay, and verify and checksum take the SourceOptions. Every\nvalidate_source and Source::open call becomes its _with_options form,\nincluding checksum_image_and_target, which verify and write's sequential\nverify share. One write_config() builds the WriteConfig for the writer and\nfor the checkpoint, so a checkpoint records the retries the writer uses.\nerase has its own write loop with no retry, so the retry settings don't\napply to it.\n\nverify compares a plain local image in blocks of --block-size through a\nplain File, so read_buffer_size doesn't change that path. The docs say so.\n\nTests: the four checksum_config_ integration tests from the last commit now\npass, with two controls that raise the timeout above the stall and succeed,\nand one test that config and list ignore a bad source setting. Unit tests\ncover the retry settings reaching the WriteConfig, the retry settings\nresolved from the config file, and the error naming the setting and file.\n\nREADME.md and man/engraver-config.1 say that an unusable size or timeout\nstops the command, that sizes are powers of two, which settings apply where,\nand that http_timeout_secs bounds each wait and not the whole download.\nREADME.md also drops the mention of clap from the usage-error paragraph.",
+          "timestamp": "2026-11-27T12:15:17-05:00",
+          "tree_id": "a2046fb05978657d3dbd2c2c293f0c2844285d95",
+          "url": "https://github.com/mstephenholl/engraver/commit/9c9cc1bad1fc05f7d4145d415761a3362d43d9b4"
+        },
+        "date": 1795800018954,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "block_size/SHA-256/64KB",
+            "value": 102.57,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4KB",
+            "value": 105.64,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/4MB",
+            "value": 102.52,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/256KB",
+            "value": 102.53,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "block_size/SHA-256/1MB",
+            "value": 102.68,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/64KB",
+            "value": 20485.72,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1KB",
+            "value": 87554.58,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/1MB",
+            "value": 1630.46,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-256/16MB",
+            "value": 103.26,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/64KB",
+            "value": 8413.86,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1KB",
+            "value": 76283.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/1MB",
+            "value": 578.82,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/SHA-512/16MB",
+            "value": 36.25,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/64KB",
+            "value": 8120.72,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1KB",
+            "value": 77294.23,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/1MB",
+            "value": 555.71,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/MD5/16MB",
+            "value": 34.77,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/64KB",
+            "value": 72826.17,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1KB",
+            "value": 90051.92,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/1MB",
+            "value": 19448.43,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "checksum/CRC32/16MB",
+            "value": 1482.46,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/64KB",
+            "value": 22441.59,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/1MB",
+            "value": 2513.26,
+            "unit": "iter/sec"
+          },
+          {
+            "name": "compare/identical/16MB",
+            "value": 151.62,
             "unit": "iter/sec"
           }
         ]
