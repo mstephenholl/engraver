@@ -1583,6 +1583,40 @@ fn checksum_config_validation_timeout_stops_a_server_that_stalls_its_head_answer
         .stderr(predicate::str::contains("Failed to validate source"));
 }
 
+#[test]
+fn checksum_config_http_timeout_longer_than_the_stall_lets_the_download_finish() {
+    let url = serve_image(vec![0xABu8; 3 * 1024 * 1024], Duration::ZERO, STALL);
+
+    checksum_with_config("[network]\nhttp_timeout_secs = 10\n", &url)
+        .success()
+        .stdout(predicate::str::contains("SHA-256"));
+}
+
+#[test]
+fn checksum_config_validation_timeout_longer_than_the_stall_lets_the_command_go_on() {
+    let url = serve_image(vec![0xABu8; 3 * 1024 * 1024], STALL, Duration::ZERO);
+
+    checksum_with_config("[network]\nvalidation_timeout_secs = 10\n", &url)
+        .success()
+        .stdout(predicate::str::contains("SHA-256"));
+}
+
+#[test]
+fn test_commands_that_open_no_source_ignore_an_unusable_source_setting() {
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, "[write]\nread_buffer_size = \"banana\"\n").unwrap();
+    let config = config_file.to_str().unwrap();
+
+    engraver()
+        .args(["--config-file", config, "config"])
+        .assert()
+        .success();
+    engraver()
+        .args(["--config-file", config, "list"])
+        .assert()
+        .success();
+}
+
 // ============================================================================
 // JSON Output Tests
 // ============================================================================

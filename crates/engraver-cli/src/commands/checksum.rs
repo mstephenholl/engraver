@@ -5,7 +5,9 @@ use console::style;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use engraver_core::{validate_source, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
+use engraver_core::{
+    validate_source_with_options, ChecksumAlgorithm, Source, SourceOptions, Verifier, VerifyConfig,
+};
 
 use super::{context_or_cancelled, create_progress_bar, describe_source_size};
 
@@ -13,6 +15,7 @@ use super::{context_or_cancelled, create_progress_bar, describe_source_size};
 pub fn execute(
     source: &str,
     algorithm: &str,
+    options: &SourceOptions,
     cancel_flag: Arc<AtomicBool>,
     silent: bool,
 ) -> Result<()> {
@@ -29,7 +32,7 @@ pub fn execute(
         style(source).cyan()
     );
 
-    let source_info = validate_source(source)
+    let source_info = validate_source_with_options(source, options)
         .with_context(|| format!("Failed to validate source: {}", source))?;
 
     if let Some(size) = describe_source_size(&source_info, format_size) {
@@ -44,8 +47,8 @@ pub fn execute(
         algo.name()
     );
 
-    let mut source_reader =
-        Source::open(source).with_context(|| format!("Failed to open source: {}", source))?;
+    let mut source_reader = Source::open_with_options(source, 0, options)
+        .with_context(|| format!("Failed to open source: {}", source))?;
 
     let pb = create_progress_bar(source_info.size, "Checksumming", silent);
 
@@ -125,8 +128,14 @@ mod tests {
         let file = source_file(64 * 1024);
         let cancel = Arc::new(AtomicBool::new(true));
 
-        let err = execute(file.path().to_str().unwrap(), "sha256", cancel, true)
-            .expect_err("a pending cancel must stop the checksum");
+        let err = execute(
+            file.path().to_str().unwrap(),
+            "sha256",
+            &SourceOptions::default(),
+            cancel,
+            true,
+        )
+        .expect_err("a pending cancel must stop the checksum");
 
         crate::commands::assert_cancelled(&err);
     }
@@ -136,8 +145,14 @@ mod tests {
         let file = source_file(64 * 1024);
         let cancel = Arc::new(AtomicBool::new(false));
 
-        execute(file.path().to_str().unwrap(), "sha256", cancel, true)
-            .expect("an uncancelled checksum must succeed");
+        execute(
+            file.path().to_str().unwrap(),
+            "sha256",
+            &SourceOptions::default(),
+            cancel,
+            true,
+        )
+        .expect("an uncancelled checksum must succeed");
     }
 
     // -------------------------------------------------------------------------

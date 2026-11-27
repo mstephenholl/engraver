@@ -80,6 +80,10 @@ To use your file under \fBsudo\fR, pass its path:
 .TP
 \fB[write]\fR
 Default block size, verify, checkpoint, retry settings, and read buffer size.
+\fBread_buffer_size\fR applies to a local image file, plain or compressed.
+\fBverify\fR compares a plain image in blocks of its \fB\-\-block\-size\fR instead.
+\fBretry_attempts\fR and \fBretry_delay_ms\fR apply to \fBwrite\fR.
+\fBerase\fR does not retry.
 .TP
 \fB[checksum]\fR
 Default algorithm and auto-detection settings.
@@ -93,6 +97,15 @@ Default block size, test size, data pattern, passes, and JSON output.
 .TP
 \fB[network]\fR
 HTTP timeout, URL validation timeout, and cloud storage chunk size.
+\fBhttp_timeout_secs\fR is how long to wait for an HTTP server to start answering,
+and for each read of the body.
+It does not cap the whole download.
+.PP
+A size must be a power of two, such as \fB"4M"\fR.
+A timeout must be at least 1 second.
+A size or timeout that can't be used stops \fBwrite\fR, \fBverify\fR, and
+\fBchecksum\fR with an error that names the setting and the configuration file.
+\fBlist\fR and \fBconfig\fR open no source and don't check these values.
 .SH EXAMPLES
 View current configuration:
 .PP

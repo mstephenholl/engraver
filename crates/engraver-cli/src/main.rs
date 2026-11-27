@@ -16,17 +16,18 @@
 //! engraver write https://releases.ubuntu.com/24.04/ubuntu.iso /dev/sdb
 //! ```
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use clap_mangen::Man;
 use console::style;
-use engraver_core::Settings;
+use engraver_core::{Settings, SourceOptions};
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 #[macro_use]
@@ -197,6 +198,18 @@ fn flag_or_setting(on: bool, off: bool, setting: bool) -> bool {
     flag.unwrap_or(setting)
 }
 
+/// Parse the settings that shape how a source is read.
+///
+/// Only the commands that open a source call this, so a value that can't be
+/// used stops them and leaves `list` and `config` alone. The message names
+/// the setting and the config file.
+fn source_options(settings: &Settings, config_file: Option<&Path>) -> Result<SourceOptions> {
+    settings.source_options().map_err(|e| match config_file {
+        Some(path) => anyhow!("Invalid setting in {}: {e}", path.display()),
+        None => anyhow!("Invalid setting: {e}"),
+    })
+}
+
 /// The options of `engraver write`.
 #[derive(clap::Args)]
 struct WriteOpts {
@@ -269,10 +282,12 @@ struct WriteOpts {
 
 impl WriteOpts {
     /// Apply the configuration file's settings to what the command line left
-    /// unsaid, and give `commands::write` its arguments.
+    /// unsaid, and give `commands::write` its arguments. `source_options` is
+    /// the settings' [`source_options`], parsed.
     fn resolve(
         self,
         settings: &Settings,
+        source_options: SourceOptions,
         output: OutputMode,
         cancel: Arc<AtomicBool>,
     ) -> commands::write::WriteArgs {
@@ -306,6 +321,9 @@ impl WriteOpts {
                 settings.checksum.auto_detect,
             ),
             show_partitions: self.show_partitions,
+            source_options,
+            retry_attempts: settings.write.retry_attempts,
+            retry_delay: Duration::from_millis(settings.write.retry_delay_ms),
         }
     }
 }
@@ -558,9 +576,8 @@ fn exit_for(err: &anyhow::Error) -> Exit {
 fn run() -> Result<()> {
     let cli = Cli::try_parse_checked(std::env::args_os()).unwrap_or_else(|e| e.exit());
 
-    let (settings, settings_error) = match Settings::try_load_from_path(
-        cli.config_file.clone().or_else(Settings::config_path),
-    ) {
+    let config_path = cli.config_file.clone().or_else(Settings::config_path);
+    let (settings, settings_error) = match Settings::try_load_from_path(config_path.clone()) {
         Ok(settings) => (settings, None),
         Err(e) => (Settings::default(), Some(e)),
     };
@@ -628,17 +645,37 @@ fn run() -> Result<()> {
 
     match cli.command {
         Commands::List { all, json } => commands::list::execute(all, json, output.hides_results()),
-        Commands::Write(opts) => commands::write::execute(opts.resolve(&settings, output, cancel)),
+        Commands::Write(opts) => {
+            let source_options = source_options(&settings, config_path.as_deref())?;
+            commands::write::execute(opts.resolve(&settings, source_options, output, cancel))
+        }
         Commands::Erase(opts) => commands::erase::execute(opts.resolve(&settings, output, cancel)),
         Commands::Verify {
             source,
             target,
             block_size,
-        } => commands::verify::execute(&source, &target, &block_size, cancel, silent),
+        } => {
+            let source_options = source_options(&settings, config_path.as_deref())?;
+            commands::verify::execute(
+                &source,
+                &target,
+                &block_size,
+                &source_options,
+                cancel,
+                silent,
+            )
+        }
         Commands::Checksum { source, algorithm } => {
+            let source_options = source_options(&settings, config_path.as_deref())?;
             let effective_algorithm =
                 algorithm.unwrap_or_else(|| settings.checksum.algorithm.clone());
-            commands::checksum::execute(&source, &effective_algorithm, cancel, silent)
+            commands::checksum::execute(
+                &source,
+                &effective_algorithm,
+                &source_options,
+                cancel,
+                silent,
+            )
         }
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
@@ -852,7 +889,9 @@ mod tests {
         let cli = Cli::try_parse_checked(args)?;
         let output = OutputMode::new(&cli, settings);
         match cli.command {
-            Commands::Write(opts) => Ok(opts.resolve(settings, output, no_cancel())),
+            Commands::Write(opts) => {
+                Ok(opts.resolve(settings, SourceOptions::default(), output, no_cancel()))
+            }
             _ => panic!("not an `engraver write` command line: {args:?}"),
         }
     }
@@ -1114,6 +1153,32 @@ mod tests {
             assert!(args.resume);
             assert!(args.checkpoint);
         }
+    }
+
+    #[test]
+    fn test_write_takes_its_retries_from_the_settings() {
+        let mut settings = Settings::default();
+        settings.write.retry_attempts = 7;
+        settings.write.retry_delay_ms = 250;
+
+        let args = write_args(WRITE, &settings).unwrap();
+
+        assert_eq!(args.retry_attempts, 7);
+        assert_eq!(args.retry_delay, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn test_source_options_error_names_the_setting_and_the_config_file() {
+        let mut settings = Settings::default();
+        settings.write.read_buffer_size = "banana".to_string();
+
+        let err =
+            source_options(&settings, Some(Path::new("/etc/engraver_config.toml"))).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            r#"Invalid setting in /etc/engraver_config.toml: write.read_buffer_size = "banana" is not a size, such as "4M""#
+        );
     }
 
     #[test]

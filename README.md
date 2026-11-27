@@ -426,9 +426,13 @@ cloud_chunk_size = "4M"
 | `[benchmark]` | `pattern` | Default data pattern (`zeros`, `random`, `sequential`) | `"zeros"` |
 | `[benchmark]` | `passes` | Default number of benchmark passes | `1` |
 | `[benchmark]` | `json` | Output benchmark results in JSON format | `false` |
-| `[network]` | `http_timeout_secs` | HTTP request timeout | `30` |
+| `[network]` | `http_timeout_secs` | How long to wait for an HTTP server to start answering, and for each read of the body. It does not cap the whole download | `30` |
 | `[network]` | `validation_timeout_secs` | URL validation timeout | `10` |
 | `[network]` | `cloud_chunk_size` | Chunk size for cloud storage downloads | `"4M"` |
+
+A size or timeout that can't be used stops `write`, `verify`, and `checksum` with an error that names the setting and the configuration file. `list` and `config` open no source and don't check these values. A size must be a power of two, such as `"4M"`. A timeout must be at least 1 second.
+
+`read_buffer_size` applies when Engraver reads a local image file, plain or compressed. The exception is `verify` of a plain image, which compares in blocks of its `--block-size`. `retry_attempts` and `retry_delay_ms` apply to `write`. `erase` does not retry.
 
 Command-line flags always override configuration file settings. Each on/off setting has a flag that turns it off for one run:
 
@@ -443,7 +447,7 @@ Command-line flags always override configuration file settings. Each on/off sett
 
 If you give both flags of a pair, the last one wins. With `alias ew='engraver write -y'`, the command `ew --confirm ...` asks for confirmation. `--confirm` works on `write`, `erase`, and `benchmark`. `--quiet` and `--no-quiet` can come before or after the subcommand. On opposite sides, `--no-quiet` wins.
 
-Two flags rule out an off flag, and clap reports the pair as a usage error. `--resume` turns checkpointing on, so `--resume --no-checkpoint` fails. `--silent` answers yes to every prompt, so `--silent --confirm` fails. `--no-quiet` only cancels `quiet` from the file, so `--silent --no-quiet` is still silent.
+Two pairs of flags contradict each other and are usage errors. `--resume` turns checkpointing on, so `--resume --no-checkpoint` fails. `--silent` answers yes to every prompt, so `--silent --confirm` fails. `--no-quiet` only cancels `quiet` from the file, so `--silent --no-quiet` is still silent.
 
 ## Benchmarking
 

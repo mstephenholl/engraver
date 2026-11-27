@@ -14,12 +14,12 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use engraver_core::{
-    auto_detect_checksum, validate_checkpoint, validate_source, CheckpointManager,
-    ChecksumAlgorithm, Source, SourceType, TargetIdentity, Verifier, VerifyConfig, WriteCheckpoint,
-    WriteConfig, WritePhase, Writer,
+    auto_detect_checksum, validate_checkpoint, validate_source_with_options, CheckpointManager,
+    ChecksumAlgorithm, Source, SourceOptions, SourceType, TargetIdentity, Verifier, VerifyConfig,
+    WriteCheckpoint, WriteConfig, WritePhase, Writer,
 };
 #[cfg(feature = "partition-info")]
 use engraver_core::{inspect_from_buffer, read_partition_header, PartitionTableType};
@@ -48,6 +48,12 @@ pub struct WriteArgs {
     pub checkpoint: bool,
     pub auto_checksum: bool,
     pub show_partitions: bool,
+    /// How the source is read, from the config file
+    pub source_options: SourceOptions,
+    /// Times to retry a block that fails to write, from the config file
+    pub retry_attempts: u32,
+    /// Delay before the first retry, from the config file
+    pub retry_delay: Duration,
 }
 
 /// Shared context for the write command's helper functions
@@ -111,8 +117,22 @@ fn populate_source_header_hash(source_info: &mut engraver_core::SourceInfo, sile
     }
 }
 
+/// The writer's settings for `args`: its block size and its retries
+fn write_config(args: &WriteArgs, block_size: usize) -> WriteConfig {
+    WriteConfig::new()
+        .block_size(block_size)
+        .sync_each_block(false)
+        .sync_on_complete(true)
+        .retry_attempts(args.retry_attempts)
+        .retry_delay(args.retry_delay)
+}
+
 /// Validate the source image and display info
-fn validate_source_info(source: &str, silent: bool) -> Result<engraver_core::SourceInfo> {
+fn validate_source_info(
+    source: &str,
+    options: &SourceOptions,
+    silent: bool,
+) -> Result<engraver_core::SourceInfo> {
     println_if!(
         silent,
         "{} {}",
@@ -120,7 +140,7 @@ fn validate_source_info(source: &str, silent: bool) -> Result<engraver_core::Sou
         style(source).cyan()
     );
 
-    let source_info = validate_source(source)
+    let source_info = validate_source_with_options(source, options)
         .with_context(|| format!("Failed to validate source: {}", source))?;
 
     let source_type_str = match source_info.source_type {
@@ -418,7 +438,8 @@ fn setup_checksum(args: &WriteArgs, image_size: Option<u64>, ctx: &WriteContext)
         });
 
         let mut source_for_checksum =
-            Source::open(&args.source).context("Failed to open source for checksum")?;
+            Source::open_with_options(&args.source, 0, &args.source_options)
+                .context("Failed to open source for checksum")?;
 
         let pb = create_progress_bar(image_size, "Checksumming", ctx.silent);
 
@@ -651,7 +672,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
     check_privileges()?;
 
     // Step 1: Validate source
-    let mut source_info = validate_source_info(&args.source, lead_up_silent)?;
+    let mut source_info = validate_source_info(&args.source, &args.source_options, lead_up_silent)?;
 
     // Compute a content fingerprint for resume validation. For local
     // files we hash the first 1 MB so a later resume can detect when the
@@ -713,8 +734,8 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         total_blocks
     );
 
-    let mut source =
-        Source::open_with_offset(&args.source, resume_offset).context("Failed to open source")?;
+    let mut source = Source::open_with_options(&args.source, resume_offset, &args.source_options)
+        .context("Failed to open source")?;
 
     // Open target device using platform layer with direct I/O
     let device_path = get_raw_device_path(&target_drive.path);
@@ -740,15 +761,11 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         cp.mark_resumed();
         cp
     } else {
-        let write_config = WriteConfig::new()
-            .block_size(block_size)
-            .sync_each_block(false)
-            .sync_on_complete(true);
         WriteCheckpoint::new(
             &source_info,
             &target_drive.path,
             &target_identity(target_drive),
-            &write_config,
+            &write_config(&args, block_size),
         )
     };
 
@@ -769,10 +786,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
         .parse()
         .unwrap_or(ChecksumAlgorithm::Sha256);
 
-    let mut config = WriteConfig::new()
-        .block_size(block_size)
-        .sync_each_block(false)
-        .sync_on_complete(true);
+    let mut config = write_config(&args, block_size);
 
     if use_parallel_verify {
         config = config.checksum_algorithm(Some(verify_algo));
@@ -1093,6 +1107,7 @@ pub fn execute(args: WriteArgs) -> Result<()> {
 
             let (source_checksum, written_checksum) = checksum_image_and_target(
                 &args.source,
+                &args.source_options,
                 &mut *target,
                 Some(image_written),
                 block_size,
@@ -2033,6 +2048,9 @@ mod tests {
             checkpoint: true,
             auto_checksum: false,
             show_partitions: false,
+            source_options: SourceOptions::default(),
+            retry_attempts: 3,
+            retry_delay: Duration::from_millis(100),
         };
 
         assert_eq!(args.source, "ubuntu.iso");
@@ -2045,6 +2063,19 @@ mod tests {
         assert!(!args.cancel_flag.load(Ordering::Relaxed));
         assert!(!args.auto_checksum);
         assert!(!args.show_partitions);
+    }
+
+    #[test]
+    fn test_write_config_carries_the_retry_settings_of_the_args() {
+        let mut args = resume_args();
+        args.retry_attempts = 7;
+        args.retry_delay = Duration::from_millis(250);
+
+        let config = write_config(&args, 1024 * 1024);
+
+        assert_eq!(config.retry_attempts, 7);
+        assert_eq!(config.retry_delay, Duration::from_millis(250));
+        assert_eq!(config.block_size, 1024 * 1024);
     }
 
     #[test]
@@ -2065,6 +2096,9 @@ mod tests {
             checkpoint: false,
             auto_checksum: true,
             show_partitions: true,
+            source_options: SourceOptions::default(),
+            retry_attempts: 3,
+            retry_delay: Duration::from_millis(100),
         };
 
         assert_eq!(args.source, "debian.img");
@@ -2100,6 +2134,9 @@ mod tests {
             checkpoint: true,
             auto_checksum: true,
             show_partitions: true,
+            source_options: SourceOptions::default(),
+            retry_attempts: 3,
+            retry_delay: Duration::from_millis(100),
         };
 
         assert!(args.verify);
@@ -2221,7 +2258,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(format!("image.img.{ext}"));
         std::fs::write(&path, compressed).unwrap();
-        let source = validate_source_info(path.to_str().unwrap(), true).unwrap();
+        let source =
+            validate_source_info(path.to_str().unwrap(), &SourceOptions::default(), true).unwrap();
 
         let drives = vec![removable_drive(DRIVE)];
         validate_target_device("/dev/sdz", &drives, false, true, &source, true).map(|_| ())
@@ -2309,6 +2347,9 @@ mod tests {
             checkpoint: false,
             auto_checksum: false,
             show_partitions: false,
+            source_options: SourceOptions::default(),
+            retry_attempts: 3,
+            retry_delay: Duration::from_millis(100),
         };
         (source, args)
     }
@@ -2396,6 +2437,9 @@ mod tests {
             checkpoint: false,
             auto_checksum: false,
             show_partitions: false,
+            source_options: SourceOptions::default(),
+            retry_attempts: 3,
+            retry_delay: Duration::from_millis(100),
         }
     }
 
