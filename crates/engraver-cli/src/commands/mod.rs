@@ -13,7 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use engraver_core::{Checksum, ChecksumAlgorithm, Source, Verifier, VerifyConfig};
+use engraver_core::{Checksum, ChecksumAlgorithm, Source, SourceOptions, Verifier, VerifyConfig};
 use indicatif::{ProgressBar, ProgressStyle};
 
 /// The error a cancelled run returns.
@@ -156,13 +156,15 @@ fn target_checksum_error(err: engraver_core::Error) -> anyhow::Error {
     }
 }
 
-/// Checksum the image at `source`, then the first image-length bytes of `target`.
+/// Checksum the image at `source`, read with `options`, then the first
+/// image-length bytes of `target`.
 ///
 /// Returns `(source, target)` checksums. `expected_len` is the image length
 /// when already known, such as the bytes just written; an image of any other
 /// length fails verification. `target` must be positioned at its start.
 pub(crate) fn checksum_image_and_target<T: Read + ?Sized>(
     source: &str,
+    options: &SourceOptions,
     target: &mut T,
     expected_len: Option<u64>,
     block_size: usize,
@@ -177,8 +179,8 @@ pub(crate) fn checksum_image_and_target<T: Read + ?Sized>(
     };
 
     println_if!(silent, "  Calculating source checksum...");
-    let source_reader =
-        Source::open(source).with_context(|| format!("Failed to open source: {source}"))?;
+    let source_reader = Source::open_with_options(source, 0, options)
+        .with_context(|| format!("Failed to open source: {source}"))?;
     let mut source_reader = CountingReader {
         inner: source_reader,
         count: 0,
@@ -346,9 +348,16 @@ mod tests {
         let source = gzip_file(&dir, &image);
         let mut drive = std::io::Cursor::new(image_then_other_data(&image, 1024 * 1024));
 
-        let (source_checksum, target_checksum) =
-            checksum_image_and_target(&source, &mut drive, None, 4096, &not_cancelled(), true)
-                .unwrap();
+        let (source_checksum, target_checksum) = checksum_image_and_target(
+            &source,
+            &SourceOptions::default(),
+            &mut drive,
+            None,
+            4096,
+            &not_cancelled(),
+            true,
+        )
+        .unwrap();
 
         assert_eq!(source_checksum.to_hex(), checksum_of(&image));
         assert!(target_checksum.matches(&source_checksum));
@@ -364,6 +373,7 @@ mod tests {
 
         let (source_checksum, target_checksum) = checksum_image_and_target(
             &source,
+            &SourceOptions::default(),
             &mut std::io::Cursor::new(drive),
             None,
             4096,
@@ -384,6 +394,7 @@ mod tests {
 
         let (source_checksum, target_checksum) = checksum_image_and_target(
             &source,
+            &SourceOptions::default(),
             &mut drive,
             Some(image.len() as u64),
             4096,
@@ -404,6 +415,7 @@ mod tests {
 
         let err = checksum_image_and_target(
             &source,
+            &SourceOptions::default(),
             &mut drive,
             Some(image.len() as u64 + 1),
             4096,
@@ -424,9 +436,16 @@ mod tests {
         let source = gzip_file(&dir, &image);
         let mut drive = std::io::Cursor::new(image[..image.len() - 1].to_vec());
 
-        let err =
-            checksum_image_and_target(&source, &mut drive, None, 4096, &not_cancelled(), true)
-                .expect_err("a target shorter than the image must fail");
+        let err = checksum_image_and_target(
+            &source,
+            &SourceOptions::default(),
+            &mut drive,
+            None,
+            4096,
+            &not_cancelled(),
+            true,
+        )
+        .expect_err("a target shorter than the image must fail");
 
         assert!(err.to_string().contains("shorter than the image"), "{err}");
     }
@@ -439,8 +458,16 @@ mod tests {
         let mut drive = std::io::Cursor::new(image_then_other_data(&image, 4096));
         let cancel = Arc::new(AtomicBool::new(true));
 
-        let err = checksum_image_and_target(&source, &mut drive, None, 4096, &cancel, true)
-            .expect_err("a pending cancel must stop the checksum");
+        let err = checksum_image_and_target(
+            &source,
+            &SourceOptions::default(),
+            &mut drive,
+            None,
+            4096,
+            &cancel,
+            true,
+        )
+        .expect_err("a pending cancel must stop the checksum");
 
         assert_cancelled(&err);
         assert_eq!(err.to_string(), "Verification cancelled.");

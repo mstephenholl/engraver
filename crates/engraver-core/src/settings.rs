@@ -39,8 +39,11 @@
 //! cloud_chunk_size = "4M"
 //! ```
 
+use crate::benchmark::{parse_size, BenchmarkError};
+use crate::source::SourceOptions;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Configuration file name
 const CONFIG_FILE_NAME: &str = "engraver_config.toml";
@@ -292,6 +295,63 @@ impl Settings {
         toml::to_string_pretty(&default)
             .unwrap_or_else(|_| String::from("# Failed to generate default config"))
     }
+
+    /// Parse the settings that shape how a source is read
+    ///
+    /// These are `write.read_buffer_size`, `network.http_timeout_secs`,
+    /// `network.validation_timeout_secs` and `network.cloud_chunk_size`. A
+    /// size must be a power of two, such as `"4M"`, and a timeout must be at
+    /// least one second. A value that isn't, is an error that names its key.
+    pub fn source_options(&self) -> Result<SourceOptions, SettingsError> {
+        let read_buffer_size =
+            size_setting("write.read_buffer_size", &self.write.read_buffer_size)?;
+        let read_buffer_size =
+            usize::try_from(read_buffer_size).map_err(|_| SettingsError::InvalidValue {
+                key: "write.read_buffer_size",
+                value: format!("{:?}", self.write.read_buffer_size),
+                problem: "is too large for this machine",
+            })?;
+
+        Ok(SourceOptions {
+            read_buffer_size,
+            http_timeout: timeout_setting(
+                "network.http_timeout_secs",
+                self.network.http_timeout_secs,
+            )?,
+            validation_timeout: timeout_setting(
+                "network.validation_timeout_secs",
+                self.network.validation_timeout_secs,
+            )?,
+            cloud_chunk_size: size_setting(
+                "network.cloud_chunk_size",
+                &self.network.cloud_chunk_size,
+            )?,
+        })
+    }
+}
+
+/// Parse the size in the setting `key`
+fn size_setting(key: &'static str, value: &str) -> Result<u64, SettingsError> {
+    parse_size(value).map_err(|e| SettingsError::InvalidValue {
+        key,
+        value: format!("{value:?}"),
+        problem: match e {
+            BenchmarkError::NotPowerOfTwo(_) => "is not a power of two, such as \"4M\"",
+            _ => "is not a size, such as \"4M\"",
+        },
+    })
+}
+
+/// Parse the timeout, in seconds, in the setting `key`
+fn timeout_setting(key: &'static str, secs: u64) -> Result<Duration, SettingsError> {
+    if secs == 0 {
+        return Err(SettingsError::InvalidValue {
+            key,
+            value: secs.to_string(),
+            problem: "must be at least 1 second",
+        });
+    }
+    Ok(Duration::from_secs(secs))
 }
 
 /// Errors that can occur when working with settings
@@ -322,6 +382,17 @@ pub enum SettingsError {
         path: PathBuf,
         /// The underlying error
         source: toml::de::Error,
+    },
+
+    /// A setting holds a value that can't be used
+    #[error("{key} = {value} {problem}")]
+    InvalidValue {
+        /// The setting's key in the config file, such as `write.read_buffer_size`
+        key: &'static str,
+        /// The value as written in the config file, such as `"banana"`
+        value: String,
+        /// What is wrong with the value
+        problem: &'static str,
     },
 }
 
@@ -650,6 +721,84 @@ cloud_chunk_size = "8M"
         assert_eq!(settings.network.cloud_chunk_size, "8M");
         // Other values should use defaults
         assert_eq!(settings.network.http_timeout_secs, 30);
+    }
+
+    fn settings_from(toml: &str) -> Settings {
+        toml::from_str(toml).unwrap()
+    }
+
+    #[test]
+    fn test_source_options_of_default_settings_are_the_default_options() {
+        assert_eq!(
+            Settings::default().source_options().unwrap(),
+            SourceOptions::default()
+        );
+    }
+
+    #[test]
+    fn test_source_options_parse_the_configured_values() {
+        let options = settings_from(
+            r#"
+[write]
+read_buffer_size = "1M"
+
+[network]
+http_timeout_secs = 5
+validation_timeout_secs = 7
+cloud_chunk_size = "8M"
+"#,
+        )
+        .source_options()
+        .unwrap();
+
+        assert_eq!(options.read_buffer_size, 1_048_576);
+        assert_eq!(options.http_timeout, Duration::from_secs(5));
+        assert_eq!(options.validation_timeout, Duration::from_secs(7));
+        assert_eq!(options.cloud_chunk_size, 8 * 1_048_576);
+    }
+
+    #[test]
+    fn test_source_options_reject_a_value_that_is_not_usable() {
+        // (section, key, TOML value)
+        let cases = [
+            ("write", "read_buffer_size", r#""banana""#),
+            ("write", "read_buffer_size", r#""0""#),
+            ("write", "read_buffer_size", r#""3M""#),
+            ("write", "read_buffer_size", r#""""#),
+            ("network", "cloud_chunk_size", r#""banana""#),
+            ("network", "cloud_chunk_size", r#""0""#),
+            ("network", "cloud_chunk_size", r#""3M""#),
+            ("network", "http_timeout_secs", "0"),
+            ("network", "validation_timeout_secs", "0"),
+        ];
+
+        for (section, key, value) in cases {
+            let settings = settings_from(&format!("[{section}]\n{key} = {value}\n"));
+            let err = settings.source_options().unwrap_err();
+
+            let toml_key = format!("{section}.{key}");
+            assert!(
+                matches!(err, SettingsError::InvalidValue { key, .. } if key == toml_key),
+                "{toml_key} = {value}: got {err:?}"
+            );
+            let message = err.to_string();
+            assert!(
+                message.contains(&toml_key) && message.contains(value),
+                "{toml_key} = {value}: the message should name the key and the value, got {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_source_options_error_says_what_a_size_looks_like() {
+        let err = settings_from("[write]\nread_buffer_size = \"banana\"\n")
+            .source_options()
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            r#"write.read_buffer_size = "banana" is not a size, such as "4M""#
+        );
     }
 
     #[test]

@@ -6,7 +6,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use engraver_core::{validate_source, SourceType, Verifier, VerifyConfig};
+use engraver_core::{
+    validate_source_with_options, SourceOptions, SourceType, Verifier, VerifyConfig,
+};
 use engraver_detect::list_drives;
 use engraver_platform::{has_elevated_privileges, open_device, OpenOptions};
 
@@ -17,6 +19,7 @@ pub fn execute(
     source: &str,
     target: &str,
     block_size_str: &str,
+    source_options: &SourceOptions,
     cancel_flag: Arc<AtomicBool>,
     silent: bool,
 ) -> Result<()> {
@@ -50,7 +53,7 @@ pub fn execute(
         style(source).cyan()
     );
 
-    let source_info = validate_source(source)
+    let source_info = validate_source_with_options(source, source_options)
         .with_context(|| format!("Failed to validate source: {}", source))?;
 
     let source_is_local = source_info.source_type == SourceType::LocalFile;
@@ -148,6 +151,7 @@ pub fn execute(
 
         let (source_checksum, target_checksum) = checksum_image_and_target(
             source,
+            source_options,
             &mut *target_reader,
             source_info.size,
             block_size,

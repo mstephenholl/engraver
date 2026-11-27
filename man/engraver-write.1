@@ -4,7 +4,7 @@
 .SH NAME
 engraver\-write \- Write an image to a drive
 .SH SYNOPSIS
-\fBengraver write\fR [\fB\-\-verify\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<SIZE>\fR] [\fB\-\-checksum\fR \fI<HASH>\fR] [\fB\-\-checksum\-algo\fR \fI<ALGO>\fR] [\fB\-\-auto\-checksum\fR] [\fB\-\-no\-unmount\fR] [\fB\-\-checkpoint\fR] [\fB\-\-resume\fR] [\fB\-p\fR|\fB\-\-show\-partitions\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> <\fITARGET\fR>
+\fBengraver write\fR [\fB\-\-verify\fR] [\fB\-\-no\-verify\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-confirm\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<SIZE>\fR] [\fB\-\-checksum\fR \fI<HASH>\fR] [\fB\-\-checksum\-algo\fR \fI<ALGO>\fR] [\fB\-\-auto\-checksum\fR] [\fB\-\-no\-auto\-checksum\fR] [\fB\-\-no\-unmount\fR] [\fB\-\-checkpoint\fR] [\fB\-\-no\-checkpoint\fR] [\fB\-\-resume\fR] [\fB\-p\fR|\fB\-\-show\-partitions\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISOURCE\fR> <\fITARGET\fR>
 .SH DESCRIPTION
 Write a disk image to a target device. The source can be a local file, an
 HTTP/HTTPS URL, or a cloud storage URL (s3://, gs://, azure://). Compressed
@@ -32,8 +32,15 @@ Verify write integrity by hashing source data during the write pass, then
 reading back the target and comparing checksums. Falls back to sequential
 verification when resuming a partial write (\fB\-\-resume\fR).
 .TP
+\fB\-\-no\-verify\fR
+Don't verify, even if the configuration file sets \fBverify\fR.
+.TP
 \fB\-y\fR, \fB\-\-yes\fR
 Skip confirmation prompt. Use with caution.
+.TP
+\fB\-\-confirm\fR
+Ask for confirmation, even if the configuration file sets
+\fBskip_confirmation\fR. Can't be used with \fB\-\-silent\fR.
 .TP
 \fB\-b\fR, \fB\-\-block\-size\fR \fI<SIZE>\fR [default: 32M]
 Block size for writing (e.g., 4M, 1M, 512K). Larger block sizes may improve
@@ -51,6 +58,10 @@ Automatically detect and verify checksums from companion files (.sha256, .sha512
 .md5, .sha256sum) alongside the source image. Searches the same directory as
 the source file.
 .TP
+\fB\-\-no\-auto\-checksum\fR
+Don't look for a checksum file, even if the configuration file sets
+\fBauto_detect\fR.
+.TP
 \fB\-\-no\-unmount\fR
 Do not unmount partitions on the target device before writing.
 .TP
@@ -58,6 +69,10 @@ Do not unmount partitions on the target device before writing.
 Enable checkpointing so the write can be resumed if interrupted. A checkpoint
 file is saved on Ctrl+C or transient errors. Automatically enabled when
 \fB\-\-resume\fR is used.
+.TP
+\fB\-\-no\-checkpoint\fR
+Don't checkpoint, even if the configuration file sets \fBcheckpoint\fR.
+Can't be used with \fB\-\-resume\fR, which turns checkpointing on.
 .TP
 \fB\-\-resume\fR
 Resume a previously interrupted write operation from the last checkpoint.

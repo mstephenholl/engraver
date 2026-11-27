@@ -6,6 +6,10 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 
 /// Get a command for the engraver binary
@@ -1434,6 +1438,183 @@ fn test_config_init_json_reports_an_existing_file_left_alone() {
         fs::read_to_string(&config_file).unwrap(),
         "[write]\nverify = true"
     );
+}
+
+// ============================================================================
+// Settings that shape how a source is read
+// ============================================================================
+//
+// `[write] read_buffer_size` and `[network] http_timeout_secs`,
+// `validation_timeout_secs` and `cloud_chunk_size` must reach the source, and a
+// value that can't be used must stop the command. These run only `checksum`,
+// which opens a source and never a drive.
+
+/// Run `engraver --config-file <a file holding config> checksum <source>`
+fn checksum_with_config(config: &str, source: &str) -> assert_cmd::assert::Assert {
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, config).unwrap();
+
+    engraver()
+        .args([
+            "--config-file",
+            config_file.to_str().unwrap(),
+            "checksum",
+            source,
+        ])
+        .assert()
+}
+
+/// A file of `len` bytes to checksum
+fn local_image(dir: &TempDir, len: usize) -> String {
+    let path = dir.path().join("image.raw");
+    fs::write(&path, vec![0xABu8; len]).unwrap();
+    path.to_str().unwrap().to_owned()
+}
+
+/// How much of the body a GET sends before `serve_image` stalls
+const BODY_BEFORE_STALL: usize = 1024 * 1024;
+
+/// How long `serve_image` stalls. It is longer than the 1 s timeouts the tests
+/// set and shorter than the default ones, so the same server fails with a
+/// setting and succeeds without it.
+const STALL: Duration = Duration::from_secs(3);
+
+/// Serve `image` over HTTP on 127.0.0.1 and return its URL.
+///
+/// A HEAD request waits `head_stall` before it is answered. A GET sends the
+/// first `BODY_BEFORE_STALL` bytes, waits `body_stall`, then sends the rest.
+/// The server runs on threads that end with the test process.
+fn serve_image(image: Vec<u8>, head_stall: Duration, body_stall: Duration) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/image.raw", listener.local_addr().unwrap());
+    let image = Arc::new(image);
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let image = Arc::clone(&image);
+            std::thread::spawn(move || {
+                // A client that gives up on a stalled response hangs up on us
+                let _ = answer(stream, &image, head_stall, body_stall);
+            });
+        }
+    });
+
+    url
+}
+
+fn answer(
+    mut stream: TcpStream,
+    image: &[u8],
+    head_stall: Duration,
+    body_stall: Duration,
+) -> std::io::Result<()> {
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 1024];
+    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        let n = stream.read(&mut chunk)?;
+        if n == 0 {
+            return Ok(());
+        }
+        request.extend_from_slice(&chunk[..n]);
+    }
+    let is_head = request.starts_with(b"HEAD ");
+
+    if is_head {
+        std::thread::sleep(head_stall);
+    }
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: none\r\nConnection: close\r\n\r\n",
+        image.len()
+    )?;
+    if !is_head {
+        let (first, rest) = image.split_at(BODY_BEFORE_STALL.min(image.len()));
+        stream.write_all(first)?;
+        stream.flush()?;
+        std::thread::sleep(body_stall);
+        stream.write_all(rest)?;
+    }
+    stream.flush()
+}
+
+#[test]
+fn checksum_config_unusable_read_buffer_size_stops_the_command() {
+    let dir = TempDir::new().unwrap();
+
+    checksum_with_config(
+        "[write]\nread_buffer_size = \"banana\"\n",
+        &local_image(&dir, 64 * 1024),
+    )
+    .failure()
+    .code(1)
+    .stderr(predicate::str::contains("write.read_buffer_size"));
+}
+
+#[test]
+fn checksum_config_unusable_cloud_chunk_size_stops_the_command() {
+    let dir = TempDir::new().unwrap();
+
+    checksum_with_config(
+        "[network]\ncloud_chunk_size = \"0\"\n",
+        &local_image(&dir, 64 * 1024),
+    )
+    .failure()
+    .code(1)
+    .stderr(predicate::str::contains("network.cloud_chunk_size"));
+}
+
+#[test]
+fn checksum_config_http_timeout_stops_a_download_that_stalls() {
+    let url = serve_image(vec![0xABu8; 3 * 1024 * 1024], Duration::ZERO, STALL);
+
+    checksum_with_config("[network]\nhttp_timeout_secs = 1\n", &url)
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("Failed to calculate checksum"));
+}
+
+#[test]
+fn checksum_config_validation_timeout_stops_a_server_that_stalls_its_head_answer() {
+    let url = serve_image(vec![0xABu8; 3 * 1024 * 1024], STALL, Duration::ZERO);
+
+    checksum_with_config("[network]\nvalidation_timeout_secs = 1\n", &url)
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("Failed to validate source"));
+}
+
+#[test]
+fn checksum_config_http_timeout_longer_than_the_stall_lets_the_download_finish() {
+    let url = serve_image(vec![0xABu8; 3 * 1024 * 1024], Duration::ZERO, STALL);
+
+    checksum_with_config("[network]\nhttp_timeout_secs = 10\n", &url)
+        .success()
+        .stdout(predicate::str::contains("SHA-256"));
+}
+
+#[test]
+fn checksum_config_validation_timeout_longer_than_the_stall_lets_the_command_go_on() {
+    let url = serve_image(vec![0xABu8; 3 * 1024 * 1024], STALL, Duration::ZERO);
+
+    checksum_with_config("[network]\nvalidation_timeout_secs = 10\n", &url)
+        .success()
+        .stdout(predicate::str::contains("SHA-256"));
+}
+
+#[test]
+fn test_commands_that_open_no_source_ignore_an_unusable_source_setting() {
+    let (_temp_dir, config_file) = setup_config_test();
+    fs::write(&config_file, "[write]\nread_buffer_size = \"banana\"\n").unwrap();
+    let config = config_file.to_str().unwrap();
+
+    engraver()
+        .args(["--config-file", config, "config"])
+        .assert()
+        .success();
+    engraver()
+        .args(["--config-file", config, "list"])
+        .assert()
+        .success();
 }
 
 // ============================================================================

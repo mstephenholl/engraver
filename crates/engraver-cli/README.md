@@ -152,6 +152,7 @@ engraver benchmark /dev/sdb -y
 | `--passes` | Number of benchmark passes | `1` |
 | `--test-block-sizes` | Test multiple block sizes (comma-separated) | - |
 | `--json` | Output results as JSON | false |
+| `--no-json` | Print text results, even if the config file sets `json` | - |
 
 **Warning:** Benchmarking is a destructive operation that will overwrite data on the target device.
 
@@ -231,7 +232,18 @@ skip_confirmation = false
 quiet = false         # Hide progress and status output, like -q
 ```
 
-Command-line arguments override configuration file settings.
+Command-line arguments override configuration file settings. Each on/off setting has a flag that turns it off for one run:
+
+| Setting | Turn on | Turn off |
+|---------|---------|----------|
+| `verify` | `--verify` | `--no-verify` |
+| `checkpoint` | `--checkpoint` | `--no-checkpoint` |
+| `auto_detect` | `--auto-checksum` | `--no-auto-checksum` |
+| `skip_confirmation` | `-y`, `--yes` | `--confirm` |
+| `quiet` | `-q`, `--quiet` | `--no-quiet` |
+| `json` (benchmark) | `--json` | `--no-json` |
+
+If you give both flags of a pair, the last one wins. `--resume --no-checkpoint` and `--silent --confirm` are usage errors, because `--resume` turns checkpointing on and `--silent` answers yes to every prompt.
 
 ## Platform-Specific Notes
 

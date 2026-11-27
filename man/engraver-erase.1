@@ -4,7 +4,7 @@
 .SH NAME
 engraver\-erase \- Erase a drive by zero-filling the entire device
 .SH SYNOPSIS
-\fBengraver erase\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR] [\fB\-\-no\-unmount\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
+\fBengraver erase\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-confirm\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR] [\fB\-\-no\-unmount\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
 .SH DESCRIPTION
 Securely erase a drive by writing zeros to the entire device.
 This is useful for wiping a drive before disposal, repurposing, or preparing
@@ -19,6 +19,10 @@ Target device (e.g., /dev/sdb, /dev/disk2, \\\\.\\PhysicalDrive1)
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 Skip confirmation prompt. Use with caution.
+.TP
+\fB\-\-confirm\fR
+Ask for confirmation, even if the configuration file sets
+\fBskip_confirmation\fR. Can't be used with \fB\-\-silent\fR.
 .TP
 \fB\-b\fR, \fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR
 Block size for writing (e.g., 4M, 1M, 512K).

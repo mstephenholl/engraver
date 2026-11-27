@@ -6,10 +6,12 @@
 #![cfg(feature = "remote")]
 
 use engraver_core::{
-    detect_source_type, validate_source, Source, SourceType, WriteConfig, Writer, MIN_BLOCK_SIZE,
+    detect_source_type, validate_source, validate_source_with_options, Error, Source,
+    SourceOptions, SourceType, WriteConfig, Writer, MIN_BLOCK_SIZE,
 };
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::NamedTempFile;
 use tiny_http::{Header, Response, Server, StatusCode};
 
@@ -33,6 +35,43 @@ enum MockBehavior {
     ServeWithResume(Vec<u8>),
     /// Return a fixed status code with a body
     StatusCode(u16, String),
+    /// Send the headers and the first `before_stall` bytes of `data`, sleep
+    /// for `stall`, then send the rest
+    StallBody {
+        data: Vec<u8>,
+        before_stall: usize,
+        stall: Duration,
+    },
+    /// Sleep for `stall`, then answer like `ServeData`. This stalls a HEAD
+    /// request too.
+    StallHeaders { data: Vec<u8>, stall: Duration },
+}
+
+/// A body that sleeps once, after `before_stall` bytes
+struct StallingBody {
+    data: Vec<u8>,
+    pos: usize,
+    before_stall: usize,
+    stall: Duration,
+    stalled: bool,
+}
+
+impl Read for StallingBody {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos == self.before_stall && !self.stalled {
+            self.stalled = true;
+            std::thread::sleep(self.stall);
+        }
+        let end = if self.stalled {
+            self.data.len()
+        } else {
+            self.before_stall
+        };
+        let n = buf.len().min(end - self.pos);
+        buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
 }
 
 fn start_mock(behavior: MockBehavior) -> MockHttpServer {
@@ -115,6 +154,30 @@ fn start_mock(behavior: MockBehavior) -> MockHttpServer {
                 MockBehavior::StatusCode(code, body) => {
                     let response =
                         Response::from_string(body.clone()).with_status_code(StatusCode(*code));
+                    let _ = request.respond(response);
+                }
+                MockBehavior::StallBody {
+                    data,
+                    before_stall,
+                    stall,
+                } => {
+                    let body = StallingBody {
+                        data: data.clone(),
+                        pos: 0,
+                        before_stall: *before_stall,
+                        stall: *stall,
+                        stalled: false,
+                    };
+                    let response =
+                        Response::new(StatusCode(200), Vec::new(), body, Some(data.len()), None);
+                    let _ = request.respond(response);
+                }
+                MockBehavior::StallHeaders { data, stall } => {
+                    std::thread::sleep(*stall);
+                    let response = Response::from_data(data.clone()).with_header(
+                        Header::from_bytes(b"Content-Length", data.len().to_string().as_bytes())
+                            .unwrap(),
+                    );
                     let _ = request.respond(response);
                 }
             }
@@ -293,6 +356,120 @@ fn http_validate_source_succeeds() {
     let info = validate_source(&url).unwrap();
     assert_eq!(info.source_type, SourceType::Remote);
     assert!(info.size.is_some());
+}
+
+// ============================================================================
+// Timeouts from SourceOptions
+// ============================================================================
+
+/// How long a stalling server stalls. Longer than the 1 s timeout the tests
+/// set, shorter than the default timeouts, so the same server fails with the
+/// first and succeeds with the second.
+const STALL: Duration = Duration::from_secs(3);
+
+/// Whether `err`, or an error it wraps, is a reqwest timeout
+fn is_timeout(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(err);
+    while let Some(err) = current {
+        if err
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|e| e.is_timeout())
+        {
+            return true;
+        }
+        current = err.source();
+    }
+    false
+}
+
+#[test]
+fn http_source_whose_body_stalls_past_http_timeout_fails_to_read() {
+    let data = test_data(1024 * 1024 + 64 * 1024);
+    let server = start_mock(MockBehavior::StallBody {
+        data: data.clone(),
+        before_stall: 1024 * 1024,
+        stall: STALL,
+    });
+    let url = format!("{}/image.iso", server.url);
+
+    let mut options = SourceOptions::default();
+    options.http_timeout = Duration::from_secs(1);
+    let mut source = Source::open_with_options(&url, 0, &options).unwrap();
+    let err = source.read_to_end(&mut Vec::new()).unwrap_err();
+
+    let cause = err.get_ref().expect("the read error wraps its cause");
+    assert!(is_timeout(cause), "expected a timeout, got {err:?}");
+}
+
+#[test]
+fn http_source_whose_body_stalls_within_the_default_timeout_reads_to_the_end() {
+    let data = test_data(1024 * 1024 + 64 * 1024);
+    let server = start_mock(MockBehavior::StallBody {
+        data: data.clone(),
+        before_stall: 1024 * 1024,
+        stall: STALL,
+    });
+    let url = format!("{}/image.iso", server.url);
+
+    let mut source = Source::open(&url).unwrap();
+    let mut buf = Vec::new();
+    source.read_to_end(&mut buf).unwrap();
+
+    assert_eq!(buf, data);
+}
+
+#[cfg(feature = "compression")]
+#[test]
+fn compressed_http_source_applies_http_timeout() {
+    let server = start_mock(MockBehavior::StallHeaders {
+        data: test_data(1024),
+        stall: STALL,
+    });
+    let url = format!("{}/image.iso.gz", server.url);
+
+    let mut options = SourceOptions::default();
+    options.http_timeout = Duration::from_secs(1);
+    let err = Source::open_with_options(&url, 0, &options)
+        .err()
+        .expect("opening should time out");
+    assert!(
+        matches!(err, Error::Network { .. }) && is_timeout(&err),
+        "expected a timeout, got {err:?}"
+    );
+
+    assert!(Source::open(&url).is_ok());
+}
+
+#[test]
+fn http_validation_stalling_past_validation_timeout_fails() {
+    let server = start_mock(MockBehavior::StallHeaders {
+        data: test_data(1024),
+        stall: STALL,
+    });
+    let url = format!("{}/image.iso", server.url);
+
+    let mut options = SourceOptions::default();
+    options.validation_timeout = Duration::from_secs(1);
+    let err = validate_source_with_options(&url, &options).unwrap_err();
+
+    assert!(
+        matches!(err, Error::Network { .. }) && is_timeout(&err),
+        "expected a timeout, got {err:?}"
+    );
+}
+
+#[test]
+fn http_validation_stalling_within_the_default_timeout_succeeds() {
+    let server = start_mock(MockBehavior::StallHeaders {
+        data: test_data(1024),
+        stall: STALL,
+    });
+    let url = format!("{}/image.iso", server.url);
+
+    let info = validate_source(&url).unwrap();
+
+    assert_eq!(info.source_type, SourceType::Remote);
+    assert_eq!(info.size, Some(1024));
 }
 
 // ============================================================================

@@ -4,7 +4,7 @@
 .SH NAME
 engraver\-benchmark \- Benchmark write speed of a drive
 .SH SYNOPSIS
-\fBengraver benchmark\fR [\fB\-s\fR|\fB\-\-size\fR \fI<SIZE>\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR] [\fB\-\-pattern\fR \fI<PATTERN>\fR] [\fB\-\-passes\fR \fI<N>\fR] [\fB\-\-test\-block\-sizes\fR \fI<SIZES>\fR] [\fB\-\-json\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
+\fBengraver benchmark\fR [\fB\-s\fR|\fB\-\-size\fR \fI<SIZE>\fR] [\fB\-b\fR|\fB\-\-block\-size\fR \fI<BLOCK_SIZE>\fR] [\fB\-\-pattern\fR \fI<PATTERN>\fR] [\fB\-\-passes\fR \fI<N>\fR] [\fB\-\-test\-block\-sizes\fR \fI<SIZES>\fR] [\fB\-\-json\fR] [\fB\-\-no\-json\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-confirm\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
 .SH DESCRIPTION
 Test the write speed of a drive before committing to a long write operation.
 Writes a configurable amount of test data to the target device and measures throughput.
@@ -43,8 +43,15 @@ Mutually exclusive with \fB\-\-size\fR.
 \fB\-\-json\fR
 Output benchmark results in JSON format for scripting and automation.
 .TP
+\fB\-\-no\-json\fR
+Print the results as text, even if the configuration file sets \fBjson\fR.
+.TP
 \fB\-y\fR, \fB\-\-yes\fR
 Skip confirmation prompt.
+.TP
+\fB\-\-confirm\fR
+Ask for confirmation, even if the configuration file sets
+\fBskip_confirmation\fR. Can't be used with \fB\-\-silent\fR.
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help information.

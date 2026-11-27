@@ -4,7 +4,7 @@
 .SH NAME
 engraver \- A safe, fast tool for creating bootable USB drives, SD cards, and NVMe drives
 .SH SYNOPSIS
-\fBengraver\fR [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-\-silent\fR] [\fB\-\-config\-file\fR \fI<PATH>\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIcommand\fR>
+\fBengraver\fR [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-\-no\-quiet\fR] [\fB\-\-silent\fR] [\fB\-\-config\-file\fR \fI<PATH>\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIcommand\fR>
 .SH DESCRIPTION
 Engraver is a fast, safe command-line tool for writing disk images to USB drives,
 SD cards, and NVMe drives. It supports local files, HTTP/HTTPS URLs, and cloud
@@ -27,10 +27,16 @@ the hash from \fBchecksum\fR, the drives from \fBlist\fR, the settings or path f
 confirmation prompts, with the image and drive they ask about. The \fBquiet\fR
 setting under \fB[behavior]\fR in the configuration file turns it on too.
 .TP
+\fB\-\-no\-quiet\fR
+Show progress and status output, even if the configuration file sets
+\fBquiet\fR. If you give both \fB\-\-quiet\fR and \fB\-\-no\-quiet\fR, the
+last one wins. The exception is a pair on opposite sides of the subcommand,
+where \fB\-\-no\-quiet\fR wins. \fB\-\-silent\fR still hides the output.
+.TP
 \fB\-\-silent\fR
 Like \fB\-\-quiet\fR, and also hide the output of \fBlist\fR, \fBconfig\fR and
-\fBbenchmark\fR, skip every confirmation prompt (implying \fB\-\-yes\fR), and hide
-the messages that Ctrl+C prints. What a script asks for still prints: the hash
+\fBbenchmark\fR, skip every confirmation prompt (implying \fB\-\-yes\fR, so it can't be used with
+\fB\-\-confirm\fR), and hide the messages that Ctrl+C prints. What a script asks for still prints: the hash
 from \fBchecksum\fR, the path from \fBconfig \-\-path\fR, and the JSON from every
 \fB\-\-json\fR option.
 .TP
