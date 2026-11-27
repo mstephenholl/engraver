@@ -415,7 +415,7 @@ cloud_chunk_size = "4M"
 | `[write]` | `verify` | Always verify writes | `false` |
 | `[write]` | `checkpoint` | Enable checkpointing by default | `false` |
 | `[write]` | `retry_attempts` | Number of retry attempts on transient errors | `3` |
-| `[write]` | `retry_delay_ms` | Delay between retries in milliseconds | `100` |
+| `[write]` | `retry_delay_ms` | Wait before the first retry, in milliseconds. Each retry after that waits twice as long, up to 8 times this value | `100` |
 | `[write]` | `read_buffer_size` | Buffer size for reading source data | `"4M"` |
 | `[checksum]` | `algorithm` | Default checksum algorithm | `"sha256"` |
 | `[checksum]` | `auto_detect` | Auto-detect checksum files | `false` |

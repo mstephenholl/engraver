@@ -177,7 +177,7 @@ for partition in &info.partitions {
 | `sync_each_block` | false | fsync after each block |
 | `sync_on_complete` | true | fsync when write completes |
 | `retry_attempts` | 3 | Number of retry attempts |
-| `retry_delay` | 100ms | Delay between retries |
+| `retry_delay` | 100ms | Wait before the first retry. Each retry after that waits twice as long, up to 8 times this value |
 | `verify` | false | Saved in a resume checkpoint. `Writer` does not read it |
 | `checksum_algorithm` | None | Hash the source during the write. `Writer::write_and_verify` then reads the target back and compares hashes |
 

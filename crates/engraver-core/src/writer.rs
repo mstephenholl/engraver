@@ -217,7 +217,8 @@ pub struct WriteConfig {
     /// Number of retry attempts on error
     pub retry_attempts: u32,
 
-    /// Delay between retries
+    /// Wait before the first retry. Each retry after that waits twice as
+    /// long, up to 8 times this value, plus 0 to 49 ms of jitter.
     pub retry_delay: Duration,
 
     /// Saved in a resume checkpoint. The writer does not read it. For
@@ -275,7 +276,8 @@ impl WriteConfig {
         self
     }
 
-    /// Set retry delay
+    /// Set the wait before the first retry. Each retry after that waits twice
+    /// as long, up to 8 times `delay`, plus 0 to 49 ms of jitter.
     pub fn retry_delay(mut self, delay: Duration) -> Self {
         self.retry_delay = delay;
         self

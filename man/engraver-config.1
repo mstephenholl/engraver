@@ -82,6 +82,8 @@ To use your file under \fBsudo\fR, pass its path:
 Default block size, verify, checkpoint, retry settings, and read buffer size.
 \fBread_buffer_size\fR applies to a local image file, plain or compressed.
 \fBretry_attempts\fR and \fBretry_delay_ms\fR apply to \fBwrite\fR.
+\fBretry_delay_ms\fR is the wait before the first retry.
+Each retry after that waits twice as long, up to eight times this value.
 \fBerase\fR does not retry.
 .TP
 \fB[checksum]\fR

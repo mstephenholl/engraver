@@ -104,7 +104,9 @@ pub struct WriteSettings {
     /// Number of retry attempts on write errors
     pub retry_attempts: u32,
 
-    /// Delay between retries in milliseconds
+    /// Wait before the first retry, in milliseconds. Each retry after that
+    /// waits twice as long, up to 8 times this value. The writer adds 0 to
+    /// 49 ms of jitter to each wait.
     pub retry_delay_ms: u64,
 
     /// Buffer size for reading files (e.g., "64K", "128K")
