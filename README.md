@@ -432,7 +432,7 @@ cloud_chunk_size = "4M"
 
 A size or timeout that can't be used stops `write`, `verify`, and `checksum` with an error that names the setting and the configuration file. `list` and `config` open no source and don't check these values. A size must be a power of two, such as `"4M"`. A timeout must be at least 1 second.
 
-`read_buffer_size` applies when Engraver reads a local image file, plain or compressed. The exception is `verify` of a plain image, which compares in blocks of its `--block-size`. `retry_attempts` and `retry_delay_ms` apply to `write`. `erase` does not retry.
+`read_buffer_size` applies when Engraver reads a local image file, plain or compressed. `retry_attempts` and `retry_delay_ms` apply to `write`. `erase` does not retry.
 
 Command-line flags always override configuration file settings. Each on/off setting has a flag that turns it off for one run:
 
