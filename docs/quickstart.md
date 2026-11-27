@@ -67,12 +67,17 @@ sudo engraver verify ubuntu.iso /dev/sdb
 | Option | Description |
 |--------|-------------|
 | `--verify` | Verify after writing (hashes during write, then reads back) |
+| `--no-verify` | Don't verify, even if the config file sets `verify` |
 | `-y` | Skip confirmation prompt |
+| `--confirm` | Ask for confirmation, even if the config file sets `skip_confirmation` |
 | `-q` | Hide progress and status output (results still print, and it still asks for confirmation) |
+| `--no-quiet` | Show progress and status output, even if the config file sets `quiet` |
 | `--silent` | Like `-q`, and skip confirmation (implies -y) |
 | `--checkpoint` | Enable resume support |
+| `--no-checkpoint` | Don't checkpoint, even if the config file sets `checkpoint` |
 | `--resume` | Resume interrupted write |
 | `--auto-checksum` | Auto-detect .sha256/.md5 checksum files |
+| `--no-auto-checksum` | Don't look for a checksum file, even if the config file sets `auto_detect` |
 | `--all` | Show all drives (including non-removable) |
 
 ## Working with Compressed Images

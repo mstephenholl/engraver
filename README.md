@@ -430,7 +430,20 @@ cloud_chunk_size = "4M"
 | `[network]` | `validation_timeout_secs` | URL validation timeout | `10` |
 | `[network]` | `cloud_chunk_size` | Chunk size for cloud storage downloads | `"4M"` |
 
-Command-line flags always override configuration file settings.
+Command-line flags always override configuration file settings. Each on/off setting has a flag that turns it off for one run:
+
+| Setting | Turn on | Turn off |
+|---------|---------|----------|
+| `[write]` `verify` | `--verify` | `--no-verify` |
+| `[write]` `checkpoint` | `--checkpoint` | `--no-checkpoint` |
+| `[checksum]` `auto_detect` | `--auto-checksum` | `--no-auto-checksum` |
+| `[behavior]` `skip_confirmation` | `-y`, `--yes` | `--confirm` |
+| `[behavior]` `quiet` | `-q`, `--quiet` | `--no-quiet` |
+| `[benchmark]` `json` | `--json` | `--no-json` |
+
+If you give both flags of a pair, the last one wins. With `alias ew='engraver write -y'`, the command `ew --confirm ...` asks for confirmation. `--confirm` works on `write`, `erase`, and `benchmark`. `--quiet` and `--no-quiet` can come before or after the subcommand. On opposite sides, `--no-quiet` wins.
+
+Two flags rule out an off flag, and clap reports the pair as a usage error. `--resume` turns checkpointing on, so `--resume --no-checkpoint` fails. `--silent` answers yes to every prompt, so `--silent --confirm` fails. `--no-quiet` only cancels `quiet` from the file, so `--silent --no-quiet` is still silent.
 
 ## Benchmarking
 

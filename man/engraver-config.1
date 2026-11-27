@@ -11,6 +11,31 @@ When run without flags, displays the current configuration values.
 .PP
 Configuration settings provide default values for command-line options.
 Command-line flags always take precedence over configuration file settings.
+.PP
+Each on/off setting has a flag that turns it on and a flag that turns it off,
+so a setting that the file turns on can be turned off for one run:
+.TP
+\fBverify\fR in \fB[write]\fR
+\fB\-\-verify\fR and \fB\-\-no\-verify\fR
+.TP
+\fBcheckpoint\fR in \fB[write]\fR
+\fB\-\-checkpoint\fR and \fB\-\-no\-checkpoint\fR
+.TP
+\fBauto_detect\fR in \fB[checksum]\fR
+\fB\-\-auto\-checksum\fR and \fB\-\-no\-auto\-checksum\fR
+.TP
+\fBskip_confirmation\fR in \fB[behavior]\fR
+\fB\-y\fR or \fB\-\-yes\fR, and \fB\-\-confirm\fR
+.TP
+\fBquiet\fR in \fB[behavior]\fR
+\fB\-q\fR or \fB\-\-quiet\fR, and \fB\-\-no\-quiet\fR
+.TP
+\fBjson\fR in \fB[benchmark]\fR
+\fB\-\-json\fR and \fB\-\-no\-json\fR
+.PP
+If you give both flags of a pair, the last one wins.
+\fB\-\-resume\fR with \fB\-\-no\-checkpoint\fR, and \fB\-\-silent\fR with
+\fB\-\-confirm\fR, are usage errors.
 .SH OPTIONS
 .TP
 \fB\-\-init\fR
